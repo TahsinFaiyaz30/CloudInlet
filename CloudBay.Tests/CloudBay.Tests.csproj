@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="MSTest.TestAdapter" Version="3.1.1" />
+    <PackageReference Include="MSTest.TestFramework" Version="3.1.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../CloudBay/Core/Filters/DeveloperFilterService.cs" Link="Core/DeveloperFilterService.cs" />
+    <Compile Include="../CloudBay/Core/Folders/KnownFolderDecision.cs" Link="Core/KnownFolderDecision.cs" />
+    <Compile Include="../CloudBay/Core/Folders/KnownFolderState.cs" Link="Core/KnownFolderState.cs" />
+    <Compile Include="../CloudBay/Core/Links/FolderLinkService.cs" Link="Core/FolderLinkService.cs" />
+    <Compile Include="../CloudBay/Core/Safety/IOperationJournal.cs" Link="Core/IOperationJournal.cs" />
+    <Compile Include="../CloudBay/Core/Safety/DirectoryCapacityProbe.cs" Link="Core/DirectoryCapacityProbe.cs" />
+    <Compile Include="../CloudBay/Core/Safety/OperationJournal.cs" Link="Core/OperationJournal.cs" />
+  </ItemGroup>
+</Project>

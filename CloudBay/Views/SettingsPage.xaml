@@ -1,0 +1,110 @@
+<Page
+    x:Class="CloudBay.Views.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:toolkit="using:CommunityToolkit.WinUI.Controls"
+    Loaded="SettingsPage_Loaded"
+    Unloaded="SettingsPage_Unloaded">
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+        <StackPanel MaxWidth="1040" Margin="30,20,30,30" Spacing="18">
+            <StackPanel Spacing="3">
+                <TextBlock Style="{StaticResource CloudBayPageTitleStyle}" Text="Settings" />
+                <TextBlock Style="{StaticResource CloudBaySecondaryTextStyle}"
+                           Text="Appearance, connected storage, and recovery history." />
+            </StackPanel>
+
+            <TextBlock Style="{StaticResource CloudBaySectionTitleStyle}" Text="General" />
+            <toolkit:SettingsCard Header="App appearance"
+                                  Description="Follow Windows or choose a theme for CloudBay.">
+                <ComboBox x:Name="ThemeSelector" MinWidth="164"
+                          SelectionChanged="ThemeSelector_SelectionChanged">
+                    <ComboBoxItem Content="Use system setting" Tag="System" />
+                    <ComboBoxItem Content="Light" Tag="Light" />
+                    <ComboBoxItem Content="Dark" Tag="Dark" />
+                </ComboBox>
+            </toolkit:SettingsCard>
+            <toolkit:SettingsCard Header="Connected root"
+                                  Description="{Binding RootPath}">
+                <TextBlock Text="{Binding RootHealth}" />
+            </toolkit:SettingsCard>
+
+            <TextBlock Margin="0,8,0,0"
+                       Style="{StaticResource CloudBaySectionTitleStyle}"
+                       Text="Data safety" />
+            <toolkit:SettingsExpander Header="Protection and recovery"
+                                      Description="Every change is checked and journaled before a path is updated.">
+                <toolkit:SettingsExpander.Items>
+                    <toolkit:SettingsCard Header="Operation journal"
+                                          Description="%LOCALAPPDATA%\CloudBay\Journals" />
+                    <toolkit:SettingsCard Header="Preserved files"
+                                          Description="Restore and unlink operations retain local and cloud files." />
+                    <toolkit:SettingsCard Header="Preflight checks"
+                                          Description="CloudBay verifies collisions, permissions, and storage readiness before moving data." />
+                </toolkit:SettingsExpander.Items>
+            </toolkit:SettingsExpander>
+
+            <Grid Margin="0,10,0,0" ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Spacing="3">
+                    <TextBlock Style="{StaticResource CloudBaySectionTitleStyle}"
+                               Text="Operation history" />
+                    <TextBlock Style="{StaticResource CloudBaySecondaryTextStyle}"
+                               Text="Review recent changes and roll back supported operations." />
+                </StackPanel>
+                <CommandBar Grid.Column="1" VerticalAlignment="Center"
+                            DefaultLabelPosition="Right" Background="Transparent">
+                    <AppBarButton Icon="Refresh" Label="Refresh journal"
+                                  Command="{Binding RefreshCommand}"
+                                  IsEnabled="{Binding CanRunOperations}" />
+                </CommandBar>
+            </Grid>
+
+            <ItemsControl ItemsSource="{Binding Journals}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Margin="0,0,0,7" Style="{StaticResource CloudBayRowStyle}">
+                            <Grid ColumnSpacing="14">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <FontIcon FontSize="18" Margin="0,4,0,0" Glyph="&#xE81C;" />
+                                <StackPanel Grid.Column="1" Spacing="4">
+                                    <StackPanel Orientation="Horizontal" Spacing="10">
+                                        <TextBlock FontWeight="SemiBold" Text="{Binding Operation}" />
+                                        <Border Style="{StaticResource CloudBayStatusChipStyle}">
+                                            <TextBlock FontSize="11" Text="{Binding State}" />
+                                        </Border>
+                                        <TextBlock FontSize="11" VerticalAlignment="Center"
+                                                   Style="{StaticResource CloudBaySecondaryTextStyle}"
+                                                   Text="{Binding When}" />
+                                    </StackPanel>
+                                    <TextBlock FontSize="12"
+                                               Style="{StaticResource CloudBaySecondaryTextStyle}"
+                                               Text="{Binding Detail}"
+                                               TextWrapping="WrapWholeWords" />
+                                    <TextBlock FontSize="12"
+                                               Style="{StaticResource CloudBaySecondaryTextStyle}"
+                                               Text="{Binding Message}" />
+                                </StackPanel>
+                                <Button Grid.Column="2" MinWidth="90" VerticalAlignment="Center"
+                                        Command="{Binding RollbackCommand}"
+                                        IsEnabled="{Binding CanRollback}"
+                                        Content="Roll back" />
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <Border Style="{StaticResource CloudBayRowStyle}"
+                    Visibility="{Binding NoJournalsVisibility}">
+                <TextBlock Style="{StaticResource CloudBaySecondaryTextStyle}"
+                           Text="No storage or folder changes yet. CloudBay will list recoverable operations here." />
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

@@ -1,0 +1,161 @@
+<Page
+    x:Class="CloudBay.Views.DeveloperFiltersPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+        <StackPanel MaxWidth="1160" Margin="30,20,30,30" Spacing="18">
+            <Grid ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Spacing="3">
+                    <TextBlock Style="{StaticResource CloudBayPageTitleStyle}"
+                               Text="Developer Filters" />
+                    <TextBlock Style="{StaticResource CloudBaySecondaryTextStyle}"
+                               Text="Keep generated files and dependencies out of cloud sync." />
+                </StackPanel>
+                <Button Grid.Column="1" VerticalAlignment="Center"
+                        Command="{Binding SaveFiltersCommand}"
+                        IsEnabled="{Binding CanApplyCloudChanges}"
+                        Style="{StaticResource AccentButtonStyle}"
+                        Content="Apply rules" />
+            </Grid>
+
+            <InfoBar IsOpen="True" IsClosable="False" Severity="Informational"
+                     Title="Rules are written to your cloud root"
+                     Message="CloudBay manages its own rule sections and preserves unrelated entries. Choose the formats supported by your mounted provider." />
+
+            <Grid ColumnSpacing="18" RowSpacing="18">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1.25*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <VisualStateManager.VisualStateGroups>
+                    <VisualStateGroup>
+                        <VisualState x:Name="FilterColumnsWide">
+                            <VisualState.StateTriggers>
+                                <AdaptiveTrigger MinWindowWidth="1060" />
+                            </VisualState.StateTriggers>
+                        </VisualState>
+                        <VisualState x:Name="FilterColumnsNarrow">
+                            <VisualState.Setters>
+                                <Setter Target="PresetsSection.(Grid.ColumnSpan)" Value="2" />
+                                <Setter Target="FormatsSection.(Grid.Row)" Value="1" />
+                                <Setter Target="FormatsSection.(Grid.Column)" Value="0" />
+                                <Setter Target="FormatsSection.(Grid.ColumnSpan)" Value="2" />
+                            </VisualState.Setters>
+                        </VisualState>
+                    </VisualStateGroup>
+                </VisualStateManager.VisualStateGroups>
+
+                <Border x:Name="PresetsSection" Grid.Column="0" Style="{StaticResource CloudBayPanelStyle}">
+                    <StackPanel Spacing="13">
+                        <StackPanel Spacing="3">
+                            <TextBlock Style="{StaticResource CloudBaySectionTitleStyle}"
+                                       Text="Built-in cache presets" />
+                            <TextBlock Style="{StaticResource CloudBaySecondaryTextStyle}"
+                                       Text="Select the directory names to exclude wherever they appear." />
+                        </StackPanel>
+                        <ItemsControl ItemsSource="{Binding FilterPresets}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="0,0,0,3" ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="170" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <CheckBox VerticalAlignment="Center"
+                                                  Content="{Binding Name}"
+                                                  IsChecked="{Binding IsEnabled, Mode=TwoWay}" />
+                                        <TextBlock Grid.Column="1" VerticalAlignment="Center"
+                                                   FontSize="12"
+                                                   Style="{StaticResource CloudBaySecondaryTextStyle}"
+                                                   Text="{Binding Description}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <StackPanel x:Name="FormatsSection" Grid.Column="1" Spacing="14">
+                    <Border Style="{StaticResource CloudBayPanelStyle}">
+                        <StackPanel Spacing="12">
+                            <TextBlock Style="{StaticResource CloudBaySectionTitleStyle}"
+                                       Text="Rule destinations" />
+                            <CheckBox Content="Git · .gitignore"
+                                      IsChecked="{Binding FilterGit, Mode=TwoWay}" />
+                            <CheckBox Content="Mountain Duck · filename filter"
+                                      IsChecked="{Binding FilterMountainDuck, Mode=TwoWay}" />
+                            <CheckBox Content="Cyberduck · app filter and export"
+                                      IsChecked="{Binding FilterCyberduck, Mode=TwoWay}" />
+                            <CheckBox Content="Rclone · filter rules"
+                                      IsChecked="{Binding FilterRclone, Mode=TwoWay}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource CloudBayPanelStyle}">
+                        <StackPanel Spacing="12">
+                            <StackPanel Spacing="3">
+                                <TextBlock Style="{StaticResource CloudBaySectionTitleStyle}"
+                                           Text="Custom patterns" />
+                                <TextBlock Style="{StaticResource CloudBaySecondaryTextStyle}"
+                                           Text="Add a filename glob, such as *.tmp or build/. A trailing slash limits a rule to folders." />
+                            </StackPanel>
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox Header="Filename glob"
+                                         PlaceholderText="Example: *.tmp"
+                                         Text="{Binding NewCustomPattern, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <Button Grid.Column="1" VerticalAlignment="Bottom"
+                                        Command="{Binding AddCustomPatternCommand}"
+                                        Content="Add" />
+                            </Grid>
+                            <ItemsControl ItemsSource="{Binding CustomPatterns}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,0,0,6" ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBox Text="{Binding Pattern, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                     AutomationProperties.Name="Custom exclusion pattern" />
+                                            <Button Grid.Column="1" Command="{Binding RemoveCommand}"
+                                                    Content="Remove" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock Style="{StaticResource CloudBaySecondaryTextStyle}"
+                                       Visibility="{Binding NoCustomPatternsVisibility}"
+                                       Text="No custom patterns added." />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Grid>
+
+            <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock VerticalAlignment="Center"
+                           Style="{StaticResource CloudBaySecondaryTextStyle}"
+                           Text="Rule changes are journaled and can be rolled back from Settings." />
+                <Button Grid.Column="1"
+                        Command="{Binding SaveFiltersCommand}"
+                        IsEnabled="{Binding CanApplyCloudChanges}"
+                        Content="Save exclusions" />
+            </Grid>
+        </StackPanel>
+    </ScrollViewer>
+</Page>
