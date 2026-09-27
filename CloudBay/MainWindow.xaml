@@ -13,13 +13,16 @@
 
         <TitleBar x:Name="AppTitleBar"
                   Title="CloudBay"
-                  Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}" />
+                  Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}">
+            <TitleBar.IconSource>
+                <ImageIconSource ImageSource="/Assets/CloudBay-32.png" />
+            </TitleBar.IconSource>
+        </TitleBar>
 
         <NavigationView x:Name="Navigation"
                         Grid.Row="1"
                         Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}"
                         PaneDisplayMode="Auto"
-                        OpenPaneLength="236"
                         CompactPaneLength="54"
                         IsPaneOpen="True"
                         AlwaysShowHeader="False"
@@ -37,7 +40,8 @@
             </NavigationView.MenuItems>
 
             <NavigationView.PaneHeader>
-                <TextBlock Margin="16,12,0,10"
+                <TextBlock x:Name="PaneSectionLabel"
+                           Margin="16,12,0,10"
                            Style="{StaticResource CloudBaySecondaryTextStyle}"
                            FontSize="11"
                            FontWeight="SemiBold"
@@ -47,9 +51,14 @@
 
             <NavigationView.PaneFooter>
                 <StackPanel Margin="16,8,8,12" Spacing="3">
-                    <TextBlock FontSize="11" FontWeight="SemiBold" Text="CLOUD ROOT" />
-                    <TextBlock Style="{StaticResource CloudBaySecondaryTextStyle}"
-                               FontSize="11" Text="{Binding RootHealth}" TextTrimming="CharacterEllipsis" />
+                    <TextBlock x:Name="PaneRootLabel"
+                               FontSize="11" FontWeight="SemiBold" Text="CLOUD ROOT" />
+                    <TextBlock x:Name="PaneRootStatus"
+                               Style="{StaticResource CloudBaySecondaryTextStyle}"
+                               FontSize="11"
+                               Text="{Binding RootHealth}"
+                               TextWrapping="NoWrap"
+                               TextTrimming="CharacterEllipsis" />
                 </StackPanel>
             </NavigationView.PaneFooter>
 
