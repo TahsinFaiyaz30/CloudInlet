@@ -1,6 +1,6 @@
 # License sources
 
-Release packaging copies license and notice files unchanged from the exact restored NuGet packages, including .NET and Windows App SDK runtime packs. `App/Licenses/packages.json` records resolved package versions, upstream license metadata, retained files, and their SHA256 hashes. This inventory includes build dependencies declared by the publish manifest; it does not claim that every dependency contributes an executable file.
+Release packaging copies license and notice files unchanged from the exact restored NuGet packages, including .NET and Windows App SDK runtime packs. `App/Licenses/packages.json` records resolved package versions, upstream license metadata, retained files, and their SHA256 hashes. This inventory combines the resolved restore graph with published runtime dependencies, because native Windows App SDK payload is copied by build targets and can be absent from the managed dependency manifest. It does not claim that every dependency contributes an executable file.
 
 Some packages declare a license expression without including its text. The packaging script retains their copyright metadata and supplies the corresponding license:
 

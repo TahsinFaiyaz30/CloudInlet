@@ -49,9 +49,20 @@ $dotnetIdentity = $dotnetPack[0] -replace '^runtimepack\.', ''
 $dotnetRoot = Get-PackageRoot $dotnetIdentity
 $dotnetLicense = Join-Path $dotnetRoot 'LICENSE.TXT'
 
+$noticeIdentities = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 foreach ($library in $dependencies.libraries.PSObject.Properties) {
     if ($library.Value.type -ne 'package' -and $library.Name -notlike 'runtimepack.*') { continue }
-    $identity = $library.Name -replace '^runtimepack\.', ''
+    $null = $noticeIdentities.Add(($library.Name -replace '^runtimepack\.', ''))
+}
+# Native Windows App SDK payload is copied by package build targets, rather than loaded
+# through the managed dependency graph. SDKs may omit these packages from .deps.json.
+# Retain notices from the resolved restore graph as well as published runtime packs;
+# neither the NuGet cache inventory nor a hard-coded package version defines the release.
+foreach ($library in $assets.libraries.PSObject.Properties) {
+    if ($library.Value.type -eq 'package') { $null = $noticeIdentities.Add($library.Name) }
+}
+
+foreach ($identity in @($noticeIdentities | Sort-Object)) {
     $sourceRoot = Get-PackageRoot $identity
     $nuspec = @(Get-ChildItem -LiteralPath $sourceRoot -Filter '*.nuspec' -File)
     if ($nuspec.Count -ne 1) { throw "Dependency license metadata is ambiguous: $identity" }
