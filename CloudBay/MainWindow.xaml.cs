@@ -1329,6 +1329,7 @@ public sealed partial class MainWindow : Window
         {
             await File.WriteAllTextAsync(Path.Combine(outputDirectory, "layout.txt"), "");
             await File.WriteAllTextAsync(Path.Combine(outputDirectory, "capture-metrics.txt"), "");
+            await File.WriteAllTextAsync(Path.Combine(outputDirectory, "exclusions-validation.txt"), "");
         }
         ShowWindow();
         await InitialNavigationReady.WaitAsync(TimeSpan.FromSeconds(3));
