@@ -1,5 +1,7 @@
 # Live Windows and B2 acceptance validation
 
+Run these commands from a CloudBay source checkout. The application release includes this guide for reference; the developer validation console is built from source and is separate from the installed app.
+
 This console uses a DPAPI-encrypted application key at `%LOCALAPPDATA%\CloudBay\Validation\credentials.dpapi`, protected for the current Windows user with the same `CloudBay.B2.v1` entropy as the app. Credentials are never placed in the repository, printed, or included in a report.
 
 ```powershell

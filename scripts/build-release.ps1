@@ -52,12 +52,16 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Release tests failed.' }
     dotnet publish CloudBay\CloudBay.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:PublishTrimmed=false -p:Version=$Version -o $appFolder -v:minimal
     if ($LASTEXITCODE -ne 0) { throw 'Self-contained publish failed.' }
+    & (Join-Path $PSScriptRoot 'copy-release-notices.ps1') -AppFolder $appFolder -AssetsPath (Join-Path $repository 'CloudBay/obj/project.assets.json')
     Copy-Item -LiteralPath (Join-Path $repository 'packaging\Install.ps1') -Destination $package -Force
     Copy-Item -LiteralPath (Join-Path $repository 'packaging\Uninstall.ps1') -Destination $package -Force
     Copy-Item -LiteralPath (Join-Path $repository 'README.md') -Destination $package -Force
     Copy-Item -LiteralPath (Join-Path $repository 'LICENSE') -Destination $package -Force
     Copy-Item -LiteralPath (Join-Path $repository 'THIRD-PARTY-NOTICES.md') -Destination $package -Force
     Copy-Item -LiteralPath (Join-Path $repository 'docs') -Destination $package -Recurse -Force
+    $validationGuide = Join-Path $package 'tools/CloudBay.Validation'
+    New-Item -ItemType Directory -Path $validationGuide -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repository 'tools/CloudBay.Validation/README.md') -Destination $validationGuide -Force
 
     # Finish and hash the archive before replacing any prior successful output.
     $checkedPackage = Assert-ReleaseTree $package
