@@ -21,9 +21,20 @@ jobs:
         run: dotnet build CloudBay.sln -c Release -v:minimal
       - name: Test transport and reconciliation
         # Hosted Server runners are not a desktop Cloud Files acceptance environment.
-        run: dotnet test CloudBay.Tests/CloudBay.Tests.csproj -c Release --no-build --filter "FullyQualifiedName!~Native" -v:minimal
+        run: dotnet test CloudBay.Tests/CloudBay.Tests.csproj -c Release --no-build --filter "FullyQualifiedName!~Native" -v:minimal --logger "trx;LogFileName=windows-ci.trx" --results-directory artifacts/ci-tests
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CloudBay-Windows-test-results
+          path: artifacts/ci-tests/*.trx
+          if-no-files-found: ignore
       - name: Publish self-contained desktop app
         run: dotnet publish CloudBay/CloudBay.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:PublishTrimmed=false -o artifacts/ci/App -v:minimal
+      - name: Retain runtime licenses and notices
+        run: |
+          .\scripts\copy-release-notices.ps1 -AppFolder artifacts/ci/App -AssetsPath CloudBay/obj/project.assets.json
+          Copy-Item -LiteralPath LICENSE,THIRD-PARTY-NOTICES.md -Destination artifacts/ci/App
       - uses: actions/upload-artifact@v4
         with:
           name: CloudBay-win-x64-unsigned

@@ -23,14 +23,29 @@ public sealed class B2TransportTests
     public async Task StalledMetadataHeadersRetryWithoutExposingRequestSecrets()
     {
         var attempts = 0;
+        var stalledRequestCancelled = false;
+        // Build the successful fixture before starting the request deadline. A 60 ms deadline
+        // also measured cold JSON serializer/JIT work on hosted runners and could time out the
+        // healthy retry. Keep a real deadline and exact retry count, with room for CI scheduling.
+        using var successfulResponse = Authorization();
         using var store = new B2CloudStore(new FakeHandler(async (_, ct) =>
         {
-            if (Interlocked.Increment(ref attempts) == 1) await Task.Delay(Timeout.InfiniteTimeSpan, ct);
-            return Authorization();
-        }), metadataTimeout: TimeSpan.FromMilliseconds(60));
-        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            if (Interlocked.Increment(ref attempts) == 1)
+            {
+                try { await Task.Delay(Timeout.InfiniteTimeSpan, ct); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    stalledRequestCancelled = true;
+                    throw;
+                }
+            }
+            return successfulResponse;
+        }), metadataTimeout: TimeSpan.FromSeconds(1));
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var account = await store.ConnectAsync(new("id", "private"), guard.Token);
         Assert.AreEqual("account", account.AccountId);
+        Assert.IsTrue(stalledRequestCancelled, "The transport deadline must cancel the stalled request before retrying.");
+        Assert.IsFalse(guard.IsCancellationRequested, "A request timeout must not cancel the caller's operation.");
         Assert.AreEqual(2, attempts);
     }
 

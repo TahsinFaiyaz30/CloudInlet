@@ -2,4 +2,4 @@
 * text=auto
 
 # Preserve pinned upstream license bytes and their recorded hashes.
-packaging/licenses/*.txt -text
+packaging/licenses/*.txt -text whitespace=cr-at-eol

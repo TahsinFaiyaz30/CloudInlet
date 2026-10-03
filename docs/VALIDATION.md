@@ -40,7 +40,9 @@ Installer acceptance passed a real per-user install, Start menu target and Insta
 
 The published runtime was verified from both dependency and runtime configuration files: .NET 8.0.31 and Windows App SDK 1.8.260921001. Keep the runtime patched and migrate before [.NET 8 support ends on November 10, 2026](https://dotnet.microsoft.com/en-us/platform/support/policy).
 
-The GitHub Windows build workflow is included but has not been run remotely. Hosted Windows Server runners run transport/reconciliation tests; native desktop acceptance is performed locally.
+The GitHub Windows build workflow builds the complete solution, runs transport/reconciliation tests, retains test reports even after a failure, and publishes an unsigned self-contained app with dependency notices. Hosted Windows Server runners exclude native desktop Cloud Files tests; native acceptance is performed locally. The stalled-header test creates its successful response before the timed operation and uses a one-second test deadline, keeping cold fixture initialization out of a 60 ms budget. It still verifies timeout cancellation, an uncancelled caller, and exactly one retry; production deadlines and retry behavior are unchanged.
+
+After that correction, the stalled-header check passed in five fresh test processes and the exact hosted CI filter passed **124/124 locally**, with zero skips. Reports are `artifacts/validation/tests/ci-stalled-headers-<1-5>.trx` and `windows-ci-local.trx`; local results do not substitute for a completed hosted workflow.
 
 ## Verified scope and remaining release requirements
 
