@@ -59,7 +59,8 @@ function Wait-PreviewReady([Diagnostics.Process]$Preview, [DateTimeOffset]$Launc
             catch [System.IO.IOException] { }
             catch [System.Management.Automation.RuntimeException] { }
             if ($null -ne $ready -and [int]$ready.processId -eq $Preview.Id -and $ready.trayReady -eq $true -and
-                $ready.controllerReady -eq $true -and $readyStartup -ge $LaunchedUtc.AddSeconds(-1)) {
+                $ready.controllerReady -eq $true -and $ready.navigationReady -eq $true -and
+                ![string]::IsNullOrWhiteSpace([string]$ready.visibleRoute) -and $readyStartup -ge $LaunchedUtc.AddSeconds(-1)) {
                 # Also catch an immediate failure dispatched after startup.
                 if ($Preview.WaitForExit(500)) { throw 'The new development app exited immediately after becoming ready.' }
                 if ((Test-Path -LiteralPath $failurePath) -and
@@ -71,7 +72,7 @@ function Wait-PreviewReady([Diagnostics.Process]$Preview, [DateTimeOffset]$Launc
         }
         Start-Sleep -Milliseconds 100
     } while ([DateTimeOffset]::UtcNow -lt $deadline)
-    throw 'The new development app did not confirm that its tray and controller were ready within two minutes.'
+    throw 'The new development app did not confirm that its tray, controller, and visible page were ready within two minutes.'
 }
 
 function Stop-FailedPreview([Diagnostics.Process]$Preview, [string]$Executable) {

@@ -54,6 +54,11 @@ public sealed partial class MainWindow : Window
     private bool? _compactLayout;
     private string _currentPage = "overview";
     private string _settingsRoute = "home";
+    private string _pendingInitialRoute = "overview";
+    private string _restoredInitialRoute = "overview";
+    private bool _navigationTemplateReady;
+    private bool _applyingNavigationRoute;
+    private readonly TaskCompletionSource<bool> _initialNavigationReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _folderIconPixels;
     private Control? _settingsOrigin;
     private readonly UISettings _uiSettings = new();
@@ -62,10 +67,20 @@ public sealed partial class MainWindow : Window
         ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CloudBay", "UiLive", "window-page.txt") : null;
 
     public bool AllowClose { get; set; }
+    public Task InitialNavigationReady => _initialNavigationReady.Task;
+    public string CurrentPageTitle => PageTitle.Text;
+    public string CurrentRoute => SettingsPage.Visibility == Visibility.Visible
+        ? _settingsRoute == "home" ? "settings" : $"settings/{_settingsRoute}"
+        : ActivityPage.Visibility == Visibility.Visible ? "activity"
+        : BackupPage.Visibility == Visibility.Visible ? "backup"
+        : FilesPage.Visibility == Visibility.Visible ? "files" : "overview";
 
     public MainWindow(ClientController controller)
     {
         _controller = controller;
+        // Read restoration before XAML or NavigationView can raise selection
+        // events. Its SettingsItem is created when the native template loads.
+        _pendingInitialRoute = ReadInitialNavigationRoute();
         InitializeComponent();
         _openFolderAccentStyle = OpenFolderButton.Style;
         _viewModel = new ClientViewModel(controller);
@@ -97,6 +112,7 @@ public sealed partial class MainWindow : Window
         Closed += (_, _) =>
         {
             _closed = true;
+            _initialNavigationReady.TrySetCanceled();
             _controller.Changed -= Controller_Changed;
             _uiSettings.TextScaleFactorChanged -= TextScaleFactor_Changed;
         };
@@ -105,16 +121,7 @@ public sealed partial class MainWindow : Window
         Refresh();
         if (Navigation.SelectedItem is NavigationViewItem { Tag: "backup" }) RefreshBackups(refreshMetadata: true);
         _controller.Changed += Controller_Changed;
-        var initialPage = Environment.GetCommandLineArgs().FirstOrDefault(arg => arg.StartsWith("--page=", StringComparison.Ordinal))?[7..];
-        if (initialPage is null && _livePagePath is not null)
-        {
-            try { if (File.Exists(_livePagePath)) initialPage = File.ReadAllText(_livePagePath).Trim(); }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
-        }
-        Navigation.SelectedItem = initialPage?.StartsWith("settings", StringComparison.Ordinal) == true ? Navigation.SettingsItem :
-            Navigation.MenuItems.Cast<NavigationViewItem>().FirstOrDefault(item => (string)item.Tag == initialPage) ?? Navigation.MenuItems[0];
-        if (initialPage?.StartsWith("settings/", StringComparison.Ordinal) == true) OpenSettingsRoute(initialPage[9..]);
+        Navigation.Loaded += Navigation_Loaded;
         Navigation.ItemInvoked += (_, args) => { if (args.IsSettingsInvoked) OpenSettingsRoute("home"); };
         RootGrid.KeyDown += (_, args) =>
         {
@@ -148,34 +155,132 @@ public sealed partial class MainWindow : Window
 
     public void ShowSettings()
     {
-        Navigation.SelectedItem = Navigation.SettingsItem;
-        ShowPage("settings");
-        OpenSettingsRoute("home");
+        RequestNavigationRoute("settings");
         ShowWindow();
     }
 
     public void ShowAccount()
     {
-        Navigation.SelectedItem = Navigation.SettingsItem;
-        ShowPage("settings");
         _settingsOrigin = SettingsAccountAction;
-        OpenSettingsRoute("account");
+        RequestNavigationRoute("settings/account");
         ShowWindow();
         FocusSettingsAfterLayout(DisplaySettings.IsConfigured ? ApplicationKeyBox : BucketNameBox, "account");
     }
 
     public void ShowActivity()
     {
-        Navigation.SelectedItem = Navigation.MenuItems[1];
-        ShowPage("activity");
+        RequestNavigationRoute("activity");
         ShowWindow();
     }
 
     public void ShowOverview()
     {
-        Navigation.SelectedItem = Navigation.MenuItems[0];
-        ShowPage("overview");
+        RequestNavigationRoute("overview");
         ShowWindow();
+    }
+
+    private string ReadInitialNavigationRoute()
+    {
+        var route = Environment.GetCommandLineArgs().FirstOrDefault(arg => arg.StartsWith("--page=", StringComparison.Ordinal))?[7..];
+        if (route is null && _livePagePath is not null)
+        {
+            try { if (File.Exists(_livePagePath)) route = File.ReadAllText(_livePagePath); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+        return NormalizeNavigationRoute(route);
+    }
+
+    private static string NormalizeNavigationRoute(string? route) => route?.Trim() switch
+    {
+        "activity" => "activity", "backup" => "backup", "files" => "files", "settings" or "settings/home" => "settings",
+        "settings/account" => "settings/account", "settings/sync" => "settings/sync",
+        "settings/network" => "settings/network", "settings/appearance" => "settings/appearance",
+        "settings/general" => "settings/general", "settings/about" => "settings/about",
+        _ => "overview"
+    };
+
+    private void Navigation_Loaded(object sender, RoutedEventArgs args)
+    {
+        if (_closed || _initialNavigationReady.Task.IsCompleted) return;
+        try
+        {
+            Navigation.ApplyTemplate();
+            _navigationTemplateReady = true;
+            ApplyNavigationRoute(_pendingInitialRoute);
+            AssertNavigationPresentation(_pendingInitialRoute);
+            _restoredInitialRoute = CurrentRoute;
+            _initialNavigationReady.TrySetResult(true);
+            PersistNavigationRoute();
+        }
+        catch (Exception error)
+        {
+            _initialNavigationReady.TrySetException(error);
+            throw;
+        }
+    }
+
+    private void RequestNavigationRoute(string route)
+    {
+        route = NormalizeNavigationRoute(route);
+        // A tray or activation action may arrive before Loaded. It takes
+        // precedence over the captured startup route when restoration runs.
+        if (!_initialNavigationReady.Task.IsCompletedSuccessfully) _pendingInitialRoute = route;
+        ApplyNavigationRoute(route);
+        PersistNavigationRoute();
+    }
+
+    private void ApplyNavigationRoute(string route)
+    {
+        _applyingNavigationRoute = true;
+        try
+        {
+            var isSettings = route == "settings" || route.StartsWith("settings/", StringComparison.Ordinal);
+            var page = isSettings ? "settings" : route;
+            if (isSettings) OpenSettingsRoute(route == "settings" ? "home" : route[9..]);
+            ShowPage(page);
+            if (_navigationTemplateReady)
+            {
+                var selectedItem = isSettings ? Navigation.SettingsItem
+                    : Navigation.MenuItems.Cast<NavigationViewItem>().First(item => (string)item.Tag == page);
+                if (selectedItem is null) throw new InvalidOperationException("The loaded navigation template did not create its Settings item.");
+                Navigation.SelectedItem = selectedItem;
+            }
+        }
+        finally { _applyingNavigationRoute = false; }
+    }
+
+    private void PersistNavigationRoute()
+    {
+        if (_livePagePath is null || !_initialNavigationReady.Task.IsCompletedSuccessfully || _applyingNavigationRoute) return;
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_livePagePath)!);
+            File.WriteAllText(_livePagePath, CurrentRoute);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    private void AssertNavigationPresentation(string route)
+    {
+        var settings = route == "settings" || route.StartsWith("settings/", StringComparison.Ordinal);
+        var page = settings ? "settings" : route;
+        FrameworkElement expectedPage = page switch
+        {
+            "activity" => ActivityPage, "backup" => BackupPage, "files" => FilesPage,
+            "settings" => SettingsPage, _ => OverviewPage
+        };
+        FrameworkElement[] pages = [OverviewPage, ActivityPage, BackupPage, FilesPage, SettingsPage];
+        var expectedSelection = settings ? Navigation.SettingsItem
+            : Navigation.MenuItems.Cast<NavigationViewItem>().First(item => (string)item.Tag == page);
+        if (CurrentRoute != route || expectedSelection is null || !ReferenceEquals(Navigation.SelectedItem, expectedSelection) ||
+            pages.Any(item => (item.Visibility == Visibility.Visible) != ReferenceEquals(item, expectedPage)) ||
+            string.IsNullOrWhiteSpace(PageTitle.Text) || (settings && PageTitle.Text == "Overview"))
+            throw new InvalidOperationException("Restored navigation must select the requested native item and display its actual page and header.");
+        if (route == "settings/account" && (AccountSettingsDetail.Visibility != Visibility.Visible ||
+            SettingsHub.Visibility != Visibility.Collapsed || SettingsDetail.Visibility != Visibility.Visible || PageTitle.Text != "Account"))
+            throw new InvalidOperationException("Restoring Account must display the Account editor and its Mica header.");
     }
 
     private void Controller_Changed(object? sender, EventArgs e)
@@ -246,7 +351,8 @@ public sealed partial class MainWindow : Window
     {
         // NavigationView can raise SelectionChanged while InitializeComponent is
         // still wiring the named content panels.
-        if (OverviewPage is null) return;
+        if (OverviewPage is null || !_navigationTemplateReady || _applyingNavigationRoute ||
+            !_initialNavigationReady.Task.IsCompletedSuccessfully) return;
         ShowPage(args.IsSettingsSelected ? "settings" : (args.SelectedItem as NavigationViewItem)?.Tag as string ?? "overview");
     }
 
@@ -267,16 +373,7 @@ public sealed partial class MainWindow : Window
         UpdatePageHeader();
         if (page == "backup") RefreshBackups(refreshMetadata: true);
         if (selected is ScrollViewer viewer) viewer.ChangeView(null, 0, null, true);
-        if (_livePagePath is not null)
-        {
-            try
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(_livePagePath)!);
-                File.WriteAllText(_livePagePath, page == "settings" && _settingsRoute != "home" ? $"settings/{_settingsRoute}" : page);
-            }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
-        }
+        PersistNavigationRoute();
     }
 
     private void UpdatePageHeader()
@@ -357,14 +454,15 @@ public sealed partial class MainWindow : Window
         foreach (var (viewer, content) in new[] { (OverviewPage, OverviewContent), (BackupPage, BackupContent), (FilesPage, FilesContent), (SettingsPage, SettingsContent) })
             if (viewer.ActualWidth > 0) content.Width = Math.Min(PageColumnWidth, viewer.ActualWidth);
         if (ContentLayoutGrid.ActualWidth > 0) PageHeader.Width = Math.Min(PageColumnWidth, ContentLayoutGrid.ActualWidth);
-        if (ContentLayoutGrid.ActualWidth > 0) ActivityPage.Width = Math.Min(PageColumnWidth, ContentLayoutGrid.ActualWidth);
-        ArrangeTiles(SettingsCategories, SettingsContent.Width - 64 >= 660 * _uiSettings.TextScaleFactor ? 2 : 1);
-        if (SettingsContent.Width > 64)
+        if (ForegroundLayout.ActualWidth > 0) ActivityPage.Width = Math.Min(PageColumnWidth, ForegroundLayout.ActualWidth);
+        var settingsWidth = SettingsContent.Width - SettingsContent.Padding.Left - SettingsContent.Padding.Right;
+        ArrangeTiles(SettingsCategories, settingsWidth >= 660 * _uiSettings.TextScaleFactor ? 2 : 1);
+        if (settingsWidth > 0)
         {
-            ConnectionPanel.Width = Math.Min(720, SettingsContent.Width - 64);
+            ConnectionPanel.Width = Math.Min(720, settingsWidth);
             // Keep the secret full width. The shorter account identifiers share
             // a row only when their labels and inputs have comfortable space.
-            var paired = ConnectionPanel.Width - 48 >= 560 * _uiSettings.TextScaleFactor;
+            var paired = ConnectionPanel.Width - ConnectionPanel.Padding.Left - ConnectionPanel.Padding.Right >= 560 * _uiSettings.TextScaleFactor;
             AccountCredentialFields.ColumnSpacing = paired ? 16 : 0;
             AccountCredentialFields.ColumnDefinitions[1].Width = paired ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
             Grid.SetColumn(KeyIdBox, paired ? 1 : 0);
@@ -377,10 +475,11 @@ public sealed partial class MainWindow : Window
         var pane = Navigation.DisplayMode == NavigationViewDisplayMode.Expanded ? Navigation.OpenPaneLength :
             Navigation.DisplayMode == NavigationViewDisplayMode.Compact ? Navigation.CompactPaneLength : 0;
         var compact = Navigation.ActualWidth - pane < 670;
-        var backupColumns = BackupContent.Width - 64 >= 660 * _uiSettings.TextScaleFactor ? 2 : 1;
+        var backupWidth = BackupContent.Width - BackupContent.Padding.Left - BackupContent.Padding.Right;
+        var backupColumns = backupWidth >= 660 * _uiSettings.TextScaleFactor ? 2 : 1;
         ArrangeTiles(BackupRows, backupColumns);
         ArrangeTiles(MoreBackupRows, backupColumns);
-        ArrangeTiles(CustomBackupRows, BackupContent.Width - 64 >= 760 * _uiSettings.TextScaleFactor ? 2 : 1);
+        ArrangeTiles(CustomBackupRows, backupWidth >= 760 * _uiSettings.TextScaleFactor ? 2 : 1);
         UpdateOverviewLayout();
         if (_compactLayout == compact) return;
         _compactLayout = compact;
@@ -603,7 +702,7 @@ public sealed partial class MainWindow : Window
 
     private void UpdateOverviewLayout()
     {
-        var innerWidth = OverviewContent.Width - 64;
+        var innerWidth = OverviewContent.Width - OverviewContent.Padding.Left - OverviewContent.Padding.Right;
         if (!double.IsFinite(innerWidth) || innerWidth <= 0) return;
         var protectedVisible = ProtectedFoldersSection.Visibility == Visibility.Visible;
         var recentVisible = RecentActivitySection.Visibility == Visibility.Visible;
@@ -614,7 +713,8 @@ public sealed partial class MainWindow : Window
         Grid.SetColumn(RecentActivitySection, wide ? 1 : 0);
         Grid.SetRow(RecentActivitySection, !wide && protectedVisible ? 1 : 0);
         var protectedWidth = wide ? (innerWidth - 24) * 3 / 5 : innerWidth;
-        ArrangeTiles(ProtectedFolderRows, Math.Clamp((int)((protectedWidth - 48) / (128 * _uiSettings.TextScaleFactor)), 1, 3));
+        var protectedPadding = ProtectedFolderSurface.Padding.Left + ProtectedFolderSurface.Padding.Right;
+        ArrangeTiles(ProtectedFolderRows, Math.Clamp((int)((protectedWidth - protectedPadding) / (128 * _uiSettings.TextScaleFactor)), 1, 3));
     }
 
     private sealed record ProtectedFolderLink(string Name, bool Custom);
@@ -1216,8 +1316,28 @@ public sealed partial class MainWindow : Window
             await File.WriteAllTextAsync(Path.Combine(outputDirectory, "capture-metrics.txt"), "");
         }
         ShowWindow();
+        await InitialNavigationReady.WaitAsync(TimeSpan.FromSeconds(3));
         await Task.Delay(300);
         RootGrid.UpdateLayout();
+        AssertNavigationPresentation(_restoredInitialRoute);
+        await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"),
+            $"startup-navigation-{themeArgument}: actual route={CurrentRoute}, title={CurrentPageTitle}, selected={Navigation.SelectedItem is NavigationViewItem}{Environment.NewLine}");
+        await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"startup-navigation-{themeArgument?.ToLowerInvariant() ?? "dark"}.png"));
+        foreach (var earlyRoute in new[] { "settings", "settings/account" })
+        {
+            // Exercise the real native window/template lifecycle. A tray
+            // action before Loaded must override the captured startup route.
+            var earlyWindow = new MainWindow(_controller);
+            try
+            {
+                if (earlyRoute == "settings/account") earlyWindow.ShowAccount(); else earlyWindow.ShowSettings();
+                await earlyWindow.InitialNavigationReady.WaitAsync(TimeSpan.FromSeconds(3));
+                earlyWindow.AssertNavigationPresentation(earlyRoute);
+                await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"),
+                    $"preload-navigation-{themeArgument}: requested={earlyRoute}, actual={earlyWindow.CurrentRoute}, title={earlyWindow.CurrentPageTitle}{Environment.NewLine}");
+            }
+            finally { earlyWindow.AllowClose = true; earlyWindow.Close(); }
+        }
         var title = FindDescendant<TextBlock>(AppTitleBar, item => item.Text == "CloudBay");
         if (AppTitleBar.Title != "CloudBay" || title is null || title.ActualWidth <= 0 || title.ActualHeight <= 0)
             throw new InvalidOperationException("The native title bar brand must be visible and laid out.");
@@ -1437,7 +1557,7 @@ public sealed partial class MainWindow : Window
             RootGrid.UpdateLayout();
             // Verify the documented NavigationView card pattern at runtime.
             // Its public resource overrides must leave the Mica header exposed;
-            // individual task cards, rather than a full-height backplate, own fill.
+            // the foreground body is a separate, rounded surface below it.
             DependencyObject? surface = VisualTreeHelper.GetParent(ContentLayoutGrid);
             while (surface is not null && surface is not Grid { Name: "ContentGrid" })
                 surface = VisualTreeHelper.GetParent(surface);
@@ -1449,7 +1569,7 @@ public sealed partial class MainWindow : Window
             }
             if (surface is not Grid nativeContent || nativeContent.Background is not SolidColorBrush { Color.A: 0 } ||
                 !nativeContent.BorderThickness.Equals(new Thickness(0)))
-                throw new InvalidOperationException("The NavigationView card pattern must expose the Mica foundation without a full-height content backplate.");
+                throw new InvalidOperationException("The navigation host must expose the Mica header above the foreground body.");
             await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"),
                 $"{fileName}: native surface background={nativeContent.Background?.GetType().Name ?? "none"}, margin={nativeContent.Margin}, corners={nativeContent.CornerRadius}, mode={Navigation.DisplayMode}{Environment.NewLine}");
             var foregroundPosition = nativeContent.TransformToVisual(RootGrid).TransformPoint(new global::Windows.Foundation.Point());
@@ -1464,15 +1584,19 @@ public sealed partial class MainWindow : Window
                 "files" => FilesPage, "settings" => SettingsPage, _ => OverviewPage
             };
             var pagePosition = selectedPage.TransformToVisual(RootGrid).TransformPoint(new global::Windows.Foundation.Point());
+            var contentPosition = ContentSurface.TransformToVisual(RootGrid).TransformPoint(new global::Windows.Foundation.Point());
             if (headerPosition.Y < AppTitleBar.ActualHeight - 1 ||
-                pagePosition.Y + 1 < headerPosition.Y + PageHeader.ActualHeight ||
-                !IsWithin(PageTitle, PageHeader) || IsWithin(PageTitle, selectedPage) ||
-                PageHeader.ActualWidth > ContentLayoutGrid.ActualWidth + 1)
-                throw new InvalidOperationException("The page title must occupy the Mica header above the scrolling foreground content.");
+                contentPosition.Y + 1 < headerPosition.Y + PageHeader.ActualHeight + 12 ||
+                pagePosition.Y + 1 < contentPosition.Y || !IsWithin(PageTitle, PageHeader) ||
+                IsWithin(PageTitle, ContentSurface) || !IsWithin(selectedPage, ContentSurface) ||
+                PageHeader.ActualWidth > ContentLayoutGrid.ActualWidth + 1 ||
+                !ContentSurface.CornerRadius.Equals(new CornerRadius(8)) ||
+                ContentSurface.Background is null || ForegroundLayout.Background is null)
+                throw new InvalidOperationException("The page title must occupy Mica above a separately painted, rounded foreground body.");
             if ((SettingsBackButton.Visibility == Visibility.Visible) != (page == "settings" && _settingsRoute != "home"))
                 throw new InvalidOperationException("Only a settings detail may expose the shared header's Back action.");
             await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"),
-                $"{fileName}: Mica header y={headerPosition.Y}, height={PageHeader.ActualHeight}, task content y={pagePosition.Y}, title={PageTitle.Text}{Environment.NewLine}");
+                $"{fileName}: Mica header y={headerPosition.Y}, height={PageHeader.ActualHeight}, foreground y={contentPosition.Y}, task content y={pagePosition.Y}, title={PageTitle.Text}{Environment.NewLine}");
             if (page != "activity")
             {
                 var viewer = page switch { "backup" => BackupPage, "files" => FilesPage, "settings" => SettingsPage, _ => OverviewPage };

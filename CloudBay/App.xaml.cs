@@ -113,6 +113,11 @@ public partial class App : Microsoft.UI.Xaml.Application
             var clientStartup = _controller.StartAsync();
             if (isLive)
             {
+                if (MainWindow.AppWindow.IsVisible)
+                {
+                    _startupStage = "Restore main window navigation";
+                    await MainWindow.InitialNavigationReady.WaitAsync(TimeSpan.FromSeconds(30));
+                }
                 _startupStage = "Publish live preview readiness";
                 await WriteLiveReadinessAsync();
             }
@@ -164,7 +169,10 @@ public partial class App : Microsoft.UI.Xaml.Application
             processId = Environment.ProcessId,
             startupUtc = _startupUtc,
             trayReady = _trayIcon is not null,
-            controllerReady = true
+            controllerReady = true,
+            navigationReady = MainWindow?.InitialNavigationReady.IsCompletedSuccessfully == true,
+            visibleRoute = MainWindow?.CurrentRoute,
+            pageTitle = MainWindow?.CurrentPageTitle
         }));
         File.Move(temporary, Path.Combine(LiveStateDirectory, "ui-ready.json"), overwrite: true);
     }
@@ -235,13 +243,18 @@ public partial class App : Microsoft.UI.Xaml.Application
             {
                 File.Delete(Path.Combine(output, $"complete-{theme}.txt"));
                 File.Delete(Path.Combine(output, $"failure-{theme}.txt"));
-                using var process = Process.Start(new ProcessStartInfo(Environment.ProcessPath!)
+                var launch = new ProcessStartInfo(Environment.ProcessPath!)
                 {
-                    Arguments = $"--ui-smoke --ui-smoke-theme={theme}{(trayOnly ? " --ui-smoke-tray" : "")}",
                     WorkingDirectory = Environment.CurrentDirectory,
                     UseShellExecute = true,
                     WindowStyle = ProcessWindowStyle.Hidden
-                }) ?? throw new InvalidOperationException("Could not launch the isolated UI validation process.");
+                };
+                launch.ArgumentList.Add("--ui-smoke");
+                launch.ArgumentList.Add($"--ui-smoke-theme={theme}");
+                if (trayOnly) launch.ArgumentList.Add("--ui-smoke-tray");
+                var initialPage = Environment.GetCommandLineArgs().FirstOrDefault(arg => arg.StartsWith("--page=", StringComparison.Ordinal));
+                if (initialPage is not null) launch.ArgumentList.Add(initialPage);
+                using var process = Process.Start(launch) ?? throw new InvalidOperationException("Could not launch the isolated UI validation process.");
                 using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
                 try { await process.WaitForExitAsync(timeout.Token); }
                 catch (OperationCanceledException)

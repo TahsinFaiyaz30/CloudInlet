@@ -11,16 +11,16 @@
             <!-- Native controls own their Windows 11 geometry, typography,
                  strokes, high contrast states, focus and reduced motion. -->
             <Thickness
-                x:Key="CloudBayPageInset">32,24,32,40</Thickness>
-            <!-- The shell header stays on the window's Mica layer. Only
-                 meaningful groups use a foreground backplate. Windows keeps
-                 in-page corners at its native ControlCornerRadius. -->
+                x:Key="CloudBayPageInset">24,28,24,40</Thickness>
+            <!-- Native card surfaces group tasks inside the rounded body.
+                 The shell header and sidebar expose the Mica foundation.
+                 In-page cards retain the Windows ControlCornerRadius. -->
             <Style x:Key="CloudBaySurfaceStyle" TargetType="Border">
                 <Setter Property="CornerRadius" Value="{ThemeResource ControlCornerRadius}" />
                 <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
                 <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
                 <Setter Property="BorderThickness" Value="1" />
-                <Setter Property="Padding" Value="24" />
+                <Setter Property="Padding" Value="28" />
             </Style>
             <Style x:Key="CloudBaySectionHeadingStyle" TargetType="TextBlock" BasedOn="{StaticResource BodyStrongTextBlockStyle}">
                 <Setter Property="FontSize" Value="16" />
@@ -37,7 +37,7 @@
                     Value="{StaticResource CloudBayPageInset}" />
                 <Setter
                     Property="Spacing"
-                    Value="24" />
+                    Value="28" />
                 <Setter
                     Property="HorizontalAlignment"
                     Value="Center" />
@@ -64,7 +64,7 @@
                     Value="0" />
                 <Setter
                     Property="Margin"
-                    Value="0,0,0,8" />
+                    Value="0,0,0,10" />
                 <Setter
                     Property="HorizontalContentAlignment"
                     Value="Stretch" />
@@ -90,7 +90,7 @@
             <DataTemplate
                 x:Key="ActivityTemplate">
                 <Grid
-                    Padding="0,14"
+                    Padding="0,16"
                     ColumnSpacing="16">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition
@@ -124,7 +124,7 @@
                 </Grid>
             </DataTemplate>
             <DataTemplate x:Key="ActivityRowTemplate">
-                <Border Style="{StaticResource CloudBaySurfaceStyle}" Padding="16,0">
+                <Border Style="{StaticResource CloudBaySurfaceStyle}" Padding="20,0">
                     <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource ActivityTemplate}" />
                 </Border>
             </DataTemplate>
