@@ -8,7 +8,7 @@ The final Release suite passed **101/101 tests, with zero skips**. The release s
 
 Native tests register GUID-isolated roots in the current user's profile. They verify ordinary Windows file reads hydrate the selected immutable B2 version, clean files can be evicted and rehydrated, scans do not hydrate online-only files, dirty bytes are protected, same-size edits with preserved timestamps are uploaded, recovery survives removal, and explicit placeholder reversion retains ordinary local files after unregistering. Registration and restart tests also passed five consecutive repetitions. Verified folder-copy tests include real destination junctions at the root, ancestor, and nested levels; rejected copies leave source and outside data unchanged.
 
-The final local build and test output is available under `artifacts/validation/`; test result files are under `CloudBay.Tests/TestResults/`. Generated outputs and credentials are excluded from Git.
+The final local build and test output is available under `artifacts/validation/`; the final suite report is `artifacts/validation/tests/backend-release-final.trx`. Generated outputs and credentials are excluded from Git.
 
 ## Live Backblaze B2 acceptance
 
@@ -18,11 +18,17 @@ Full transport acceptance passed **11/11 checks**: it streams a 205 MiB multipar
 
 Use the [validation CLI](../tools/CloudBay.Validation/README.md) for reproducible commands. Fresh acceptance reports remain in `artifacts/validation/b2-<GUID>.json`.
 
+After the final native checksum and settings validation changes, the controller run passed **14/14 checks**, and the smaller native/B2 run passed **9/9 checks**. `artifacts/validation/backend-release-summary.json` links the successful final reports, separating them from retained reports of earlier failures.
+
 ## UI and distribution
 
 The native WinUI application rendered 59 screenshots, including light/dark tray windows and all five pages at widths of 800, 1100, and 1300 pixels. Thirty page-bound assertions passed. Backup and settings pages were inspected at their middle and bottom scroll positions. A smoke assertion verifies that background settings refreshes preserve unsaved form values. Mica Alt is configured on the actual windows; bitmap capture records the XAML content rather than the desktop compositor backdrop.
 
 The release is self-contained for Windows x64 and includes its .NET and Windows App SDK runtimes. The package contains `App/CloudBay.exe`, per-user installer and uninstaller scripts, documentation, license, and an external SHA256 checksum. Publishing and same-version installation use fresh staging folders so obsolete files do not accumulate in the active package. Previous package/install folders are retained for rollback until explicitly removed or uninstalled.
+
+Installer acceptance passed a real per-user install, Start menu target and Installed apps checks, same-version reinstallation with an obsolete-file sentinel, preservation of the previous installation, refusal to uninstall while an injected current-user provider registration exists, and complete removal of binary folders and app entries. The previous startup registry value was restored exactly. The test left no installed application or provider registration; see `artifacts/validation/installer-roundtrip.json`.
+
+The published runtime was verified from both dependency and runtime configuration files: .NET 8.0.31 and Windows App SDK 1.8.260921001. Keep the runtime patched and migrate before [.NET 8 support ends on November 10, 2026](https://dotnet.microsoft.com/en-us/platform/support/policy).
 
 The GitHub Windows build workflow is included but has not been run remotely. Hosted Windows Server runners run transport/reconciliation tests; native desktop acceptance is performed locally.
 
