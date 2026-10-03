@@ -23,6 +23,9 @@ public sealed record PreferenceUpdate
     public int? PollSeconds { get; init; }
     public string? Theme { get; init; }
     public IReadOnlyList<string>? Exclusions { get; init; }
+    public IReadOnlyList<SelectedExclusion>? SelectedExclusions { get; init; }
+    public IReadOnlyList<GuidedExclusion>? GuidedExclusions { get; init; }
+    public IReadOnlyList<string>? DisabledLegacyExclusions { get; init; }
 }
 
 public sealed class ClientController : IAsyncDisposable
@@ -240,7 +243,9 @@ public sealed class ClientController : IAsyncDisposable
                 PauseOnMetered = settings.PauseOnMetered, PauseOnBatterySaver = settings.PauseOnBatterySaver,
                 UploadConcurrency = settings.UploadConcurrency, UploadBytesPerSecond = settings.UploadBytesPerSecond,
                 DownloadBytesPerSecond = settings.DownloadBytesPerSecond, PollSeconds = settings.PollSeconds,
-                Theme = settings.Theme, Exclusions = settings.Exclusions.ToArray()
+                Theme = settings.Theme, Exclusions = settings.Exclusions.ToArray(),
+                DisabledLegacyExclusions = settings.DisabledLegacyExclusions.ToArray(),
+                SelectedExclusions = settings.SelectedExclusions.ToArray(), GuidedExclusions = settings.GuidedExclusions.ToArray()
             });
         }
         finally { _operations.Release(); }
@@ -252,7 +257,9 @@ public sealed class ClientController : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(update);
         EnsureSettingsHealthy();
         // The caller may edit its UI collection while this update waits behind a backup operation.
-        update = update with { Exclusions = update.Exclusions?.ToArray() };
+        update = update with { Exclusions = update.Exclusions?.ToArray(), DisabledLegacyExclusions = update.DisabledLegacyExclusions?.ToArray(),
+            SelectedExclusions = update.SelectedExclusions?.ToArray(),
+            GuidedExclusions = update.GuidedExclusions?.ToArray() };
         using var operation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
         await _operations.WaitAsync(operation.Token);
         try
@@ -277,7 +284,10 @@ public sealed class ClientController : IAsyncDisposable
             DownloadBytesPerSecond = update.DownloadBytesPerSecond ?? previous.DownloadBytesPerSecond,
             PollSeconds = update.PollSeconds ?? previous.PollSeconds,
             Theme = update.Theme ?? previous.Theme,
-            Exclusions = update.Exclusions?.ToList() ?? previous.Exclusions
+            Exclusions = update.Exclusions?.ToList() ?? previous.Exclusions,
+            DisabledLegacyExclusions = update.DisabledLegacyExclusions?.ToList() ?? previous.DisabledLegacyExclusions,
+            SelectedExclusions = update.SelectedExclusions?.ToList() ?? previous.SelectedExclusions,
+            GuidedExclusions = update.GuidedExclusions?.ToList() ?? previous.GuidedExclusions
         };
         PathRules.ValidateSettings(settings);
         var transferChanged = previous.UploadConcurrency != settings.UploadConcurrency ||
@@ -286,7 +296,9 @@ public sealed class ClientController : IAsyncDisposable
         // Concurrency also changes the engine's parallel work scheduling.
         var syncChanged = previous.UploadConcurrency != settings.UploadConcurrency || previous.FilesOnDemand != settings.FilesOnDemand ||
             previous.PauseOnMetered != settings.PauseOnMetered || previous.PauseOnBatterySaver != settings.PauseOnBatterySaver ||
-            previous.PollSeconds != settings.PollSeconds || !previous.Exclusions.SequenceEqual(settings.Exclusions);
+            previous.PollSeconds != settings.PollSeconds || !previous.Exclusions.SequenceEqual(settings.Exclusions) ||
+            !previous.DisabledLegacyExclusions.SequenceEqual(settings.DisabledLegacyExclusions) ||
+            !previous.SelectedExclusions.SequenceEqual(settings.SelectedExclusions) || !previous.GuidedExclusions.SequenceEqual(settings.GuidedExclusions);
         var startupChanged = previous.StartAtSignIn != settings.StartAtSignIn;
         if (!transferChanged && !syncChanged && !startupChanged && previous.Theme == settings.Theme) return previous;
 

@@ -123,6 +123,98 @@ public sealed class SyncEngineTests
         Assert.AreEqual(0, h.Store.Hidden.Count);
     }
 
+    [DataTestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task ExcludingSyncedFolderRetainsCopiesAndBothBaselinesThenResumesSafely(bool guided)
+    {
+        await using var h = new Harness(filesOnDemand: false);
+        Directory.CreateDirectory(h.Path("private/local-folder"));
+        Directory.CreateDirectory(h.Path("private/cloud-folder"));
+        for (var i = 0; i < 12; i++) await File.WriteAllTextAsync(h.Path($"private/file-{i}.txt"), "original");
+        await h.Engine.SyncNowAsync();
+        var manifest = new SyncManifest(h.Database);
+        var files = manifest.ReadAll();
+        var folders = manifest.ReadDirectories();
+        Assert.AreEqual(12, files.Count);
+        Assert.AreEqual(3, folders.Count);
+        var settings = new AppSettings { RootPath = h.Root, KeyId = "key", BucketId = "bucket", FilesOnDemand = false,
+            SelectedExclusions = guided ? [] : [new(h.Root, "private", true)],
+            GuidedExclusions = guided ? [new("**/private", ExclusionTarget.Folders, h.Root)] : [] };
+        h.Engine.Configure(settings);
+        await h.Engine.SyncNowAsync();
+        Assert.AreEqual("original", await File.ReadAllTextAsync(h.Path("private/file-2.txt")));
+        Assert.AreEqual("original", h.Store.Text("CloudBay/private/file-2.txt"));
+        File.Delete(h.Path("private/file-0.txt"));
+        h.Store.Remove("CloudBay/private/file-1.txt");
+        await File.WriteAllTextAsync(h.Path("private/file-2.txt"), "edited while excluded");
+        Directory.Delete(h.Path("private/local-folder"));
+        h.Store.Remove("CloudBay/private/cloud-folder/");
+        var uploads = h.Store.Uploads;
+        await h.Engine.SyncNowAsync();
+        Assert.AreEqual(ClientState.UpToDate, h.Snapshot.State, "Excluded baseline entries must not trigger deletion review.");
+        Assert.AreEqual(0, h.Store.Hidden.Count);
+        Assert.AreEqual(uploads, h.Store.Uploads);
+        Assert.IsTrue(h.Store.Keys.Contains("CloudBay/private/file-0.txt"));
+        Assert.AreEqual("original", await File.ReadAllTextAsync(h.Path("private/file-1.txt")));
+        Assert.AreEqual("original", h.Store.Text("CloudBay/private/file-2.txt"));
+        Assert.IsTrue(h.Store.Keys.Contains("CloudBay/private/local-folder/"));
+        Assert.IsTrue(Directory.Exists(h.Path("private/cloud-folder")));
+        CollectionAssert.AreEquivalent(files.Values.ToArray(), manifest.ReadAll().Values.ToArray(), "Excluding keeps the durable file baseline intact.");
+        CollectionAssert.AreEquivalent(folders.Values.ToArray(), manifest.ReadDirectories().Values.ToArray(), "Excluding keeps the durable directory baseline intact.");
+        h.Engine.Configure(settings with { SelectedExclusions = [], GuidedExclusions = [] });
+        await h.Engine.SyncNowAsync();
+        Assert.AreEqual(ClientState.UpToDate, h.Snapshot.State);
+        CollectionAssert.Contains(h.Store.Hidden, "CloudBay/private/file-0.txt");
+        CollectionAssert.Contains(h.Store.Hidden, "CloudBay/private/local-folder/");
+        Assert.IsFalse(File.Exists(h.Path("private/file-1.txt")));
+        Assert.AreEqual("original", await File.ReadAllTextAsync(Directory.GetFiles(h.Recovery, "file-1.txt", SearchOption.AllDirectories).Single()));
+        Assert.AreEqual("edited while excluded", h.Store.Text("CloudBay/private/file-2.txt"));
+        Assert.IsFalse(Directory.Exists(h.Path("private/cloud-folder")));
+        Assert.AreEqual(10, manifest.ReadAll().Count);
+        Assert.AreEqual(1, manifest.ReadDirectories().Count);
+    }
+
+    [TestMethod]
+    public async Task DisabledLegacyAndFileTargetRulesDoNotPruneSameNamedFolders()
+    {
+        await using var h = new Harness();
+        Directory.CreateDirectory(h.Path("folder.tmp"));
+        await File.WriteAllTextAsync(h.Path("folder.tmp/keep.txt"), "folder content");
+        await File.WriteAllTextAsync(h.Path("~$document.docx"), "legacy disabled");
+        await File.WriteAllTextAsync(h.Path("file.tmp"), "excluded file");
+        h.Engine.Configure(new() { RootPath = h.Root, BucketId = "bucket", KeyId = "key",
+            DisabledLegacyExclusions = ["~$*"], GuidedExclusions = [new("*.tmp", ExclusionTarget.Files)] });
+        await h.Engine.SyncNowAsync();
+        Assert.AreEqual("folder content", h.Store.Text("CloudBay/folder.tmp/keep.txt"));
+        Assert.AreEqual("legacy disabled", h.Store.Text("CloudBay/~$document.docx"));
+        Assert.IsTrue(h.Store.Keys.Contains("CloudBay/folder.tmp/"));
+        Assert.IsFalse(h.Store.Keys.Contains("CloudBay/file.tmp"));
+        Assert.IsTrue(File.Exists(h.Path("file.tmp")));
+    }
+
+    [TestMethod]
+    public async Task NewlySavedExclusionCancelsOldSnapshotBeforeDeletionCanReachCloud()
+    {
+        await using var h = new Harness();
+        await File.WriteAllTextAsync(h.Path("keep.txt"), "retained cloud copy");
+        await h.Engine.SyncNowAsync();
+        File.Delete(h.Path("keep.txt"));
+        h.Store.ListStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.Store.ContinueListing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task;
+        var oldCycle = h.Engine.SyncNowAsync();
+        await h.Store.ListStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        h.Engine.Configure(new() { RootPath = h.Root, BucketId = "bucket", KeyId = "key", SelectedExclusions = [new(h.Root, "keep.txt", false)] });
+        await oldCycle.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.AreEqual(0, h.Store.Hidden.Count);
+        Assert.IsTrue(h.Store.Keys.Contains("CloudBay/keep.txt"));
+        h.Store.ContinueListing = null; h.Store.ListStarted = null;
+        await h.Engine.SyncNowAsync();
+        Assert.AreEqual(ClientState.UpToDate, h.Snapshot.State);
+        Assert.AreEqual(0, h.Store.Hidden.Count);
+        Assert.IsTrue(new SyncManifest(h.Database).ReadAll().ContainsKey("keep.txt"));
+    }
+
     [TestMethod]
     public async Task PauseDefersLocalChangesUntilResume()
     {
@@ -180,6 +272,8 @@ public sealed class SyncEngineTests
         private readonly object _gate = new();
         public int Uploads, Downloads;
         public bool FailList;
+        public TaskCompletionSource? ListStarted;
+        public Task? ContinueListing;
         public List<string> Hidden { get; } = [];
         public string[] Keys { get { lock (_gate) return _files.Keys.ToArray(); } }
         public void Seed(string key, string value)
@@ -194,6 +288,8 @@ public sealed class SyncEngineTests
         {
             await Task.Yield();
             if (FailList) throw new IOException("Incomplete listing");
+            ListStarted?.TrySetResult();
+            if (ContinueListing is { } pending) await pending.WaitAsync(cancellationToken);
             CloudObject[] values; lock (_gate) values = _files.Values.Select(v => v.File).ToArray();
             foreach (var value in values) { cancellationToken.ThrowIfCancellationRequested(); yield return value; }
         }

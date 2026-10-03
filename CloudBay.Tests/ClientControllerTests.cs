@@ -13,6 +13,9 @@ public sealed class ClientControllerTests
     [DataTestMethod]
     [DataRow("{\"SchemaVersion\":1,\"CustomBackups\":null}")]
     [DataRow("{\"SchemaVersion\":1,\"Backups\":[null]}")]
+    [DataRow("{\"SchemaVersion\":1,\"SelectedExclusions\":null}")]
+    [DataRow("{\"SchemaVersion\":1,\"GuidedExclusions\":[null]}")]
+    [DataRow("{\"SchemaVersion\":1,\"DisabledLegacyExclusions\":null}")]
     public async Task InvalidBackupCollectionsEnterRecoveryBeforeUiOrLifecycleReads(string damagedSettings)
     {
         var state = CreateState();
@@ -150,8 +153,13 @@ public sealed class ClientControllerTests
             var theme = new PreferenceUpdate { Theme = "Dark" };
             var limits = new PreferenceUpdate { UploadBytesPerSecond = 120_000, DownloadBytesPerSecond = 240_000, UploadConcurrency = 3 };
             var policy = new PreferenceUpdate { PauseOnMetered = false, PauseOnBatterySaver = false };
+            var selections = new List<SelectedExclusion> { new(root, "Documents/Private", true) };
+            var guided = new List<GuidedExclusion> { new("**/*.tmp", ExclusionTarget.Files, Path.Combine(state, "Projects")) };
             await Task.WhenAll(Task.Run(() => controller.UpdatePreferencesAsync(theme)),
-                Task.Run(() => controller.UpdatePreferencesAsync(limits)), Task.Run(() => controller.UpdatePreferencesAsync(policy)));
+                Task.Run(() => controller.UpdatePreferencesAsync(limits)), Task.Run(() => controller.UpdatePreferencesAsync(policy)),
+                Task.Run(() => controller.UpdatePreferencesAsync(new() { SelectedExclusions = selections })),
+                Task.Run(() => controller.UpdatePreferencesAsync(new() { GuidedExclusions = guided })),
+                Task.Run(() => controller.UpdatePreferencesAsync(new() { DisabledLegacyExclusions = ["~$*"] })));
             var saved = storage.LoadSettings();
             Assert.AreEqual("Dark", saved.Theme);
             Assert.AreEqual(120_000L, saved.UploadBytesPerSecond);
@@ -167,6 +175,13 @@ public sealed class ClientControllerTests
             Assert.AreEqual(original.Prefix, saved.Prefix);
             CollectionAssert.AreEqual(original.Backups, saved.Backups);
             CollectionAssert.AreEqual(original.CustomBackups, saved.CustomBackups);
+            CollectionAssert.AreEqual(selections, saved.SelectedExclusions);
+            CollectionAssert.AreEqual(guided, saved.GuidedExclusions);
+            CollectionAssert.AreEqual(new[] { "~$*" }, saved.DisabledLegacyExclusions);
+            await using var restarted = new ClientController(new ClientStorage(state), manageStartup: false);
+            CollectionAssert.AreEqual(saved.SelectedExclusions, restarted.Settings.SelectedExclusions);
+            CollectionAssert.AreEqual(saved.GuidedExclusions, restarted.Settings.GuidedExclusions);
+            CollectionAssert.AreEqual(saved.DisabledLegacyExclusions, restarted.Settings.DisabledLegacyExclusions);
             Assert.AreEqual(startup, ReadStartup(), "Theme, transfer, and network preferences must not rewrite the startup entry.");
             Assert.IsFalse(Directory.Exists(root), "Editing preferences must not open a connection or register a root.");
         }
@@ -222,9 +237,14 @@ public sealed class ClientControllerTests
             var first = Task.Run(() => controller.UpdatePreferencesAsync(new() { Theme = "Dark" }));
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
             var exclusions = new List<string> { "*.tmp" };
-            var waiting = controller.UpdatePreferencesAsync(new() { Exclusions = exclusions, PauseOnMetered = false });
+            var disabled = new List<string> { "*.tmp" };
+            var selections = new List<SelectedExclusion> { new(controller.Settings.RootPath, "Private", true, Enabled: false) };
+            var guided = new List<GuidedExclusion> { new("**/*.cache", ExclusionTarget.Files, controller.Settings.RootPath, "Documents") };
+            var waiting = controller.UpdatePreferencesAsync(new() { Exclusions = exclusions, DisabledLegacyExclusions = disabled,
+                SelectedExclusions = selections, GuidedExclusions = guided, PauseOnMetered = false });
             Assert.IsFalse(waiting.IsCompleted, "The second patch must wait for the current preference operation.");
             exclusions.Add("*.cache");
+            disabled.Clear(); selections.Clear(); guided.Clear();
             release.Set();
             await first;
             var current = await waiting;
@@ -233,10 +253,16 @@ public sealed class ClientControllerTests
             Assert.IsFalse(current.PauseOnMetered);
             CollectionAssert.AreEqual(new[] { "*.tmp" }, current.Exclusions,
                 "Mutating the caller collection while the patch waits must not change the accepted update.");
+            CollectionAssert.AreEqual(new[] { "*.tmp" }, current.DisabledLegacyExclusions);
+            Assert.AreEqual(new SelectedExclusion(current.RootPath, "Private", true, Enabled: false), current.SelectedExclusions.Single());
+            Assert.AreEqual(new GuidedExclusion("**/*.cache", ExclusionTarget.Files, current.RootPath, "Documents"), current.GuidedExclusions.Single());
             var persisted = storage.LoadSettings();
             Assert.AreEqual(current.Theme, persisted.Theme);
             Assert.AreEqual(current.PauseOnMetered, persisted.PauseOnMetered);
             CollectionAssert.AreEqual(current.Exclusions, persisted.Exclusions);
+            CollectionAssert.AreEqual(current.DisabledLegacyExclusions, persisted.DisabledLegacyExclusions);
+            CollectionAssert.AreEqual(current.SelectedExclusions, persisted.SelectedExclusions);
+            CollectionAssert.AreEqual(current.GuidedExclusions, persisted.GuidedExclusions);
         }
         finally { release.Set(); Directory.Delete(state, true); }
     }
@@ -247,6 +273,9 @@ public sealed class ClientControllerTests
     [DataRow("limit")]
     [DataRow("poll")]
     [DataRow("exclusions")]
+    [DataRow("selected-exclusions")]
+    [DataRow("guided-exclusions")]
+    [DataRow("disabled-legacy")]
     public async Task InvalidPreferencePatchLeavesSettingsAndStartupUntouched(string scenario)
     {
         var state = CreateState();
@@ -264,6 +293,9 @@ public sealed class ClientControllerTests
                 "limit" => new PreferenceUpdate { StartAtSignIn = true, UploadBytesPerSecond = -1 },
                 "poll" => new PreferenceUpdate { StartAtSignIn = true, PollSeconds = 1 },
                 "exclusions" => new PreferenceUpdate { StartAtSignIn = true, Exclusions = ["../outside"] },
+                "selected-exclusions" => new PreferenceUpdate { StartAtSignIn = true, SelectedExclusions = [new(controller.Settings.RootPath, "../outside", false)] },
+                "guided-exclusions" => new PreferenceUpdate { StartAtSignIn = true, GuidedExclusions = [new("a/**bad/file.txt", ExclusionTarget.Files)] },
+                "disabled-legacy" => new PreferenceUpdate { StartAtSignIn = true, DisabledLegacyExclusions = ["unknown"] },
                 _ => throw new AssertFailedException("Unknown preference case.")
             };
             try { await controller.UpdatePreferencesAsync(change); Assert.Fail("Invalid preferences must be rejected."); }

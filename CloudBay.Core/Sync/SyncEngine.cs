@@ -49,7 +49,18 @@ public sealed class SyncEngine : IAsyncDisposable
         Wake();
     }
 
-    public void Configure(AppSettings settings) { PathRules.ValidateSettings(settings); _settings = settings; Wake(); }
+    public void Configure(AppSettings settings)
+    {
+        PathRules.ValidateSettings(settings);
+        lock (_stateGate)
+        {
+            _settings = settings;
+            // An in-flight reconciliation owns a snapshot of the old preferences. Stop
+            // it before it can infer deletions or transfer newly excluded items.
+            try { _cycleCancellation?.Cancel(); } catch (ObjectDisposedException) { }
+        }
+        Wake();
+    }
     public bool IsPaused => _paused;
     public async Task QuiesceAsync(CancellationToken cancellationToken = default)
     {
@@ -111,7 +122,8 @@ public sealed class SyncEngine : IAsyncDisposable
             lock (_stateGate) _cycleCancellation = cycle;
             await ReconcileAsync(cycle.Token);
         }
-        catch (OperationCanceledException) when (_paused || _lifetime.IsCancellationRequested || cancellationToken.IsCancellationRequested) { }
+        catch (OperationCanceledException) when (_paused || _lifetime.IsCancellationRequested || cancellationToken.IsCancellationRequested ||
+            _cycleCancellation?.IsCancellationRequested == true) { }
         catch (Exception exception)
         {
             var offline = exception is HttpRequestException;
@@ -142,16 +154,16 @@ public sealed class SyncEngine : IAsyncDisposable
             string relative;
             try { relative = PathRules.FromKey(directory ? file.Key[..^1] : file.Key, settings.Prefix); }
             catch (InvalidDataException error) { invalid++; Record(ActivityKind.Error, file.Key, error.Message); continue; }
-            if (PathRules.IsExcluded(relative, settings.Exclusions)) continue;
+            if (PathRules.IsExcluded(relative, settings, isDirectory: directory)) continue;
             if (!(directory ? remoteDirectories : remote).TryAdd(relative, file))
                 throw new InvalidDataException("B2 contains names that differ only by letter case. Resolve the collision before syncing to Windows.");
         }
         ValidateRemoteHierarchy(remote.Keys, remoteDirectories.Keys);
         ValidateMixedHierarchy(localSnapshot, remote.Keys, remoteDirectories.Keys);
         // Do not infer deletions unless BOTH complete snapshots were read successfully.
-        var deletions = baseline.Keys.Where(p => !PathRules.IsExcluded(p, settings.Exclusions) &&
+        var deletions = baseline.Keys.Where(p => !PathRules.IsExcluded(p, settings) &&
             (!local.ContainsKey(p) || !remote.ContainsKey(p))).Select(p => "F:" + p)
-            .Concat(directoryBaseline.Keys.Where(p => !PathRules.IsExcluded(p, settings.Exclusions) &&
+            .Concat(directoryBaseline.Keys.Where(p => !PathRules.IsExcluded(p, settings, isDirectory: true) &&
                 (!localSnapshot.Directories.Contains(p) || !remoteDirectories.ContainsKey(p))).Select(p => "D:" + p)).ToList();
         var massDelete = deletions.Count >= 10 && deletions.Count > (baseline.Count + directoryBaseline.Count) / 4;
         var review = deletions.ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -173,7 +185,7 @@ public sealed class SyncEngine : IAsyncDisposable
         foreach (var relative in local.Keys.Concat(remote.Keys).Concat(baseline.Keys).Distinct(StringComparer.OrdinalIgnoreCase))
         {
             ct.ThrowIfCancellationRequested();
-            if (PathRules.IsExcluded(relative, settings.Exclusions)) continue;
+            if (PathRules.IsExcluded(relative, settings)) continue;
             local.TryGetValue(relative, out var disk);
             remote.TryGetValue(relative, out var cloud);
             baseline.TryGetValue(relative, out var last);
@@ -278,8 +290,8 @@ public sealed class SyncEngine : IAsyncDisposable
             {
                 ct.ThrowIfCancellationRequested();
                 var relative = Path.GetRelativePath(settings.RootPath, child).Replace('\\', '/');
-                if (PathRules.IsExcluded(relative, settings.Exclusions)) continue;
                 var attributes = File.GetAttributes(child);
+                if (PathRules.IsExcluded(relative, settings, isDirectory: (attributes & FileAttributes.Directory) != 0)) continue;
                 if ((attributes & FileAttributes.Directory) != 0)
                 {
                     if ((attributes & FileAttributes.ReparsePoint) != 0 && new DirectoryInfo(child).LinkTarget is not null)
@@ -308,7 +320,7 @@ public sealed class SyncEngine : IAsyncDisposable
         foreach (var relative in paths)
         {
             ct.ThrowIfCancellationRequested();
-            if (PathRules.IsExcluded(relative, settings.Exclusions)) continue;
+            if (PathRules.IsExcluded(relative, settings, isDirectory: true)) continue;
             remote.TryGetValue(relative, out var cloud);
             baseline.TryGetValue(relative, out var last);
             try

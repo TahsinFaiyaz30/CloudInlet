@@ -18,6 +18,12 @@ public sealed record SyncSnapshot(ClientState State, string Message, int Pending
 
 public sealed record BackupFolder(string Name, string OriginalPath, string DestinationPath);
 public sealed record CustomBackupFolder(string Name, string SourcePath, string Prefix);
+/// <summary>A literal file or folder selection, scoped to one local sync root.</summary>
+public sealed record SelectedExclusion(string RootPath, string RelativePath, bool IsFolder, bool Enabled = true);
+public enum ExclusionTarget { Files, Folders, All }
+/// <summary>A name or path pattern built by the UI, optionally scoped to one local root.</summary>
+public sealed record GuidedExclusion(string Pattern, ExclusionTarget Target, string? RootPath = null,
+    string? RelativeDirectory = null, bool Enabled = true);
 public sealed record AppSettings
 {
     public int SchemaVersion { get; init; } = 1;
@@ -37,6 +43,10 @@ public sealed record AppSettings
     public int PollSeconds { get; init; } = 60;
     public string Theme { get; init; } = "System";
     public List<string> Exclusions { get; init; } = ["~$*"];
+    /// <summary>Disabled legacy expressions retain their original syntax and matching semantics.</summary>
+    public List<string> DisabledLegacyExclusions { get; init; } = [];
+    public List<SelectedExclusion> SelectedExclusions { get; init; } = [];
+    public List<GuidedExclusion> GuidedExclusions { get; init; } = [];
     public List<BackupFolder> Backups { get; init; } = [];
     public List<CustomBackupFolder> CustomBackups { get; init; } = [];
     public bool IsConfigured => BucketId.Length > 0 && KeyId.Length > 0;
