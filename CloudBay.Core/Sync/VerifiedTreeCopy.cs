@@ -1,4 +1,10 @@
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
+using System.Security.Principal;
+using Microsoft.Win32.SafeHandles;
 
 namespace CloudBay.Core.Sync;
 
@@ -62,7 +68,11 @@ public static class VerifiedTreeCopy
                     byte[] destinationHash;
                     await using (var existing = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, true))
                         destinationHash = await SHA256.HashDataAsync(existing, ct);
-                    if (CryptographicOperations.FixedTimeEquals(sourceHash, destinationHash)) continue;
+                    if (CryptographicOperations.FixedTimeEquals(sourceHash, destinationHash))
+                    {
+                        PreserveAttributes(target, fingerprint.Attributes);
+                        continue;
+                    }
                     var preserved = Path.Combine(Path.GetDirectoryName(target)!,
                         $"{Path.GetFileNameWithoutExtension(target)} (backup conflict {Guid.NewGuid().ToString("N")[..8]}){Path.GetExtension(target)}");
                     // Atomic move preserves even a late edit to the destination, then installs the verified source.
@@ -73,6 +83,7 @@ public static class VerifiedTreeCopy
                 ValidateFilePath(temporary);
                 ValidateFilePath(target);
                 File.Move(temporary, target, overwrite: false);
+                PreserveAttributes(target, fingerprint.Attributes);
             }
             finally
             {
@@ -82,16 +93,24 @@ public static class VerifiedTreeCopy
         // Refuse Windows redirection if any file appeared, disappeared, or changed during the copy.
         var final = Snapshot(source, ct);
         if (!snapshot.Directories.SetEquals(final.Directories) || snapshot.Files.Count != final.Files.Count ||
-            snapshot.Files.Any(pair => !final.Files.TryGetValue(pair.Key, out var value) || value != pair.Value))
+            snapshot.Files.Any(pair => !final.Files.TryGetValue(pair.Key, out var value) || value != pair.Value) ||
+            snapshot.DirectoryAttributes.Any(pair => !final.DirectoryAttributes.TryGetValue(pair.Key, out var value) || value != pair.Value) ||
+            snapshot.CompatibilityJunctions.Count != final.CompatibilityJunctions.Count ||
+            snapshot.CompatibilityJunctions.Any(pair => !final.CompatibilityJunctions.TryGetValue(pair.Key, out var value) || value != pair.Value))
             throw new IOException("The source folder changed during backup. Original files were retained; close apps using this folder and try again.");
+        foreach (var (relative, attributes) in snapshot.DirectoryAttributes)
+            PreserveAttributes(Path.Combine(destination, relative), attributes);
     }
 
     public static string GetFingerprint(string path, CancellationToken ct = default)
     {
+        path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
         var snapshot = Snapshot(path, ct);
-        var text = string.Join('\n', snapshot.Directories.Order(StringComparer.OrdinalIgnoreCase).Select(d => "D:" + d)
+        var text = string.Join('\n', snapshot.DirectoryAttributes.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase).Select(p => $"D:{p.Key}:{(uint)p.Value}")
             .Concat(snapshot.Files.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase)
-                .Select(p => $"F:{p.Key}:{p.Value.Size}:{p.Value.ModifiedUtc.Ticks}")));
+                .Select(p => $"F:{p.Key}:{p.Value.Size}:{p.Value.ModifiedUtc.Ticks}:{(uint)p.Value.Attributes}"))
+            .Concat(snapshot.CompatibilityJunctions.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(p => $"J:{p.Key}:{p.Value}")));
         return Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text)));
     }
 
@@ -99,13 +118,28 @@ public static class VerifiedTreeCopy
     {
         var files = new Dictionary<string, Fingerprint>(StringComparer.OrdinalIgnoreCase);
         var directories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var directoryAttributes = new Dictionary<string, FileAttributes>(StringComparer.OrdinalIgnoreCase);
+        var compatibilityJunctions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var pending = new Stack<string>(); pending.Push(source);
         while (pending.TryPop(out var current))
         {
             ct.ThrowIfCancellationRequested();
             ValidateDirectoryPath(current);
+            directoryAttributes[Path.GetRelativePath(source, current) == "." ? "" : Path.GetRelativePath(source, current)] = AppearanceAttributes(current);
             foreach (var directory in Directory.EnumerateDirectories(current))
             {
+                ct.ThrowIfCancellationRequested();
+                // Windows installs protected compatibility junctions (including localized names)
+                // inside Documents. Inspect the link itself, never its target, before traversal.
+                // Ordinary junctions and symbolic links remain an error, as do linked roots,
+                // ancestors and destination paths. Cloud Files reparse directories are retained.
+                var compatibilityFingerprint = ReadCompatibilityJunction(directory);
+                if (compatibilityFingerprint is not null)
+                {
+                    compatibilityJunctions.Add(Path.GetRelativePath(source, directory), compatibilityFingerprint);
+                    continue;
+                }
+                ValidateDirectoryPath(directory);
                 directories.Add(Path.GetRelativePath(source, directory)); pending.Push(directory);
             }
             foreach (var file in Directory.EnumerateFiles(current))
@@ -114,8 +148,94 @@ public static class VerifiedTreeCopy
                 files.Add(Path.GetRelativePath(source, file), Fingerprint.Read(file));
             }
         }
-        return new(files, directories);
+        return new(files, directories, directoryAttributes, compatibilityJunctions);
     }
+
+    private static string? ReadCompatibilityJunction(string path)
+    {
+        const FileAttributes required = FileAttributes.Directory | FileAttributes.ReparsePoint | FileAttributes.Hidden | FileAttributes.System;
+        if (!OperatingSystem.IsWindows() || (File.GetAttributes(path) & required) != required) return null;
+        return ReadWindowsCompatibilityJunction(path);
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static string? ReadWindowsCompatibilityJunction(string path)
+    {
+        // READ_CONTROL | FILE_READ_ATTRIBUTES; OPEN_EXISTING; BACKUP_SEMANTICS |
+        // OPEN_REPARSE_POINT. No directory-data access or target hydration is requested.
+        // Omitting delete sharing pins the link while all of its metadata is inspected.
+        using var handle = CreateFileW(path, 0x00020080, 3, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
+        if (handle.IsInvalid) throw LinkInspectionError(Marshal.GetLastWin32Error());
+        if (!GetFileInformationByHandleEx(handle, 9, out var information, 8))
+            throw LinkInspectionError(Marshal.GetLastWin32Error());
+        const uint required = (uint)(FileAttributes.Directory | FileAttributes.ReparsePoint | FileAttributes.Hidden | FileAttributes.System);
+        const uint mountPointTag = 0xA0000003;
+        if ((information.Attributes & required) != required || information.Tag != mountPointTag) return null;
+
+        // Microsoft identifies compatibility junctions by these attributes AND a DACL denying
+        // Everyone directory read/list access. Hidden/system flags alone are not an exception.
+        if (GetKernelObjectSecurity(handle, 4, null, 0, out var descriptorLength) ||
+            Marshal.GetLastWin32Error() != 122 || descriptorLength == 0 || descriptorLength > 1024 * 1024)
+            throw new IOException("Windows could not inspect a protected folder link safely.");
+        var descriptor = new byte[descriptorLength];
+        if (!GetKernelObjectSecurity(handle, 4, descriptor, descriptorLength, out _))
+            throw LinkInspectionError(Marshal.GetLastWin32Error());
+        var acl = new RawSecurityDescriptor(descriptor, 0).DiscretionaryAcl;
+        var everyone = new SecurityIdentifier(WellKnownSidType.WorldSid, null);
+        var deniesEnumeration = acl is not null && acl.OfType<CommonAce>().Any(ace =>
+            ace.AceQualifier == AceQualifier.AccessDenied && !ace.IsCallback &&
+            (ace.AceFlags & AceFlags.InheritOnly) == 0 && (ace.AccessMask & 1) != 0 &&
+            ace.SecurityIdentifier.Equals(everyone));
+        if (!deniesEnumeration) return null;
+
+        // Retain the junction's exact target and ACL in the source snapshot. A changed or
+        // replaced skipped link makes the final validation fail rather than silently pass.
+        var reparseData = new byte[16 * 1024];
+        if (!DeviceIoControl(handle, 0x000900A8, IntPtr.Zero, 0, reparseData, (uint)reparseData.Length, out var length, IntPtr.Zero))
+            throw LinkInspectionError(Marshal.GetLastWin32Error());
+        if (length < 8 || length > reparseData.Length || BitConverter.ToUInt32(reparseData) != mountPointTag)
+            throw new IOException("A protected folder link changed during backup. Try again.");
+        return $"{information.Attributes:X8}:{Convert.ToHexString(SHA256.HashData(descriptor))}:" +
+            Convert.ToHexString(SHA256.HashData(reparseData.AsSpan(0, (int)length)));
+    }
+
+    private static IOException LinkInspectionError(int error) =>
+        new("Windows could not inspect a protected folder link safely.", new Win32Exception(error));
+
+    private static FileAttributes AppearanceAttributes(string path) => File.GetAttributes(path) &
+        (FileAttributes.ReadOnly | FileAttributes.Hidden | FileAttributes.System);
+
+    private static void PreserveAttributes(string path, FileAttributes appearance)
+    {
+        if (appearance == 0) return;
+        ValidateFilePath(path);
+        if (!OperatingSystem.IsWindows()) { File.SetAttributes(path, File.GetAttributes(path) | appearance); return; }
+        // Set metadata on the opened object, never on a symbolic-link target substituted at the
+        // pathname. Omitting delete sharing retains the destination while the update completes.
+        using var handle = CreateFileW(path, 0x180, 3, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
+        if (handle.IsInvalid) throw LinkInspectionError(Marshal.GetLastWin32Error());
+        if (!GetFileInformationByHandleEx(handle, 9, out var information, 8)) throw LinkInspectionError(Marshal.GetLastWin32Error());
+        if (information.Tag is 0xA0000003 or 0xA000000C) throw new IOException("Backup cannot write through a linked destination.");
+        var metadata = new BasicInformation { Attributes = information.Attributes | (uint)appearance };
+        if (!SetFileInformationByHandle(handle, 0, ref metadata, (uint)Marshal.SizeOf<BasicInformation>()))
+            throw LinkInspectionError(Marshal.GetLastWin32Error());
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct AttributeTag { public uint Attributes; public uint Tag; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BasicInformation { public long Created, Accessed, Modified, Changed; public uint Attributes; }
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFileW(string path, uint access, uint sharing, IntPtr security, uint disposition, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandleEx(SafeFileHandle handle, int infoClass, out AttributeTag info, uint size);
+    [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetFileInformationByHandle(SafeFileHandle handle, int infoClass, ref BasicInformation info, uint size);
+    [DllImport("advapi32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetKernelObjectSecurity(SafeFileHandle handle, uint information, byte[]? descriptor, uint length, out uint needed);
+    [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DeviceIoControl(SafeFileHandle handle, uint control, IntPtr input, uint inputLength,
+        byte[] output, uint outputLength, out uint returned, IntPtr overlapped);
 
     private static void ValidateDirectoryPath(string path)
     {
@@ -137,7 +257,9 @@ public static class VerifiedTreeCopy
         Directory.CreateDirectory(path);
         ValidateDirectoryPath(path);
     }
-    private sealed record TreeSnapshot(Dictionary<string, Fingerprint> Files, HashSet<string> Directories);
-    private sealed record Fingerprint(long Size, DateTime ModifiedUtc)
-    { public static Fingerprint Read(string path) { var file = new FileInfo(path); return new(file.Length, file.LastWriteTimeUtc); } }
+    private sealed record TreeSnapshot(Dictionary<string, Fingerprint> Files, HashSet<string> Directories,
+        Dictionary<string, FileAttributes> DirectoryAttributes,
+        Dictionary<string, string> CompatibilityJunctions);
+    private sealed record Fingerprint(long Size, DateTime ModifiedUtc, FileAttributes Attributes)
+    { public static Fingerprint Read(string path) { var file = new FileInfo(path); return new(file.Length, file.LastWriteTimeUtc, AppearanceAttributes(path)); } }
 }
