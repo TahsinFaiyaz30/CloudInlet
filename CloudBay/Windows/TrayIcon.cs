@@ -38,7 +38,12 @@ public sealed class TrayIcon : IDisposable
     public void Update(string state)
     {
         if (_disposed) return;
-        _data.Tip = ("CloudBay – " + state)[..Math.Min(127, ("CloudBay – " + state).Length)];
+        var tip = "CloudBay – " + state.Replace('\r', ' ').Replace('\n', ' ');
+        var length = Math.Min(127, tip.Length);
+        if (length < tip.Length && char.IsHighSurrogate(tip[length - 1])) length--;
+        tip = tip[..length];
+        if (string.Equals(_data.Tip, tip, StringComparison.Ordinal)) return;
+        _data.Tip = tip;
         _data.Flags = 4; ShellNotifyIcon(1, ref _data);
     }
     private IntPtr WindowProc(IntPtr hwnd, uint message, UIntPtr wParam, IntPtr lParam, UIntPtr id, UIntPtr data)

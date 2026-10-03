@@ -59,6 +59,21 @@ dotnet test CloudBay.Tests\CloudBay.Tests.csproj -c Release --no-build -v:minima
 .\scripts\build-release.ps1
 ```
 
-The release script creates `artifacts\release\CloudBay-2.0.0-win-x64.zip`, an extracted package, and its SHA256 checksum. `CloudBay.exe --ui-smoke` captures the UI into `artifacts\ui-smoke` using isolated empty settings. The [live validation CLI](tools/CloudBay.Validation/README.md) uses a separately provisioned bucket-restricted key and a generated test prefix; it never redirects real Windows personal folders.
+The release script creates `artifacts\release\CloudBay-2.0.0-win-x64.zip`, an extracted package, and its SHA256 checksum. `CloudBay.exe --ui-smoke` captures the UI into `artifacts\ui-smoke` using isolated storage and presentation fixtures for disconnected, syncing, paused, offline, and attention states. These fixtures do not connect to a provider or modify the controller's account. The [live validation CLI](tools/CloudBay.Validation/README.md) uses a separately provisioned bucket-restricted key and a generated test prefix; it never redirects real Windows personal folders.
 
-See [architecture and primary documentation](docs/ARCHITECTURE.md) and [verified release scope](docs/VALIDATION.md). Public distribution needs the publisher's code-signing certificate; this local release is unsigned.
+See [architecture and primary documentation](docs/ARCHITECTURE.md), [Windows 11 interface design](docs/UI-DESIGN.md), and [verified release scope](docs/VALIDATION.md). Public distribution needs the publisher's code-signing certificate; this local release is unsigned.
+
+The Settings catalog also shows [planned providers and modes](docs/ROADMAP.md). Amazon S3, other cloud services and server protocols, virtual-drive access, and read-only access are marked **Coming soon**. Backblaze B2 with native backup is available in this release.
+
+## Live development window
+
+`scripts/run-dev-live.ps1 -Watch` keeps an isolated development copy open. While the watcher is enabled, every successful app build automatically writes `artifacts/live/build-ready.json` and refreshes the window. It copies completed binaries away from the build folder, so the open app does not lock the next build. A refresh gracefully restarts the window and restores its selected page. Failed builds leave the current copy open; the last working build is retained for rollback.
+
+Start the watcher in one PowerShell session, then build normally in another:
+
+```powershell
+.\scripts\run-dev-live.ps1 -Watch
+dotnet build CloudBay.sln -c Release -v:minimal
+```
+
+The development copy uses `--ui-live`, separate per-user state, and a separate instance identity. It does not modify the regular account's state or the Windows sign-in startup entry. UI smoke captures run in a separate instance as well. This developer workflow is independent of public release updates.

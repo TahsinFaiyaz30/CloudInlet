@@ -21,6 +21,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $repository 'packaging\Uninstall.ps1') -Destination $package -Force
     Copy-Item -LiteralPath (Join-Path $repository 'README.md') -Destination $package -Force
     Copy-Item -LiteralPath (Join-Path $repository 'LICENSE') -Destination $package -Force
+    Copy-Item -LiteralPath (Join-Path $repository 'THIRD-PARTY-NOTICES.md') -Destination $package -Force
     Copy-Item -LiteralPath (Join-Path $repository 'docs') -Destination $package -Recurse -Force
     if (Test-Path -LiteralPath $finalPackage) {
         $previousPackage = [IO.Path]::GetFullPath($finalPackage + '.previous-' + [Guid]::NewGuid().ToString('N'))

@@ -1,225 +1,1038 @@
 <Window
     x:Class="CloudBay.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:settings="using:CommunityToolkit.WinUI.Controls">
     <Window.SystemBackdrop>
-        <MicaBackdrop Kind="BaseAlt" />
+        <MicaBackdrop
+            Kind="BaseAlt" />
     </Window.SystemBackdrop>
-    <Grid x:Name="RootGrid">
+    <Grid
+        x:Name="RootGrid">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
+            <RowDefinition
+                Height="Auto" />
+            <RowDefinition
+                Height="*" />
         </Grid.RowDefinitions>
-        <TitleBar x:Name="AppTitleBar" Title="CloudBay" Subtitle="Your personal cloud">
+        <TitleBar
+            x:Name="AppTitleBar"
+            Title="CloudBay">
             <TitleBar.IconSource>
-                <ImageIconSource ImageSource="/Assets/CloudBay-32.png" />
+                <ImageIconSource
+                    ImageSource="/Assets/CloudBay-32.png" />
             </TitleBar.IconSource>
         </TitleBar>
-        <NavigationView x:Name="Navigation" Grid.Row="1"
-                        PaneDisplayMode="Auto" OpenPaneLength="240" CompactPaneLength="56"
-                        CompactModeThresholdWidth="820" ExpandedModeThresholdWidth="1020"
-                        IsBackButtonVisible="Collapsed" IsSettingsVisible="True"
-                        AlwaysShowHeader="False" SelectionChanged="Navigation_SelectionChanged"
-                        Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}">
-            <NavigationView.Resources>
-                <CornerRadius x:Key="NavigationViewContentGridCornerRadius">12,0,0,0</CornerRadius>
-            </NavigationView.Resources>
+        <NavigationView
+            x:Name="Navigation"
+            Grid.Row="1"
+            PaneDisplayMode="Auto"
+            OpenPaneLength="224"
+            CompactPaneLength="56"
+            CompactModeThresholdWidth="820"
+            ExpandedModeThresholdWidth="1020"
+            IsBackButtonVisible="Collapsed"
+            IsSettingsVisible="True"
+            AlwaysShowHeader="False"
+            SelectionChanged="Navigation_SelectionChanged"
+            Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}">
             <NavigationView.MenuItems>
-                <NavigationViewItem Content="Overview" Icon="Home" Tag="overview" />
-                <NavigationViewItem Content="Activity" Icon="Clock" Tag="activity" />
-                <NavigationViewItem Content="Folder backup" Icon="Folder" Tag="backup" />
-                <NavigationViewItem Content="Files" Icon="Document" Tag="files" />
+                <NavigationViewItem
+                    Content="Overview"
+                    Icon="Home"
+                    Tag="overview" />
+                <NavigationViewItem
+                    Content="Activity"
+                    Icon="Clock"
+                    Tag="activity" />
+                <NavigationViewItem
+                    Content="Folder backup"
+                    Icon="Folder"
+                    Tag="backup" />
+                <NavigationViewItem
+                    Content="Files"
+                    Icon="Document"
+                    Tag="files" />
             </NavigationView.MenuItems>
-            <NavigationView.PaneHeader>
-                <StackPanel Margin="20,20,16,24" Spacing="8">
-                    <Image Source="/Assets/CloudBay-32.png" Width="32" Height="32" HorizontalAlignment="Left" />
-                    <TextBlock Text="CloudBay" FontSize="22" FontWeight="SemiBold" />
-                    <TextBlock Text="BACKBLAZE B2" Style="{StaticResource CloudBayEyebrowStyle}" CharacterSpacing="80" FontSize="11" />
-                </StackPanel>
-            </NavigationView.PaneHeader>
-            <NavigationView.PaneFooter>
-                <StackPanel Margin="20,12,16,20" Spacing="4">
-                    <TextBlock Text="{Binding BucketLabel}" FontWeight="SemiBold" FontSize="12" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding BucketLabel}" />
-                    <TextBlock Text="{Binding StatusLabel}" Style="{StaticResource CloudBaySecondaryTextStyle}" FontSize="12" />
-                </StackPanel>
-            </NavigationView.PaneFooter>
-            <Border Background="{ThemeResource LayerFillColorDefaultBrush}" CornerRadius="12,0,0,0">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <InfoBar x:Name="StatusInfoBar" Margin="24,12,24,0" IsOpen="False" IsClosable="True" />
-
-                    <ScrollViewer x:Name="OverviewPage" Grid.Row="1" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto" HorizontalContentAlignment="Stretch">
-                        <StackPanel x:Name="OverviewContent" MaxWidth="1020" Padding="32,28,32,36" Spacing="24" HorizontalAlignment="Center">
-                            <StackPanel Spacing="6">
-                                <TextBlock Text="Overview" Style="{StaticResource CloudBayPageTitleStyle}" />
-                                <TextBlock Text="Your files, available wherever you need them." Style="{StaticResource CloudBaySecondaryTextStyle}" />
+            <!-- NavigationView owns the single content layer. -->
+            <Grid
+                x:Name="ContentLayoutGrid">
+                <Grid.RowDefinitions>
+                    <RowDefinition
+                        Height="Auto" />
+                    <RowDefinition
+                        Height="*" />
+                    <RowDefinition
+                        Height="Auto" />
+                </Grid.RowDefinitions>
+                <InfoBar
+                    x:Name="StatusInfoBar"
+                    Margin="32,16,32,0"
+                    IsOpen="False"
+                    IsClosable="True" />
+                <ScrollViewer
+                    x:Name="OverviewPage"
+                    Grid.Row="1"
+                    HorizontalScrollBarVisibility="Disabled"
+                    HorizontalContentAlignment="Stretch">
+                    <StackPanel
+                        x:Name="OverviewContent"
+                        Style="{StaticResource CloudBayPageContentStyle}">
+                        <StackPanel
+                            x:Name="WelcomePanel"
+                            Spacing="24"
+                            Margin="0,16,0,0">
+                            <FontIcon
+                                Glyph=""
+                                FontSize="40"
+                                Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                HorizontalAlignment="Left" />
+                            <StackPanel
+                                Spacing="8">
+                                <TextBlock
+                                    Text="A home for your files"
+                                    Style="{StaticResource TitleTextBlockStyle}"
+                                    TextWrapping="Wrap" />
+                                <TextBlock
+                                    Text="Back up your folders to Backblaze B2 and open your files right from Windows."
+                                    Style="{StaticResource CloudBaySecondaryTextStyle}" />
                             </StackPanel>
-                            <Border Style="{StaticResource CloudBayCardStyle}" Padding="24">
-                                <StackPanel Spacing="20">
-                                    <Grid ColumnSpacing="18">
-                                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                        <Border Width="58" Height="58" CornerRadius="16" Background="{ThemeResource AccentFillColorDefaultBrush}" VerticalAlignment="Top">
-                                            <FontIcon Glyph="{Binding StatusGlyph}" FontSize="25" Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
-                                        </Border>
-                                        <StackPanel Grid.Column="1" Spacing="6">
-                                            <TextBlock Text="{Binding StatusTitle}" FontSize="24" FontWeight="SemiBold" TextWrapping="Wrap" />
-                                            <TextBlock Text="{Binding StatusDescription}" Style="{StaticResource CloudBaySecondaryTextStyle}" />
-                                            <TextBlock Text="{Binding LastSyncLabel}" FontSize="12" Style="{StaticResource CloudBaySecondaryTextStyle}" />
-                                        </StackPanel>
+                            <Button
+                                x:Name="ConnectAccountButton"
+                                Content="Connect your account"
+                                Style="{StaticResource AccentButtonStyle}"
+                                Click="Settings_Click" />
+                        </StackPanel>
+                        <StackPanel
+                            x:Name="ConnectedOverview"
+                            Spacing="32"
+                            Visibility="Collapsed">
+                            <TextBlock
+                                Text="Overview"
+                                Style="{StaticResource TitleTextBlockStyle}" />
+                            <StackPanel
+                                Spacing="20">
+                                <Grid
+                                    ColumnSpacing="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition
+                                            Width="Auto" />
+                                        <ColumnDefinition
+                                            Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid
+                                        Width="48"
+                                        Height="48"
+                                        VerticalAlignment="Top">
+                                        <FontIcon
+                                            Glyph=""
+                                            FontSize="44"
+                                            Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                                        <InfoBadge
+                                            x:Name="OverviewStatusBadge"
+                                            HorizontalAlignment="Right"
+                                            VerticalAlignment="Bottom"
+                                            Width="20"
+                                            Height="20"></InfoBadge>
                                     </Grid>
-                                    <Button x:Name="ReviewDeletionsButton" Content="Review pending deletions" Visibility="Collapsed" Click="ReviewDeletions_Click" />
-                                    <StackPanel x:Name="TransferProgressPanel" Spacing="6" Visibility="Collapsed">
-                                        <ProgressBar x:Name="TransferProgress" Value="{Binding Progress}" Maximum="100" />
-                                        <TextBlock Text="{Binding ProgressLabel}" Style="{StaticResource CloudBaySecondaryTextStyle}" FontSize="12" />
+                                    <StackPanel
+                                        Grid.Column="1"
+                                        Spacing="6">
+                                        <TextBlock
+                                            Text="{Binding StatusTitle}"
+                                            Style="{StaticResource SubtitleTextBlockStyle}"
+                                            TextWrapping="Wrap" />
+                                        <TextBlock
+                                            x:Name="OverviewStatusDetail"
+                                            Text="{Binding StatusDescription}"
+                                            Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                                        <TextBlock
+                                            x:Name="OverviewLastSync"
+                                            Text="{Binding LastSyncLabel}"
+                                            ToolTipService.ToolTip="{Binding LastSyncFullLabel}"
+                                            Style="{StaticResource CloudBaySecondaryTextStyle}" />
                                     </StackPanel>
-                                    <StackPanel x:Name="DashboardActions" Orientation="Horizontal" Spacing="8">
-                                        <Button x:Name="ConnectAccountButton" Content="Connect Backblaze B2" Style="{StaticResource AccentButtonStyle}" Click="Settings_Click" Visibility="Collapsed" />
-                                        <Button x:Name="OpenFolderButton" Content="Open CloudBay folder" Style="{StaticResource AccentButtonStyle}" Click="OpenFolder_Click" />
-                                        <Button x:Name="SyncNowButton" Click="SyncNow_Click" ToolTipService.ToolTip="Check for local and cloud changes">
-                                            <StackPanel Orientation="Horizontal" Spacing="8"><FontIcon Glyph="&#xE895;" FontSize="14"/><TextBlock Text="Sync now" /></StackPanel>
-                                        </Button>
-                                        <Button x:Name="DashboardPauseButton" Content="{Binding PauseLabel}" Click="Pause_Click" />
-                                    </StackPanel>
-                                </StackPanel>
-                            </Border>
-                            <Grid x:Name="CloudStatsGrid" ColumnSpacing="12">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                <Border x:Name="CloudFileCard" Style="{StaticResource CloudBayCardStyle}"><StackPanel Spacing="8"><TextBlock Text="FILES IN CLOUD" Style="{StaticResource CloudBayEyebrowStyle}" FontSize="10"/><TextBlock Text="{Binding FileCount}" FontSize="28" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/><TextBlock Text="{Binding CloudSize}" Style="{StaticResource CloudBaySecondaryTextStyle}"/></StackPanel></Border>
-                                <Border x:Name="LocalFileCard" Grid.Column="1" Style="{StaticResource CloudBayCardStyle}"><StackPanel Spacing="8"><TextBlock Text="ON THIS DEVICE" Style="{StaticResource CloudBayEyebrowStyle}" FontSize="10"/><TextBlock Text="{Binding LocalSize}" FontSize="28" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/><TextBlock Text="Downloaded file content" Style="{StaticResource CloudBaySecondaryTextStyle}"/></StackPanel></Border>
-                                <Border x:Name="BackupFileCard" Grid.Column="2" Style="{StaticResource CloudBayCardStyle}"><StackPanel Spacing="8"><TextBlock Text="FOLDER BACKUP" Style="{StaticResource CloudBayEyebrowStyle}" FontSize="10"/><TextBlock x:Name="BackupCount" Text="0" FontSize="28" FontWeight="SemiBold"/><TextBlock Text="{Binding BackupLabel}" Style="{StaticResource CloudBaySecondaryTextStyle}"/></StackPanel></Border>
-                            </Grid>
-                            <Border Style="{StaticResource CloudBayCardStyle}" Padding="20,16">
-                                <Grid ColumnSpacing="16">
-                                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <FontIcon Glyph="&#xE8B7;" FontSize="24" VerticalAlignment="Center" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
-                                    <StackPanel Grid.Column="1" Spacing="4"><TextBlock Text="Protect all your personal folders" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap"/><TextBlock Text="Back up Windows folders and any other personal folder you choose." Style="{StaticResource CloudBaySecondaryTextStyle}"/></StackPanel>
-                                    <Button Grid.Column="2" Content="Manage backup" Click="ManageBackup_Click" VerticalAlignment="Center" />
                                 </Grid>
-                            </Border>
-                            <StackPanel Spacing="12">
-                                <Grid><TextBlock Text="Recent activity" Style="{StaticResource CloudBaySectionTitleStyle}"/><HyperlinkButton Content="View all" HorizontalAlignment="Right" Click="ViewActivity_Click" /></Grid>
-                                <Border Style="{StaticResource CloudBayCardStyle}" Padding="8">
-                                    <Grid>
-                                        <ItemsControl ItemsSource="{Binding RecentActivity}" ItemTemplate="{StaticResource ActivityTemplate}" />
-                                        <StackPanel x:Name="OverviewEmptyActivity" Padding="20,26" Spacing="8"><FontIcon Glyph="&#xE9D9;" FontSize="28" HorizontalAlignment="Left"/><TextBlock Text="A quiet place for your activity" FontWeight="SemiBold"/><TextBlock Text="Uploads, downloads, and backup events will appear here." Style="{StaticResource CloudBaySecondaryTextStyle}"/></StackPanel>
-                                    </Grid>
-                                </Border>
+                                <StackPanel
+                                    x:Name="TransferProgressPanel"
+                                    Spacing="8"
+                                    Visibility="Collapsed">
+                                    <ProgressBar
+                                        x:Name="TransferProgress"
+                                        Value="{Binding Progress}"
+                                        Maximum="100" />
+                                    <TextBlock
+                                        Text="{Binding ProgressLabel}"
+                                        Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                                </StackPanel>
+                                <StackPanel
+                                    x:Name="DashboardActions"
+                                    Orientation="Horizontal"
+                                    Spacing="8">
+                                    <Button
+                                        x:Name="ReviewDeletionsButton"
+                                        Content="Review pending deletions"
+                                        Style="{StaticResource AccentButtonStyle}"
+                                        Visibility="Collapsed"
+                                        Click="ReviewDeletions_Click" />
+                                    <Button
+                                        x:Name="OpenFolderButton"
+                                        Content="Open folder"
+                                        Style="{StaticResource AccentButtonStyle}"
+                                        Click="OpenFolder_Click" />
+                                    <Button
+                                        x:Name="SyncNowButton"
+                                        Content="Sync now"
+                                        Click="SyncNow_Click" />
+                                    <Button
+                                        x:Name="DashboardPauseButton"
+                                        Content="{Binding PauseLabel}"
+                                        Click="Pause_Click" />
+                                </StackPanel>
+                            </StackPanel>
+                            <StackPanel
+                                x:Name="BackupSuggestion"
+                                Spacing="12"
+                                Visibility="Collapsed">
+                                <TextBlock
+                                    Text="Protect your everyday folders"
+                                    Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                <TextBlock
+                                    Text="Choose the Windows folders you want to back up."
+                                    Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                                <Button
+                                    Content="Choose folders"
+                                    Click="ManageBackup_Click" />
+                            </StackPanel>
+                            <StackPanel
+                                x:Name="RecentActivitySection"
+                                Spacing="12"
+                                Visibility="Collapsed">
+                                <Grid>
+                                    <TextBlock
+                                        Text="Recent activity"
+                                        Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                    <HyperlinkButton
+                                        Content="View all"
+                                        HorizontalAlignment="Right"
+                                        Padding="0"
+                                        Click="ViewActivity_Click" />
+                                </Grid>
+                                <ItemsControl
+                                    ItemsSource="{Binding RecentActivity}"
+                                    ItemTemplate="{StaticResource ActivityTemplate}" />
                             </StackPanel>
                         </StackPanel>
-                    </ScrollViewer>
-
-                    <Grid x:Name="ActivityPage" Grid.Row="1" Visibility="Collapsed" Padding="32,28,32,24">
-                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-                        <StackPanel Spacing="6" Margin="0,0,0,24"><TextBlock Text="Activity" Style="{StaticResource CloudBayPageTitleStyle}"/><TextBlock Text="A live history of transfers, folder backup, and sync events." Style="{StaticResource CloudBaySecondaryTextStyle}"/><TextBlock Text="{Binding PendingLabel}" FontSize="12" Style="{StaticResource CloudBaySecondaryTextStyle}"/></StackPanel>
-                        <Border Grid.Row="1" Style="{StaticResource CloudBayCardStyle}" Padding="8">
-                            <Grid><ListView x:Name="ActivityList" ItemsSource="{Binding Activity}" ItemTemplate="{StaticResource ActivityTemplate}" SelectionMode="None" IsItemClickEnabled="False" HorizontalContentAlignment="Stretch"/><StackPanel x:Name="ActivityEmpty" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="320" Spacing="12"><FontIcon Glyph="&#xE823;" FontSize="40"/><TextBlock Text="No activity yet" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center"/><TextBlock Text="CloudBay will show real transfer activity here once you connect your bucket." Style="{StaticResource CloudBaySecondaryTextStyle}" TextAlignment="Center"/></StackPanel></Grid>
-                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+                <Grid
+                    x:Name="ActivityPage"
+                    Grid.Row="1"
+                    Visibility="Collapsed"
+                    MaxWidth="860"
+                    HorizontalAlignment="Center"
+                    Padding="{StaticResource CloudBayPageInset}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition
+                            Height="Auto" />
+                        <RowDefinition
+                            Height="*" />
+                    </Grid.RowDefinitions>
+                    <StackPanel
+                        Spacing="8"
+                        Margin="0,0,0,24">
+                        <TextBlock
+                            Text="Activity"
+                            Style="{StaticResource TitleTextBlockStyle}" />
+                        <TextBlock
+                            x:Name="ActivityPending"
+                            Text="{Binding PendingLabel}"
+                            Style="{StaticResource CloudBaySecondaryTextStyle}"
+                            Visibility="Collapsed" />
+                    </StackPanel>
+                    <Grid
+                        Grid.Row="1">
+                        <ListView
+                            x:Name="ActivityList"
+                            ItemsSource="{Binding Activity}"
+                            ItemTemplate="{StaticResource ActivityTemplate}"
+                            ItemContainerStyle="{StaticResource CloudBayListItemStyle}"
+                            SelectionMode="None"
+                            HorizontalContentAlignment="Stretch" />
+                        <StackPanel
+                            x:Name="ActivityEmpty"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Spacing="12">
+                            <FontIcon
+                                Glyph=""
+                                FontSize="28"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <TextBlock
+                                Text="No transfers yet"
+                                Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                        </StackPanel>
                     </Grid>
-
-                    <ScrollViewer x:Name="BackupPage" Grid.Row="1" Visibility="Collapsed" HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch">
-                        <StackPanel x:Name="BackupContent" MaxWidth="1020" Padding="32,28,32,36" Spacing="20" HorizontalAlignment="Center">
-                            <StackPanel Spacing="6"><TextBlock Text="Folder backup" Style="{StaticResource CloudBayPageTitleStyle}"/><TextBlock Text="Protect all your personal files, wherever you keep them." Style="{StaticResource CloudBaySecondaryTextStyle}"/></StackPanel>
-                            <Border Style="{StaticResource CloudBayCardStyle}">
-                                <StackPanel Spacing="16">
-                                    <TextBlock Text="Back up another folder" Style="{StaticResource CloudBaySectionTitleStyle}" />
-                                    <TextBlock Text="Choose any personal folder on a local drive. Your folder stays in its current location and syncs with Backblaze B2 in the background, with Files on Demand." Style="{StaticResource CloudBaySecondaryTextStyle}" />
-                                    <Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="CustomBackupSourceBox" Header="Folder on this device" PlaceholderText="Choose a personal folder"/><Button Grid.Column="1" Content="Choose…" Click="ChooseCustomBackup_Click" VerticalAlignment="Bottom"/></Grid>
-                                    <TextBox x:Name="CustomBackupNameBox" Header="Backup name (optional)" PlaceholderText="Use the folder name" MaxLength="80" />
-                                    <Button x:Name="AddCustomBackupButton" Content="Back up this folder" Style="{StaticResource AccentButtonStyle}" Click="AddCustomBackup_Click" />
-                                </StackPanel>
-                            </Border>
-                            <StackPanel Spacing="12">
-                                <TextBlock Text="Your other folders" Style="{StaticResource CloudBaySectionTitleStyle}" />
-                                <StackPanel x:Name="CustomBackupRows" Spacing="8" />
-                                <TextBlock x:Name="CustomBackupEmpty" Text="No additional folders selected yet." Style="{StaticResource CloudBaySecondaryTextStyle}" />
-                            </StackPanel>
-                            <TextBlock Text="Windows personal folders" Style="{StaticResource CloudBaySectionTitleStyle}" />
-                            <InfoBar IsOpen="True" IsClosable="False" Severity="Informational" Title="Windows default locations stay integrated" Message="Turning backup on updates the folder's default Windows location to CloudBay. Turning it off restores its original location and keeps the files. Folders already protected by OneDrive or another provider must be restored locally before CloudBay can manage them." />
-                            <StackPanel x:Name="BackupRows" Spacing="8" />
-                            <Border Style="{StaticResource CloudBayCardStyle}"><StackPanel Spacing="8"><TextBlock Text="Backup follows your sync settings" FontWeight="SemiBold"/><TextBlock Text="Excluded files are skipped. Cloud deletions sync to this device, and local deletions sync to B2. Previous B2 versions can be restored from Files while your bucket retains them." Style="{StaticResource CloudBaySecondaryTextStyle}"/><HyperlinkButton Content="Review exclusions and bandwidth" Click="Settings_Click" HorizontalAlignment="Left" Padding="0,6"/></StackPanel></Border>
-                        </StackPanel>
-                    </ScrollViewer>
-
-                    <ScrollViewer x:Name="FilesPage" Grid.Row="1" Visibility="Collapsed" HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch">
-                        <StackPanel x:Name="FilesContent" MaxWidth="1020" Padding="32,28,32,36" Spacing="20" HorizontalAlignment="Center">
-                            <StackPanel Spacing="6"><TextBlock Text="Files" Style="{StaticResource CloudBayPageTitleStyle}"/><TextBlock Text="Manage availability and recover a previous version." Style="{StaticResource CloudBaySecondaryTextStyle}"/></StackPanel>
-                            <ComboBox x:Name="FileScopeBox" Header="File location" DisplayMemberPath="Name" HorizontalAlignment="Stretch" SelectionChanged="FileScope_SelectionChanged" />
-                            <Border Style="{StaticResource CloudBayCardStyle}">
-                                <StackPanel Spacing="16">
-                                    <Grid ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><FontIcon Glyph="&#xE8B7;" FontSize="26" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/><StackPanel Grid.Column="1" Spacing="4"><TextBlock x:Name="FileFolderName" Text="CloudBay folder" FontSize="18" FontWeight="SemiBold" TextWrapping="Wrap"/><TextBlock x:Name="FileFolderPath" Style="{StaticResource CloudBaySecondaryTextStyle}"/></StackPanel><Button Grid.Column="2" Content="Open folder" Click="OpenFileFolder_Click" VerticalAlignment="Center"/></Grid>
-                                    <TextBlock Text="In File Explorer, right-click a file to choose Always keep on this device or Free up space. Online-only files download when you open them." Style="{StaticResource CloudBaySecondaryTextStyle}" />
-                                </StackPanel>
-                            </Border>
-                            <Border Style="{StaticResource CloudBayCardStyle}">
-                                <StackPanel Spacing="16">
-                                    <TextBlock Text="Choose a file" Style="{StaticResource CloudBaySectionTitleStyle}" />
-                                    <TextBlock Text="Enter a path relative to the selected folder, or select a file inside it on this device." Style="{StaticResource CloudBaySecondaryTextStyle}" />
-                                    <Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="FilePathBox" Header="File path" PlaceholderText="Documents\report.docx"/><Button Grid.Column="1" Content="Browse…" Click="BrowseFile_Click" VerticalAlignment="Bottom"/></Grid>
-                                    <StackPanel x:Name="FileActions" Orientation="Horizontal" Spacing="8"><Button Content="Keep on this device" Click="PinFile_Click"/><Button Content="Free up space" Click="FreeSpace_Click"/><Button Content="Version history" Style="{StaticResource AccentButtonStyle}" Click="Versions_Click"/></StackPanel>
-                                    <TextBlock Text="Freeing space removes the downloaded content only after Windows confirms the file is in sync. Its cloud copy remains available." Style="{StaticResource CloudBaySecondaryTextStyle}" FontSize="12" />
-                                </StackPanel>
-                            </Border>
-                            <Border x:Name="VersionsPanel" Style="{StaticResource CloudBayCardStyle}" Visibility="Collapsed">
-                                <StackPanel Spacing="12">
-                                    <TextBlock Text="Version history" Style="{StaticResource CloudBaySectionTitleStyle}" />
-                                    <TextBlock x:Name="VersionPathLabel" Style="{StaticResource CloudBaySecondaryTextStyle}" />
-                                    <TextBlock x:Name="VersionsEmptyLabel" Text="No retained versions were found for this file." Style="{StaticResource CloudBaySecondaryTextStyle}" Visibility="Collapsed" />
-                                    <ListView x:Name="VersionsList" SelectionMode="Single" HorizontalContentAlignment="Stretch" MaxHeight="400" SelectionChanged="VersionsList_SelectionChanged">
-                                        <ListView.ItemTemplate><DataTemplate><Grid Padding="8,12" ColumnSpacing="20"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Spacing="4"><TextBlock Text="{Binding Modified}" FontWeight="SemiBold"/><TextBlock Text="{Binding State}" Style="{StaticResource CloudBaySecondaryTextStyle}"/></StackPanel><TextBlock Grid.Column="1" Text="{Binding Size}" Style="{StaticResource CloudBaySecondaryTextStyle}" VerticalAlignment="Center"/></Grid></DataTemplate></ListView.ItemTemplate>
-                                    </ListView>
-                                    <Button x:Name="RestoreVersionButton" Content="Restore selected version" Click="RestoreVersion_Click" IsEnabled="False" />
-                                    <TextBlock Text="Versions are retained by your B2 bucket lifecycle rules. CloudBay cannot restore a version that B2 has permanently removed." Style="{StaticResource CloudBaySecondaryTextStyle}" FontSize="12"/>
-                                </StackPanel>
-                            </Border>
-                        </StackPanel>
-                    </ScrollViewer>
-
-                    <ScrollViewer x:Name="SettingsPage" Grid.Row="1" Visibility="Collapsed" HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch">
-                        <StackPanel x:Name="SettingsContent" MaxWidth="1020" Padding="32,28,32,36" Spacing="24" HorizontalAlignment="Center">
-                            <StackPanel Spacing="6"><TextBlock Text="Settings" Style="{StaticResource CloudBayPageTitleStyle}"/><TextBlock Text="Make CloudBay work the way you do." Style="{StaticResource CloudBaySecondaryTextStyle}"/></StackPanel>
-                            <StackPanel Spacing="12">
-                                <TextBlock Text="Backblaze B2 account" Style="{StaticResource CloudBaySectionTitleStyle}"/>
-                                <Border Style="{StaticResource CloudBayCardStyle}">
-                                    <StackPanel Spacing="14">
-                                        <Grid ColumnSpacing="14"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><FontIcon Glyph="&#xE753;" FontSize="28" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/><StackPanel Grid.Column="1" Spacing="4"><TextBlock x:Name="AccountHeading" Text="Connect your private bucket" FontSize="18" FontWeight="SemiBold" TextWrapping="Wrap"/><TextBlock x:Name="AccountDescription" Text="Use a B2 application key with access to your chosen bucket." Style="{StaticResource CloudBaySecondaryTextStyle}"/></StackPanel></Grid>
-                                        <TextBox x:Name="BucketNameBox" Header="Bucket name" PlaceholderText="Your existing private B2 bucket" />
-                                        <TextBox x:Name="KeyIdBox" Header="Application key ID" PlaceholderText="B2 keyID" />
-                                        <PasswordBox x:Name="ApplicationKeyBox" Header="Application key" PlaceholderText="Enter to connect or replace credentials" PasswordRevealMode="Peek" />
-                                        <Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="RootPathBox" Header="CloudBay folder on this device"/><Button Grid.Column="1" Content="Choose…" Click="ChooseRoot_Click" VerticalAlignment="Bottom"/></Grid>
-                                        <TextBox x:Name="PrefixBox" Header="Folder prefix in your bucket" PlaceholderText="CloudBay/" />
-                                        <TextBlock Text="Use a dedicated prefix so CloudBay manages only its own files. Application keys are protected with Windows encryption on this device. Credentials are never included in diagnostics." Style="{StaticResource CloudBaySecondaryTextStyle}" FontSize="12" />
-                                        <Button x:Name="ConnectButton" Content="Connect to Backblaze B2" Style="{StaticResource AccentButtonStyle}" Click="Connect_Click" />
-                                        <Button x:Name="DisconnectButton" Content="Disconnect this account" Click="Disconnect_Click" Visibility="Collapsed" />
-                                    </StackPanel>
-                                </Border>
-                            </StackPanel>
-                            <StackPanel Spacing="12">
-                                <TextBlock Text="Files on demand" Style="{StaticResource CloudBaySectionTitleStyle}"/>
-                                <Border Style="{StaticResource CloudBayCardStyle}"><StackPanel Spacing="16"><Grid ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Spacing="4"><TextBlock Text="Download files when you open them" FontWeight="SemiBold"/><TextBlock Text="See your cloud files in Explorer without downloading everything. Pinned files always stay on this device." Style="{StaticResource CloudBaySecondaryTextStyle}"/></StackPanel><ToggleSwitch x:Name="FilesOnDemandSwitch" Grid.Column="1" OffContent="Off" OnContent="On" AutomationProperties.Name="Files on demand"/></Grid><Border BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,1,0,0" Padding="0,14,0,0"><Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Spacing="4"><TextBlock Text="Let Windows manage downloaded content" FontWeight="SemiBold"/><TextBlock Text="Storage Sense can turn inactive files back into online-only files. Windows manages space and retention; files marked Always keep stay available." Style="{StaticResource CloudBaySecondaryTextStyle}"/></StackPanel><Button Grid.Column="1" Content="Storage Sense" Click="StorageSense_Click" VerticalAlignment="Center"/></Grid></Border></StackPanel></Border>
-                            </StackPanel>
-                            <StackPanel Spacing="12">
-                                <TextBlock Text="Sync and bandwidth" Style="{StaticResource CloudBaySectionTitleStyle}"/>
-                                <Border Style="{StaticResource CloudBayCardStyle}"><StackPanel Spacing="16"><TextBlock Text="Keep transfers responsive on your connection. A limit of 0 means unlimited." Style="{StaticResource CloudBaySecondaryTextStyle}"/><Grid ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><NumberBox x:Name="UploadLimitBox" Header="Upload limit (KiB/s)" Minimum="0" Maximum="1048576" SmallChange="64" SpinButtonPlacementMode="Compact"/><NumberBox x:Name="DownloadLimitBox" Grid.Column="1" Header="Download limit (KiB/s)" Minimum="0" Maximum="1048576" SmallChange="64" SpinButtonPlacementMode="Compact"/></Grid><NumberBox x:Name="ConcurrencyBox" Header="Concurrent uploads" Minimum="1" Maximum="16" SmallChange="1" SpinButtonPlacementMode="Compact" Width="200" HorizontalAlignment="Left"/><TextBlock Text="CloudBay reuses connections and upload sessions for small files. More concurrent uploads can improve throughput, within your bandwidth limit." Style="{StaticResource CloudBaySecondaryTextStyle}" FontSize="12"/><CheckBox x:Name="MeteredBox" Content="Pause automatically on metered connections"/><CheckBox x:Name="BatterySaverBox" Content="Pause automatically while Battery Saver is on"/></StackPanel></Border>
-                            </StackPanel>
-                            <StackPanel Spacing="12">
-                                <TextBlock Text="General" Style="{StaticResource CloudBaySectionTitleStyle}"/>
-                                <Border Style="{StaticResource CloudBayCardStyle}"><StackPanel Spacing="16"><CheckBox x:Name="StartAtSignInBox" Content="Start CloudBay when I sign in to Windows"/><TextBlock Text="CloudBay stays in the notification area when you close this window. Use its tray menu to pause transfers or quit." Style="{StaticResource CloudBaySecondaryTextStyle}"/><ComboBox x:Name="ThemeBox" Header="Appearance" Width="220" HorizontalAlignment="Left"><ComboBoxItem Content="Use Windows setting" Tag="System"/><ComboBoxItem Content="Light" Tag="Light"/><ComboBoxItem Content="Dark" Tag="Dark"/></ComboBox></StackPanel></Border>
-                            </StackPanel>
-                            <StackPanel Spacing="12">
-                                <TextBlock Text="Excluded files and folders" Style="{StaticResource CloudBaySectionTitleStyle}"/>
-                                <Border Style="{StaticResource CloudBayCardStyle}"><StackPanel Spacing="12"><TextBlock Text="CloudBay skips matching names and patterns. Add one per line, for example node_modules or *.tmp." Style="{StaticResource CloudBaySecondaryTextStyle}"/><TextBox x:Name="ExclusionsBox" AcceptsReturn="True" MinHeight="140" TextWrapping="Wrap" Header="Exclusion patterns"/><TextBlock Text="Excluded files remain on this device. They are not uploaded or backed up by CloudBay." Style="{StaticResource CloudBaySecondaryTextStyle}" FontSize="12"/></StackPanel></Border>
-                            </StackPanel>
-                            <StackPanel x:Name="SettingsActions" Orientation="Horizontal" Spacing="8"><Button x:Name="SaveSettingsButton" Content="Save settings" Style="{StaticResource AccentButtonStyle}" Click="SaveSettings_Click"/><Button Content="Open diagnostics folder" Click="Diagnostics_Click" /></StackPanel>
-                            <TextBlock Text="CloudBay · Native file sync for Backblaze B2" Style="{StaticResource CloudBaySecondaryTextStyle}" FontSize="12"/>
-                        </StackPanel>
-                    </ScrollViewer>
-                    <Grid Grid.Row="2" Padding="24,8" MinHeight="36" ColumnSpacing="10"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><ProgressRing x:Name="BusyRing" Width="16" Height="16" IsActive="False" Visibility="Collapsed"/><TextBlock x:Name="FooterStatus" Grid.Column="1" Text="CloudBay continues working in the background" FontSize="12" Style="{StaticResource CloudBaySecondaryTextStyle}" VerticalAlignment="Center"/></Grid>
                 </Grid>
-            </Border>
+                <ScrollViewer
+                    x:Name="BackupPage"
+                    Grid.Row="1"
+                    Visibility="Collapsed"
+                    HorizontalScrollBarVisibility="Disabled"
+                    HorizontalContentAlignment="Stretch">
+                    <StackPanel
+                        x:Name="BackupContent"
+                        Style="{StaticResource CloudBayPageContentStyle}">
+                        <StackPanel
+                            Spacing="8">
+                            <TextBlock
+                                Text="Folder backup"
+                                Style="{StaticResource TitleTextBlockStyle}" />
+                            <TextBlock
+                                Text="Keep your Windows folders backed up and available in File Explorer."
+                                Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                        </StackPanel>
+                        <InfoBar
+                            x:Name="BackupConnectInfo"
+                            IsOpen="True"
+                            IsClosable="False"
+                            Severity="Informational"
+                            Message="Connect your account to choose folders.">
+                            <InfoBar.ActionButton>
+                                <Button
+                                    Content="Connect"
+                                    Click="Settings_Click" />
+                            </InfoBar.ActionButton>
+                        </InfoBar>
+                        <StackPanel
+                            Spacing="8">
+                            <TextBlock
+                                Text="Windows folders"
+                                Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <StackPanel
+                                x:Name="BackupRows"
+                                Spacing="4" />
+                            <settings:SettingsExpander
+                                x:Name="MoreWindowsFolders"
+                                Header="More Windows folders"
+                                Description="Additional personal folders available in Windows.">
+                                <settings:SettingsExpander.HeaderIcon>
+                                    <FontIcon
+                                        Glyph="" />
+                                </settings:SettingsExpander.HeaderIcon>
+                            </settings:SettingsExpander>
+                        </StackPanel>
+                        <StackPanel
+                            x:Name="CustomBackupSection"
+                            Spacing="8"
+                            Visibility="Collapsed">
+                            <TextBlock
+                                Text="Other folders"
+                                Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <StackPanel
+                                x:Name="CustomBackupRows"
+                                Spacing="4" />
+                        </StackPanel>
+                        <settings:SettingsExpander
+                            x:Name="CustomBackupExpander"
+                            Header="Add another folder"
+                            Description="Back up a personal folder from its current location.">
+                            <settings:SettingsExpander.HeaderIcon>
+                                <FontIcon
+                                    Glyph="" />
+                            </settings:SettingsExpander.HeaderIcon>
+                            <settings:SettingsExpander.Items>
+                                <settings:SettingsCard
+                                    ContentAlignment="Vertical"
+                                    HorizontalContentAlignment="Stretch">
+                                    <StackPanel
+                                        Spacing="16">
+                                        <Grid
+                                            ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition
+                                                    Width="*" />
+                                                <ColumnDefinition
+                                                    Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBox
+                                                x:Name="CustomBackupSourceBox"
+                                                Header="Folder"
+                                                PlaceholderText="Choose a folder" />
+                                            <Button
+                                                Grid.Column="1"
+                                                Content="Browse…"
+                                                Click="ChooseCustomBackup_Click"
+                                                VerticalAlignment="Bottom" />
+                                        </Grid>
+                                        <TextBox
+                                            x:Name="CustomBackupNameBox"
+                                            Header="Backup name (optional)"
+                                            PlaceholderText="Use the folder name"
+                                            MaxLength="64" />
+                                        <Button
+                                            x:Name="AddCustomBackupButton"
+                                            Content="Back up folder"
+                                            Style="{StaticResource AccentButtonStyle}"
+                                            Click="AddCustomBackup_Click" />
+                                    </StackPanel>
+                                </settings:SettingsCard>
+                            </settings:SettingsExpander.Items>
+                        </settings:SettingsExpander>
+                        <settings:SettingsExpander
+                            Header="How folder backup works">
+                            <settings:SettingsExpander.HeaderIcon>
+                                <FontIcon
+                                    Glyph="" />
+                            </settings:SettingsExpander.HeaderIcon>
+                            <settings:SettingsExpander.Items>
+                                <settings:SettingsCard
+                                    ContentAlignment="Vertical"
+                                    HorizontalContentAlignment="Stretch">
+                                    <StackPanel
+                                        Spacing="12">
+                                        <TextBlock
+                                            Text="Enabling a Windows folder makes CloudBay its default location. Turning backup off downloads its files and restores its original location. Folders protected by another provider must be restored locally first."
+                                            Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                                        <TextBlock
+                                            Text="Changes and deletions sync between this PC and B2. Excluded files stay local. Previous versions are available while your bucket retains them."
+                                            Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                                        <HyperlinkButton
+                                            Content="Review sync settings"
+                                            Click="Settings_Click"
+                                            HorizontalAlignment="Left"
+                                            Padding="0" />
+                                    </StackPanel>
+                                </settings:SettingsCard>
+                            </settings:SettingsExpander.Items>
+                        </settings:SettingsExpander>
+                    </StackPanel>
+                </ScrollViewer>
+                <ScrollViewer
+                    x:Name="FilesPage"
+                    Grid.Row="1"
+                    Visibility="Collapsed"
+                    HorizontalScrollBarVisibility="Disabled"
+                    HorizontalContentAlignment="Stretch">
+                    <StackPanel
+                        x:Name="FilesContent"
+                        Style="{StaticResource CloudBayPageContentStyle}">
+                        <StackPanel
+                            Spacing="8">
+                            <TextBlock
+                                Text="Files"
+                                Style="{StaticResource TitleTextBlockStyle}" />
+                            <TextBlock
+                                x:Name="StorageSummary"
+                                Text="{Binding StorageSummary}"
+                                Style="{StaticResource CloudBaySecondaryTextStyle}"
+                                Visibility="Collapsed" />
+                        </StackPanel>
+                        <StackPanel
+                            x:Name="FilesConnectPanel"
+                            Spacing="16">
+                            <TextBlock
+                                Text="Connect your account to open your cloud files."
+                                Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                            <Button
+                                Content="Connect account"
+                                Style="{StaticResource AccentButtonStyle}"
+                                Click="Settings_Click" />
+                        </StackPanel>
+                        <StackPanel
+                            x:Name="FilesConnectedPanel"
+                            Spacing="24"
+                            Visibility="Collapsed">
+                            <ComboBox
+                                x:Name="FileScopeBox"
+                                Header="Folder"
+                                DisplayMemberPath="Name"
+                                HorizontalAlignment="Stretch"
+                                SelectionChanged="FileScope_SelectionChanged" />
+                            <StackPanel
+                                Spacing="8">
+                                <TextBlock
+                                    Text="On this PC"
+                                    Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                <settings:SettingsCard
+                                    x:Name="FileLocationCard">
+                                    <settings:SettingsCard.Header>
+                                        <TextBlock
+                                            x:Name="FileFolderName"
+                                            Text="CloudBay folder" />
+                                    </settings:SettingsCard.Header>
+                                    <settings:SettingsCard.Description>
+                                        <TextBlock
+                                            x:Name="FileFolderPath"
+                                            TextWrapping="Wrap" />
+                                    </settings:SettingsCard.Description>
+                                    <settings:SettingsCard.HeaderIcon>
+                                        <FontIcon
+                                            Glyph="" />
+                                    </settings:SettingsCard.HeaderIcon>
+                                    <Button
+                                        Content="Open folder"
+                                        Style="{StaticResource AccentButtonStyle}"
+                                        Click="OpenFileFolder_Click" />
+                                </settings:SettingsCard>
+                                <TextBlock
+                                    Text="Use Explorer to keep files on this device or free up downloaded space."
+                                    Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                            </StackPanel>
+                            <StackPanel
+                                Spacing="8">
+                                <TextBlock
+                                    Text="File tools"
+                                    Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                <settings:SettingsExpander
+                                    x:Name="FileToolsExpander"
+                                    Header="Availability and version history"
+                                    Description="Manage an individual file.">
+                                    <settings:SettingsExpander.HeaderIcon>
+                                        <FontIcon
+                                            Glyph="" />
+                                    </settings:SettingsExpander.HeaderIcon>
+                                    <settings:SettingsExpander.Items>
+                                        <settings:SettingsCard
+                                            ContentAlignment="Vertical"
+                                            HorizontalContentAlignment="Stretch">
+                                            <StackPanel
+                                                Spacing="16">
+                                                <Grid
+                                                    ColumnSpacing="8">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition
+                                                            Width="*" />
+                                                        <ColumnDefinition
+                                                            Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBox
+                                                        x:Name="FilePathBox"
+                                                        Header="File in this folder"
+                                                        PlaceholderText="Select a file or enter its relative path" />
+                                                    <Button
+                                                        Grid.Column="1"
+                                                        Content="Browse…"
+                                                        Click="BrowseFile_Click"
+                                                        VerticalAlignment="Bottom" />
+                                                </Grid>
+                                                <StackPanel
+                                                    x:Name="FileActions"
+                                                    Orientation="Horizontal"
+                                                    Spacing="8">
+                                                    <Button
+                                                        Content="Keep on this device"
+                                                        Click="PinFile_Click" />
+                                                    <Button
+                                                        Content="Free up space"
+                                                        Click="FreeSpace_Click" />
+                                                    <Button
+                                                        Content="Version history"
+                                                        Click="Versions_Click" />
+                                                </StackPanel>
+                                                <TextBlock
+                                                    Text="Free up space removes downloaded content after the file is safely in sync. Your cloud copy stays available."
+                                                    Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                                                <StackPanel
+                                                    x:Name="VersionsPanel"
+                                                    Visibility="Collapsed"
+                                                    Spacing="12">
+                                                    <TextBlock
+                                                        Text="Version history"
+                                                        Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                                    <TextBlock
+                                                        x:Name="VersionPathLabel"
+                                                        Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                                                    <TextBlock
+                                                        x:Name="VersionsEmptyLabel"
+                                                        Text="No retained versions found."
+                                                        Style="{StaticResource CloudBaySecondaryTextStyle}"
+                                                        Visibility="Collapsed" />
+                                                    <ListView
+                                                        x:Name="VersionsList"
+                                                        SelectionMode="Single"
+                                                        HorizontalContentAlignment="Stretch"
+                                                        MaxHeight="320"
+                                                        SelectionChanged="VersionsList_SelectionChanged">
+                                                        <ListView.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <Grid
+                                                                    Padding="8,12"
+                                                                    ColumnSpacing="16">
+                                                                    <Grid.ColumnDefinitions>
+                                                                        <ColumnDefinition
+                                                                            Width="*" />
+                                                                        <ColumnDefinition
+                                                                            Width="Auto" />
+                                                                    </Grid.ColumnDefinitions>
+                                                                    <StackPanel
+                                                                        Spacing="4">
+                                                                        <TextBlock
+                                                                            Text="{Binding Modified}"
+                                                                            Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                                                        <TextBlock
+                                                                            Text="{Binding State}"
+                                                                            Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                                                                    </StackPanel>
+                                                                    <TextBlock
+                                                                        Grid.Column="1"
+                                                                        Text="{Binding Size}"
+                                                                        Style="{StaticResource CloudBaySecondaryTextStyle}"
+                                                                        VerticalAlignment="Center" />
+                                                                </Grid>
+                                                            </DataTemplate>
+                                                        </ListView.ItemTemplate>
+                                                    </ListView>
+                                                    <Button
+                                                        x:Name="RestoreVersionButton"
+                                                        Content="Restore selected version"
+                                                        Click="RestoreVersion_Click"
+                                                        IsEnabled="False" />
+                                                    <TextBlock
+                                                        Text="Available versions depend on your B2 bucket's retention rules."
+                                                        Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </settings:SettingsCard>
+                                    </settings:SettingsExpander.Items>
+                                </settings:SettingsExpander>
+                            </StackPanel>
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+                <ScrollViewer
+                    x:Name="SettingsPage"
+                    Grid.Row="1"
+                    Visibility="Collapsed"
+                    HorizontalScrollBarVisibility="Disabled"
+                    HorizontalContentAlignment="Stretch">
+                    <StackPanel
+                        x:Name="SettingsContent"
+                        Style="{StaticResource CloudBayPageContentStyle}">
+                        <TextBlock
+                            Text="Settings"
+                            Style="{StaticResource TitleTextBlockStyle}" />
+                        <StackPanel
+                            Spacing="8">
+                            <TextBlock
+                                Text="Account"
+                                Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <settings:SettingsCard
+                                x:Name="ConnectedAccountPanel"
+                                Header="{Binding BucketLabel}"
+                                Description="Backblaze B2"
+                                Visibility="Collapsed">
+                                <settings:SettingsCard.HeaderIcon>
+                                    <FontIcon
+                                        Glyph="" />
+                                </settings:SettingsCard.HeaderIcon>
+                                <Button
+                                    Content="Manage account"
+                                    Click="ManageAccount_Click" />
+                            </settings:SettingsCard>
+                            <StackPanel
+                                x:Name="ConnectionPanel"
+                                Spacing="16">
+                                <StackPanel
+                                    Spacing="8">
+                                    <TextBlock
+                                        x:Name="AccountHeading"
+                                        Text="Connect to Backblaze B2"
+                                        Style="{StaticResource SubtitleTextBlockStyle}" />
+                                    <TextBlock
+                                        x:Name="AccountDescription"
+                                        Text="Enter your private bucket and application key."
+                                        Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                                </StackPanel>
+                                <TextBox
+                                    x:Name="BucketNameBox"
+                                    Header="Bucket name"
+                                    PlaceholderText="Your private B2 bucket" />
+                                <TextBox
+                                    x:Name="KeyIdBox"
+                                    Header="Application key ID"
+                                    PlaceholderText="Key ID" />
+                                <PasswordBox
+                                    x:Name="ApplicationKeyBox"
+                                    Header="Application key"
+                                    PlaceholderText="Application key"
+                                    PasswordRevealMode="Peek" />
+                                <settings:SettingsExpander
+                                    x:Name="ConnectionOptions"
+                                    Header="Advanced connection">
+                                    <settings:SettingsExpander.HeaderIcon>
+                                        <FontIcon
+                                            Glyph="" />
+                                    </settings:SettingsExpander.HeaderIcon>
+                                    <settings:SettingsExpander.Items>
+                                        <settings:SettingsCard
+                                            Header="CloudBay folder on this PC"
+                                            ContentAlignment="Vertical"
+                                            HorizontalContentAlignment="Stretch">
+                                            <Grid
+                                                ColumnSpacing="8">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition
+                                                        Width="*" />
+                                                    <ColumnDefinition
+                                                        Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBox
+                                                    x:Name="RootPathBox" />
+                                                <Button
+                                                    Grid.Column="1"
+                                                    Content="Browse…"
+                                                    Click="ChooseRoot_Click" />
+                                            </Grid>
+                                        </settings:SettingsCard>
+                                        <settings:SettingsCard
+                                            Header="Folder prefix in B2"
+                                            Description="Use a dedicated prefix for CloudBay files."
+                                            ContentAlignment="Vertical"
+                                            HorizontalContentAlignment="Stretch">
+                                            <TextBox
+                                                x:Name="PrefixBox" />
+                                        </settings:SettingsCard>
+                                        <settings:SettingsCard
+                                            Header="Disconnect account"
+                                            Description="Download your files and restore Windows folder locations.">
+                                            <Button
+                                                x:Name="DisconnectButton"
+                                                Content="Disconnect"
+                                                Click="Disconnect_Click"
+                                                Visibility="Collapsed" />
+                                        </settings:SettingsCard>
+                                    </settings:SettingsExpander.Items>
+                                </settings:SettingsExpander>
+                                <StackPanel
+                                    Orientation="Horizontal"
+                                    Spacing="8">
+                                    <Button
+                                        x:Name="ConnectButton"
+                                        Content="Connect account"
+                                        Style="{StaticResource AccentButtonStyle}"
+                                        Click="Connect_Click" />
+                                    <Button
+                                        x:Name="CancelConnectionButton"
+                                        Content="Cancel"
+                                        Click="CancelConnection_Click"
+                                        Visibility="Collapsed" />
+                                </StackPanel>
+                            </StackPanel>
+                        </StackPanel>
+                        <StackPanel
+                            Spacing="8">
+                            <TextBlock
+                                Text="Sync"
+                                Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <StackPanel
+                                Spacing="4">
+                                <settings:SettingsCard
+                                    Header="Files on demand"
+                                    Description="Download files when you open them.">
+                                    <settings:SettingsCard.HeaderIcon>
+                                        <FontIcon
+                                            Glyph="" />
+                                    </settings:SettingsCard.HeaderIcon>
+                                    <ToggleSwitch
+                                        x:Name="FilesOnDemandSwitch"
+                                        Style="{StaticResource CloudBayToggleStyle}"
+                                        AutomationProperties.Name="Files on demand"
+                                        Toggled="Preference_Toggled" />
+                                </settings:SettingsCard>
+                                <settings:SettingsCard
+                                    Header="Downloaded file space"
+                                    Description="Windows Storage Sense manages downloaded files.">
+                                    <settings:SettingsCard.HeaderIcon>
+                                        <FontIcon
+                                            Glyph="" />
+                                    </settings:SettingsCard.HeaderIcon>
+                                    <Button
+                                        Content="Storage Sense"
+                                        Click="StorageSense_Click" />
+                                </settings:SettingsCard>
+                                <settings:SettingsExpander
+                                    x:Name="NetworkSettingsExpander"
+                                    Header="Network and power"
+                                    Description="Bandwidth limits, upload concurrency, and automatic pauses.">
+                                    <settings:SettingsExpander.HeaderIcon>
+                                        <FontIcon
+                                            Glyph="" />
+                                    </settings:SettingsExpander.HeaderIcon>
+                                    <settings:SettingsExpander.Items>
+                                        <settings:SettingsCard
+                                            Header="Upload limit"
+                                            Description="KiB/s · 0 means unlimited">
+                                            <NumberBox
+                                                x:Name="UploadLimitBox"
+                                                Width="200"
+                                                Minimum="0"
+                                                Maximum="1048576"
+                                                SmallChange="64"
+                                                SpinButtonPlacementMode="Compact"
+                                                ValidationMode="Disabled" />
+                                        </settings:SettingsCard>
+                                        <settings:SettingsCard
+                                            Header="Download limit"
+                                            Description="KiB/s · 0 means unlimited">
+                                            <NumberBox
+                                                x:Name="DownloadLimitBox"
+                                                Width="200"
+                                                Minimum="0"
+                                                Maximum="1048576"
+                                                SmallChange="64"
+                                                SpinButtonPlacementMode="Compact"
+                                                ValidationMode="Disabled" />
+                                        </settings:SettingsCard>
+                                        <settings:SettingsCard
+                                            Header="Concurrent uploads">
+                                            <NumberBox
+                                                x:Name="ConcurrencyBox"
+                                                Width="200"
+                                                Minimum="1"
+                                                Maximum="16"
+                                                SmallChange="1"
+                                                SpinButtonPlacementMode="Compact"
+                                                ValidationMode="Disabled" />
+                                        </settings:SettingsCard>
+                                        <settings:SettingsCard
+                                            Header="Bandwidth changes">
+                                            <Button
+                                                Content="Apply limits"
+                                                Click="ApplyNetwork_Click" />
+                                        </settings:SettingsCard>
+                                        <settings:SettingsCard
+                                            Header="Metered connections"
+                                            Description="Pause syncing to limit mobile data use.">
+                                            <ToggleSwitch
+                                                x:Name="MeteredBox"
+                                                Style="{StaticResource CloudBayToggleStyle}"
+                                                AutomationProperties.Name="Pause on metered connections"
+                                                Toggled="Preference_Toggled" />
+                                        </settings:SettingsCard>
+                                        <settings:SettingsCard
+                                            Header="Battery Saver"
+                                            Description="Pause syncing while Battery Saver is on.">
+                                            <ToggleSwitch
+                                                x:Name="BatterySaverBox"
+                                                Style="{StaticResource CloudBayToggleStyle}"
+                                                AutomationProperties.Name="Pause with Battery Saver"
+                                                Toggled="Preference_Toggled" />
+                                        </settings:SettingsCard>
+                                    </settings:SettingsExpander.Items>
+                                </settings:SettingsExpander>
+                                <settings:SettingsExpander
+                                    x:Name="ExclusionsExpander"
+                                    Header="Excluded files and folders"
+                                    Description="Matching files stay local and are not backed up.">
+                                    <settings:SettingsExpander.HeaderIcon>
+                                        <FontIcon
+                                            Glyph="" />
+                                    </settings:SettingsExpander.HeaderIcon>
+                                    <settings:SettingsExpander.Items>
+                                        <settings:SettingsCard
+                                            Header="One name or pattern per line"
+                                            ContentAlignment="Vertical"
+                                            HorizontalContentAlignment="Stretch">
+                                            <StackPanel>
+                                                <TextBox
+                                                    x:Name="ExclusionsBox"
+                                                    AcceptsReturn="True"
+                                                    MinHeight="120"
+                                                    TextWrapping="Wrap"
+                                                    PlaceholderText="node_modules&#xA;*.tmp" />
+                                                <Button
+                                                    Content="Apply exclusions"
+                                                    Click="ApplyExclusions_Click"
+                                                    Margin="0,12,0,0" />
+                                            </StackPanel>
+                                        </settings:SettingsCard>
+                                    </settings:SettingsExpander.Items>
+                                </settings:SettingsExpander>
+                            </StackPanel>
+                        </StackPanel>
+                        <StackPanel
+                            Spacing="8">
+                            <TextBlock
+                                Text="General"
+                                Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <StackPanel
+                                Spacing="4">
+                                <settings:SettingsCard
+                                    Header="Start at sign-in"
+                                    Description="Keep CloudBay working in the background.">
+                                    <settings:SettingsCard.HeaderIcon>
+                                        <FontIcon
+                                            Glyph="" />
+                                    </settings:SettingsCard.HeaderIcon>
+                                    <ToggleSwitch
+                                        x:Name="StartAtSignInBox"
+                                        Style="{StaticResource CloudBayToggleStyle}"
+                                        AutomationProperties.Name="Start CloudBay when I sign in"
+                                        Toggled="Preference_Toggled" />
+                                </settings:SettingsCard>
+                                <settings:SettingsCard
+                                    Header="Appearance"
+                                    Description="Choose how CloudBay looks.">
+                                    <settings:SettingsCard.HeaderIcon>
+                                        <FontIcon
+                                            Glyph="" />
+                                    </settings:SettingsCard.HeaderIcon>
+                                    <ComboBox
+                                        x:Name="ThemeBox"
+                                        Width="220"
+                                        SelectionChanged="Theme_SelectionChanged">
+                                        <ComboBoxItem
+                                            Content="Use system setting"
+                                            Tag="System" />
+                                        <ComboBoxItem
+                                            Content="Light"
+                                            Tag="Light" />
+                                        <ComboBoxItem
+                                            Content="Dark"
+                                            Tag="Dark" />
+                                    </ComboBox>
+                                </settings:SettingsCard>
+                            </StackPanel>
+                        </StackPanel>
+                        <StackPanel
+                            Spacing="8">
+                            <TextBlock
+                                Text="About"
+                                Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <StackPanel
+                                Spacing="4">
+                                <settings:SettingsCard
+                                    Header="Providers and modes"
+                                    Description="Backblaze B2 and Native backup are available now."
+                                    IsClickEnabled="True"
+                                    Click="Catalog_Click">
+                                    <settings:SettingsCard.HeaderIcon>
+                                        <FontIcon
+                                            Glyph="" />
+                                    </settings:SettingsCard.HeaderIcon>
+                                </settings:SettingsCard>
+                                <settings:SettingsExpander
+                                    Header="CloudBay"
+                                    Description="Version 2.0.0">
+                                    <settings:SettingsExpander.HeaderIcon>
+                                        <FontIcon
+                                            Glyph="" />
+                                    </settings:SettingsExpander.HeaderIcon>
+                                    <settings:SettingsExpander.Items>
+                                        <settings:SettingsCard
+                                            Header="Diagnostics"
+                                            Description="Open local diagnostics and activity logs.">
+                                            <Button
+                                                Content="Open diagnostics"
+                                                Click="Diagnostics_Click" />
+                                        </settings:SettingsCard>
+                                    </settings:SettingsExpander.Items>
+                                </settings:SettingsExpander>
+                            </StackPanel>
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+                <Grid
+                    x:Name="BusyFooter"
+                    Grid.Row="2"
+                    Padding="32,12"
+                    ColumnSpacing="12"
+                    Visibility="Collapsed">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition
+                            Width="Auto" />
+                        <ColumnDefinition
+                            Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <ProgressRing
+                        x:Name="BusyRing"
+                        Width="16"
+                        Height="16"
+                        IsActive="False" />
+                    <TextBlock
+                        x:Name="FooterStatus"
+                        Grid.Column="1"
+                        Style="{StaticResource CloudBaySecondaryTextStyle}"
+                        VerticalAlignment="Center" />
+                </Grid>
+            </Grid>
         </NavigationView>
+        <ContentDialog
+            x:Name="CatalogDialog"
+            Grid.RowSpan="2"
+            Title="Providers and modes"
+            CloseButtonText="Done"
+            DefaultButton="Close">
+            <Grid
+                RowSpacing="16"
+                MinWidth="300">
+                <Grid.RowDefinitions>
+                    <RowDefinition
+                        Height="Auto" />
+                    <RowDefinition
+                        Height="Auto" />
+                    <RowDefinition
+                        Height="Auto" />
+                    <RowDefinition
+                        Height="*" />
+                </Grid.RowDefinitions>
+                <TextBlock
+                    Text="Backblaze B2 and Native backup are available now. Coming soon entries preview future releases."
+                    Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                <Grid
+                    Grid.Row="1"
+                    ColumnSpacing="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition
+                            Width="*" />
+                        <ColumnDefinition
+                            Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <ComboBox
+                        x:Name="CatalogKind"
+                        Header="Browse"
+                        SelectedIndex="0"
+                        HorizontalAlignment="Stretch"
+                        SelectionChanged="CatalogFilter_Changed">
+                        <ComboBoxItem
+                            Content="Providers" />
+                        <ComboBoxItem
+                            Content="Modes" />
+                    </ComboBox>
+                    <ComboBox
+                        x:Name="CatalogGroup"
+                        Grid.Column="1"
+                        Header="Category"
+                        HorizontalAlignment="Stretch"
+                        SelectionChanged="CatalogFilter_Changed" />
+                </Grid>
+                <AutoSuggestBox
+                    x:Name="CatalogSearch"
+                    Grid.Row="2"
+                    PlaceholderText="Search providers"
+                    QueryIcon="Find"
+                    AutomationProperties.Name="Search providers and modes"
+                    TextChanged="CatalogSearch_Changed" />
+                <Grid
+                    Grid.Row="3">
+                    <ListView
+                        x:Name="CatalogList"
+                        SelectionMode="None"
+                        IsItemClickEnabled="False"
+                        HorizontalContentAlignment="Stretch"
+                        MaxHeight="340"
+                        MinHeight="100"
+                        ItemTemplate="{StaticResource ProductOptionTemplate}" />
+                    <TextBlock
+                        x:Name="CatalogEmpty"
+                        Text="No matching providers"
+                        Style="{StaticResource CloudBaySecondaryTextStyle}"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Visibility="Collapsed" />
+                </Grid>
+            </Grid>
+        </ContentDialog>
     </Grid>
 </Window>

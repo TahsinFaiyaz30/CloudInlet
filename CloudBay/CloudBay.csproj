@@ -24,6 +24,7 @@
     <ProjectReference Include="..\CloudBay.Core\CloudBay.Core.csproj" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260921001" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="CommunityToolkit.WinUI.Controls.SettingsControls" Version="8.2.251219" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
   </ItemGroup>
   <ItemGroup>
@@ -32,4 +33,18 @@
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
   </ItemGroup>
+  <!-- The optional local watcher refreshes only from successfully built output.
+       Shipping builds have no watcher flag and do not start or restart an app. -->
+  <Target Name="PublishLiveRefreshMarker" AfterTargets="Build"
+          Condition="'$(CloudBayLiveRefresh)' == 'true' Or Exists('$(MSBuildProjectDirectory)\..\artifacts\live\watch.enabled')">
+    <PropertyGroup>
+      <CloudBayLiveDirectory>$(MSBuildProjectDirectory)\..\artifacts\live</CloudBayLiveDirectory>
+      <CloudBayLiveSource>$([System.String]::Copy('$(TargetDir)').Replace('\', '\\'))</CloudBayLiveSource>
+      <CloudBayLiveBuiltUtc>$([System.DateTime]::UtcNow.ToString('O'))</CloudBayLiveBuiltUtc>
+    </PropertyGroup>
+    <MakeDir Directories="$(CloudBayLiveDirectory)" />
+    <WriteLinesToFile File="$(CloudBayLiveDirectory)\build-ready.new.json" Overwrite="true" Encoding="UTF-8"
+                      Lines="{&quot;sourcePath&quot;:&quot;$(CloudBayLiveSource)&quot;,&quot;builtUtc&quot;:&quot;$(CloudBayLiveBuiltUtc)&quot;}" />
+    <Move SourceFiles="$(CloudBayLiveDirectory)\build-ready.new.json" DestinationFiles="$(CloudBayLiveDirectory)\build-ready.json" />
+  </Target>
 </Project>

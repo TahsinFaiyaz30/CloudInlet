@@ -5,89 +5,165 @@
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
-                <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+                <XamlControlsResources
+                    xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
-            <!-- Keep surfaces tied to the Windows theme so Mica Alt remains visible
-                 and the same hierarchy works in light, dark, and contrast modes. -->
-            <Style x:Key="CloudBayCardStyle" TargetType="Border">
-                <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
-                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
-                <Setter Property="BorderThickness" Value="1" />
-                <Setter Property="CornerRadius" Value="10" />
-                <Setter Property="Padding" Value="16" />
+            <!-- Native controls own their Windows 11 geometry, typography,
+                 strokes, high contrast states, focus and reduced motion. -->
+            <Thickness
+                x:Key="CloudBayPageInset">32,32,32,40</Thickness>
+            <Style
+                x:Key="CloudBayPageContentStyle"
+                TargetType="StackPanel">
+                <Setter
+                    Property="MaxWidth"
+                    Value="860" />
+                <Setter
+                    Property="Padding"
+                    Value="{StaticResource CloudBayPageInset}" />
+                <Setter
+                    Property="Spacing"
+                    Value="24" />
+                <Setter
+                    Property="HorizontalAlignment"
+                    Value="Center" />
             </Style>
-            <Style x:Key="CloudBayFolderIconStyle" TargetType="FontIcon">
-                <Setter Property="Foreground" Value="{ThemeResource AccentTextFillColorPrimaryBrush}" />
-                <Setter Property="FontSize" Value="24" />
+            <Style
+                x:Key="CloudBayToggleStyle"
+                TargetType="ToggleSwitch">
+                <Setter
+                    Property="MinWidth"
+                    Value="0" />
+                <Setter
+                    Property="HorizontalAlignment"
+                    Value="Right" />
+                <Setter
+                    Property="VerticalAlignment"
+                    Value="Center" />
             </Style>
-            <Style x:Key="CloudBayPanelStyle" TargetType="Border">
-                <Setter Property="Background" Value="{ThemeResource LayerFillColorDefaultBrush}" />
-                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
-                <Setter Property="BorderThickness" Value="1" />
-                <Setter Property="CornerRadius" Value="12" />
-                <Setter Property="Padding" Value="18" />
+            <Style
+                x:Key="CloudBayListItemStyle"
+                TargetType="ListViewItem">
+                <Setter
+                    Property="Padding"
+                    Value="0" />
+                <Setter
+                    Property="Margin"
+                    Value="0" />
+                <Setter
+                    Property="HorizontalContentAlignment"
+                    Value="Stretch" />
             </Style>
-            <Style x:Key="CloudBayRowStyle" TargetType="Border">
-                <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
-                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
-                <Setter Property="BorderThickness" Value="1" />
-                <Setter Property="CornerRadius" Value="10" />
-                <Setter Property="Padding" Value="14,12" />
+            <Style
+                x:Key="CloudBaySecondaryTextStyle"
+                TargetType="TextBlock"
+                BasedOn="{StaticResource CaptionTextBlockStyle}">
+                <Setter
+                    Property="Foreground"
+                    Value="{ThemeResource TextFillColorSecondaryBrush}" />
+                <Setter
+                    Property="TextWrapping"
+                    Value="Wrap" />
             </Style>
-            <Style x:Key="CloudBayStatusChipStyle" TargetType="Border">
-                <Setter Property="Background" Value="{ThemeResource ControlFillColorDefaultBrush}" />
-                <Setter Property="BorderBrush" Value="{ThemeResource ControlStrokeColorDefaultBrush}" />
-                <Setter Property="BorderThickness" Value="1" />
-                <Setter Property="CornerRadius" Value="12" />
-                <Setter Property="Padding" Value="8,3" />
-            </Style>
-            <Style x:Key="CloudBayEyebrowStyle" TargetType="TextBlock">
-                <Setter Property="TextWrapping" Value="Wrap" />
-                <Setter Property="FontSize" Value="12" />
-                <Setter Property="FontWeight" Value="SemiBold" />
-                <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
-            </Style>
-            <Style x:Key="CloudBaySectionTitleStyle" TargetType="TextBlock">
-                <Setter Property="TextWrapping" Value="Wrap" />
-                <Setter Property="FontSize" Value="18" />
-                <Setter Property="FontWeight" Value="SemiBold" />
-            </Style>
-            <Style x:Key="CloudBayPageTitleStyle" TargetType="TextBlock">
-                <Setter Property="TextWrapping" Value="Wrap" />
-                <Setter Property="FontSize" Value="28" />
-                <Setter Property="FontWeight" Value="SemiBold" />
-            </Style>
-            <Style x:Key="CloudBaySecondaryTextStyle" TargetType="TextBlock">
-                <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
-                <Setter Property="TextWrapping" Value="Wrap" />
-                <Setter Property="FontSize" Value="13" />
-            </Style>
-            <DataTemplate x:Key="ActivityTemplate">
-                <Grid Padding="12,14" ColumnSpacing="14">
+            <DataTemplate
+                x:Key="ActivityTemplate">
+                <Grid
+                    Padding="0,14"
+                    ColumnSpacing="16">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition
+                            Width="Auto" />
+                        <ColumnDefinition
+                            Width="*" />
                     </Grid.ColumnDefinitions>
-                    <Border Width="36" Height="36" CornerRadius="10" VerticalAlignment="Top" Background="{ThemeResource ControlFillColorDefaultBrush}">
-                        <FontIcon Glyph="{Binding Glyph}" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
-                    </Border>
-                    <StackPanel Grid.Column="1" Spacing="4">
-                        <TextBlock Text="{Binding FileName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Path}" />
-                        <TextBlock Text="{Binding Detail}" Style="{StaticResource CloudBaySecondaryTextStyle}" FontSize="12" />
-                        <TextBlock Text="{Binding TimeText}" Style="{StaticResource CloudBaySecondaryTextStyle}" FontSize="11" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="2" Spacing="4" HorizontalAlignment="Right">
-                        <TextBlock Text="{Binding Title}" FontSize="12" />
-                        <TextBlock Text="{Binding SizeText}" Style="{StaticResource CloudBaySecondaryTextStyle}" FontSize="11" HorizontalAlignment="Right" />
+                    <FontIcon
+                        Glyph="{Binding Glyph}"
+                        FontSize="20"
+                        VerticalAlignment="Top"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Margin="0,2,0,0" />
+                    <StackPanel
+                        Grid.Column="1"
+                        Spacing="4">
+                        <TextBlock
+                            Text="{Binding FileName}"
+                            Style="{StaticResource BodyStrongTextBlockStyle}"
+                            TextTrimming="CharacterEllipsis"
+                            ToolTipService.ToolTip="{Binding Path}" />
+                        <TextBlock
+                            Text="{Binding Summary}"
+                            ToolTipService.ToolTip="{Binding TimeFullText}"
+                            Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                        <TextBlock
+                            Text="{Binding Detail}"
+                            Visibility="{Binding DetailVisibility}"
+                            Style="{StaticResource CloudBaySecondaryTextStyle}" />
                     </StackPanel>
                 </Grid>
             </DataTemplate>
-            <DataTemplate x:Key="TrayActivityTemplate">
-                <Grid Padding="10,12" ColumnSpacing="12">
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                    <Border Width="32" Height="32" CornerRadius="8" Background="{ThemeResource ControlFillColorDefaultBrush}" VerticalAlignment="Top"><FontIcon Glyph="{Binding Glyph}" FontSize="14" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/></Border>
-                    <StackPanel Grid.Column="1" Spacing="4"><TextBlock Text="{Binding FileName}" FontWeight="SemiBold" FontSize="12" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Path}"/><TextBlock Text="{Binding Title}" Style="{StaticResource CloudBaySecondaryTextStyle}" FontSize="11"/><TextBlock Text="{Binding TimeText}" Style="{StaticResource CloudBaySecondaryTextStyle}" FontSize="10"/></StackPanel>
+            <DataTemplate
+                x:Key="TrayActivityTemplate">
+                <Grid
+                    Padding="12,12"
+                    ColumnSpacing="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition
+                            Width="Auto" />
+                        <ColumnDefinition
+                            Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <FontIcon
+                        Glyph="{Binding Glyph}"
+                        FontSize="16"
+                        VerticalAlignment="Top"
+                        Margin="0,2,0,0"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <StackPanel
+                        Grid.Column="1"
+                        Spacing="4">
+                        <TextBlock
+                            Text="{Binding FileName}"
+                            Style="{StaticResource BodyStrongTextBlockStyle}"
+                            TextTrimming="CharacterEllipsis"
+                            ToolTipService.ToolTip="{Binding Path}" />
+                        <TextBlock
+                            Text="{Binding Summary}"
+                            ToolTipService.ToolTip="{Binding TimeFullText}"
+                            Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                        <TextBlock
+                            Text="{Binding Detail}"
+                            Visibility="{Binding DetailVisibility}"
+                            Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                    </StackPanel>
+                </Grid>
+            </DataTemplate>
+            <DataTemplate
+                x:Key="ProductOptionTemplate">
+                <Grid
+                    Padding="4,12"
+                    ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition
+                            Width="*" />
+                        <ColumnDefinition
+                            Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel
+                        Spacing="4">
+                        <TextBlock
+                            Text="{Binding Name}"
+                            Style="{StaticResource BodyStrongTextBlockStyle}"
+                            TextWrapping="Wrap" />
+                        <TextBlock
+                            Text="{Binding Description}"
+                            Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                    </StackPanel>
+                    <TextBlock
+                        Grid.Column="1"
+                        Text="{Binding Status}"
+                        VerticalAlignment="Top"
+                        Margin="0,1,0,0"
+                        Style="{StaticResource CloudBaySecondaryTextStyle}" />
                 </Grid>
             </DataTemplate>
         </ResourceDictionary>

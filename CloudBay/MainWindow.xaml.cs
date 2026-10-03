@@ -14,26 +14,43 @@ using Microsoft.UI.Xaml.Media;
 using Windows.Graphics;
 using Windows.Storage.Pickers;
 using Windows.UI.ViewManagement;
+using SettingsCard = CommunityToolkit.WinUI.Controls.SettingsCard;
+using ActivityEvent = CloudBay.Core.ActivityEvent;
+using ActivityKind = CloudBay.Core.ActivityKind;
 
 namespace CloudBay;
 
 public sealed partial class MainWindow : Window
 {
     private readonly ClientController _controller;
+    private const double PageColumnWidth = 860;
+    private readonly FontIconSource _overviewStatusIcon = new() { FontSize = 12 };
+    private string _statusStyleKey = "";
     private readonly ClientViewModel _viewModel;
     private readonly Dictionary<string, ToggleSwitch> _backupSwitches = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, TextBlock> _backupPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string?> _backupAvailability = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, SettingsCard> _backupCards = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly HashSet<string> CommonBackups = new(StringComparer.OrdinalIgnoreCase) { "Desktop", "Documents", "Pictures", "Downloads" };
+    private bool _accountEditing;
+    private bool _updatingCatalog;
+    private AppSettings DisplaySettings => _viewModel.Preview?.Settings ?? _controller.Settings;
+    private SyncSnapshot DisplaySnapshot => _viewModel.Preview?.Snapshot ?? _controller.Snapshot;
     private string _customBackupRevision = "";
     private string _fileScopesRevision = "";
     private bool _refreshingFileScopes;
     private bool _busy;
     private bool _refreshingBackups;
+    private bool _loadingPreferences;
     private bool _closed;
+    private int _refreshPending;
     private AppSettings? _loadedSettings;
     private string _versionPath = "";
     private bool? _compactLayout;
     private readonly UISettings _uiSettings = new();
+    private readonly Style? _openFolderAccentStyle;
+    private readonly string? _livePagePath = Environment.GetCommandLineArgs().Contains("--ui-live")
+        ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CloudBay", "UiLive", "window-page.txt") : null;
 
     public bool AllowClose { get; set; }
 
@@ -41,8 +58,10 @@ public sealed partial class MainWindow : Window
     {
         _controller = controller;
         InitializeComponent();
+        _openFolderAccentStyle = OpenFolderButton.Style;
         _viewModel = new ClientViewModel(controller);
         RootGrid.DataContext = _viewModel;
+        OverviewStatusBadge.IconSource = _overviewStatusIcon;
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
         AppWindow.Title = "CloudBay";
@@ -65,16 +84,21 @@ public sealed partial class MainWindow : Window
         LoadSettings();
         Refresh();
         _controller.Changed += Controller_Changed;
-        RootGrid.Loaded += (_, _) =>
+        var initialPage = Environment.GetCommandLineArgs().FirstOrDefault(arg => arg.StartsWith("--page=", StringComparison.Ordinal))?[7..];
+        if (initialPage is null && _livePagePath is not null)
         {
-            if (!_controller.Settings.IsConfigured) ShowSettings();
-        };
-        Navigation.SelectedItem = Navigation.MenuItems[0];
+            try { if (File.Exists(_livePagePath)) initialPage = File.ReadAllText(_livePagePath).Trim(); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+        Navigation.SelectedItem = initialPage == "settings" ? Navigation.SettingsItem :
+            Navigation.MenuItems.Cast<NavigationViewItem>().FirstOrDefault(item => (string)item.Tag == initialPage) ?? Navigation.MenuItems[0];
         RootGrid.SizeChanged += (_, _) => UpdateResponsiveLayout();
         OverviewPage.SizeChanged += (_, _) => UpdateResponsiveLayout();
         BackupPage.SizeChanged += (_, _) => UpdateResponsiveLayout();
         FilesPage.SizeChanged += (_, _) => UpdateResponsiveLayout();
         SettingsPage.SizeChanged += (_, _) => UpdateResponsiveLayout();
+        ActivityPage.SizeChanged += (_, _) => UpdateResponsiveLayout();
         Navigation.DisplayModeChanged += (_, _) => UpdateResponsiveLayout();
         _uiSettings.TextScaleFactorChanged += TextScaleFactor_Changed;
         RootGrid.Loaded += (_, _) => MeasureNavigationPane();
@@ -83,9 +107,10 @@ public sealed partial class MainWindow : Window
     public void ShowWindow()
     {
         if (_closed) return;
-        AppWindow.Show();
+        Refresh();
+        AppWindow.Show(!Environment.GetCommandLineArgs().Contains("--ui-smoke"));
         if (AppWindow.Presenter is OverlappedPresenter presenter) presenter.Restore();
-        Activate();
+        if (!Environment.GetCommandLineArgs().Contains("--ui-smoke")) Activate();
     }
 
     public void ShowSettings()
@@ -102,28 +127,63 @@ public sealed partial class MainWindow : Window
         ShowWindow();
     }
 
-    private void Controller_Changed(object? sender, EventArgs e) =>
-        DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Normal, Refresh);
+    private void Controller_Changed(object? sender, EventArgs e)
+    {
+        if (Interlocked.Exchange(ref _refreshPending, 1) != 0) return;
+        if (!DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Normal, () =>
+        {
+            Interlocked.Exchange(ref _refreshPending, 0);
+            if (!_closed && AppWindow.IsVisible) Refresh();
+        })) Interlocked.Exchange(ref _refreshPending, 0);
+    }
 
     private void Refresh()
     {
         if (_closed) return;
         _viewModel.Refresh();
-        OverviewEmptyActivity.Visibility = ActivityEmpty.Visibility = _viewModel.HasActivity ? Visibility.Collapsed : Visibility.Visible;
+        _overviewStatusIcon.Glyph = _viewModel.StatusGlyph;
+        var settings = DisplaySettings;
+        var snapshot = DisplaySnapshot;
+        var badgeStyle = snapshot.State switch
+        {
+            ClientState.UpToDate => "SuccessDotInfoBadgeStyle",
+            ClientState.Attention => "CautionDotInfoBadgeStyle",
+            ClientState.Offline or ClientState.Paused => "InformationalDotInfoBadgeStyle",
+            _ => "DefaultInfoBadgeStyle"
+        };
+        if (_statusStyleKey != badgeStyle)
+        {
+            _statusStyleKey = badgeStyle;
+            OverviewStatusBadge.Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources[badgeStyle];
+        }
+        WelcomePanel.Visibility = FilesConnectPanel.Visibility = settings.IsConfigured ? Visibility.Collapsed : Visibility.Visible;
+        ConnectedOverview.Visibility = FilesConnectedPanel.Visibility = settings.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
+        RecentActivitySection.Visibility = settings.IsConfigured && _viewModel.HasActivity ? Visibility.Visible : Visibility.Collapsed;
+        ActivityEmpty.Visibility = _viewModel.HasActivity ? Visibility.Collapsed : Visibility.Visible;
+        OverviewStatusDetail.Visibility = _viewModel.HasStatusDetail ? Visibility.Visible : Visibility.Collapsed;
+        OverviewLastSync.Visibility = _viewModel.HasLastSync ? Visibility.Visible : Visibility.Collapsed;
+        ActivityPending.Visibility = _viewModel.HasPending ? Visibility.Visible : Visibility.Collapsed;
+        StorageSummary.Visibility = _viewModel.HasStorageSummary ? Visibility.Visible : Visibility.Collapsed;
+        BackupSuggestion.Visibility = settings.IsConfigured && settings.Backups.Count + settings.CustomBackups.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        BackupConnectInfo.IsOpen = !settings.IsConfigured;
+        ConnectedAccountPanel.Visibility = settings.IsConfigured && !_accountEditing ? Visibility.Visible : Visibility.Collapsed;
+        ConnectionPanel.Visibility = !settings.IsConfigured || _accountEditing ? Visibility.Visible : Visibility.Collapsed;
+        CancelConnectionButton.Visibility = settings.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
         TransferProgressPanel.Visibility = _viewModel.IsProgressVisible ? Visibility.Visible : Visibility.Collapsed;
-        TransferProgress.IsIndeterminate = _controller.Snapshot.TransferTotalBytes <= 0;
-        ReviewDeletionsButton.Visibility = _controller.Snapshot.State == ClientState.Attention && _controller.Snapshot.Message.StartsWith("Review required:", StringComparison.Ordinal) ? Visibility.Visible : Visibility.Collapsed;
-        BackupCount.Text = (_controller.Settings.Backups.Count + _controller.Settings.CustomBackups.Count).ToString();
-        DisconnectButton.Visibility = _controller.Settings.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
+        TransferProgress.IsIndeterminate = snapshot.TransferTotalBytes <= 0;
+        ReviewDeletionsButton.Visibility = snapshot.State == ClientState.Attention && snapshot.Message.StartsWith("Review required:", StringComparison.Ordinal) ? Visibility.Visible : Visibility.Collapsed;
+        OpenFolderButton.Style = snapshot.State == ClientState.Attention ? null : _openFolderAccentStyle;
+        DisconnectButton.Visibility = settings.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
         OpenFolderButton.IsEnabled = _viewModel.IsConfigured;
-        ConnectAccountButton.Visibility = _viewModel.IsConfigured ? Visibility.Collapsed : Visibility.Visible;
         OpenFolderButton.Visibility = SyncNowButton.Visibility = DashboardPauseButton.Visibility = _viewModel.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
+        SyncNowButton.Visibility = _viewModel.IsConfigured && snapshot.State is not (ClientState.Syncing or ClientState.Connecting or ClientState.Attention) ? Visibility.Visible : Visibility.Collapsed;
+        DashboardPauseButton.Visibility = _viewModel.IsConfigured && snapshot.State != ClientState.Attention ? Visibility.Visible : Visibility.Collapsed;
         SyncNowButton.IsEnabled = DashboardPauseButton.IsEnabled = _viewModel.IsConfigured && !_busy;
         RefreshBackups();
         RefreshCustomBackups();
         RefreshFileScopes();
-        ApplyTheme(_controller.Settings.Theme);
-        if (!ReferenceEquals(_loadedSettings, _controller.Settings) && !_busy) LoadSettings();
+        ApplyTheme(settings.Theme);
+        if (!ReferenceEquals(_loadedSettings, settings) && !_busy) LoadSettings();
     }
 
     private void Navigation_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
@@ -148,6 +208,16 @@ public sealed partial class MainWindow : Window
         };
         selected.Visibility = Visibility.Visible;
         if (selected is ScrollViewer viewer) viewer.ChangeView(null, 0, null, true);
+        if (_livePagePath is not null)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(_livePagePath)!);
+                File.WriteAllText(_livePagePath, page);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
     }
 
     private void ApplyTheme(string theme) => RootGrid.RequestedTheme = theme switch
@@ -159,7 +229,7 @@ public sealed partial class MainWindow : Window
 
     private void LoadSettings(bool reloadAccount = false, bool reloadPreferences = false)
     {
-        var settings = _controller.Settings;
+        var settings = DisplaySettings;
         var previous = _loadedSettings;
         _loadedSettings = settings;
         // Backup changes, reconnection, and tray quick settings also replace the
@@ -169,19 +239,24 @@ public sealed partial class MainWindow : Window
         if (reloadAccount || previous is null || KeyIdBox.Text == previous.KeyId) KeyIdBox.Text = settings.KeyId;
         if (reloadAccount || previous is null || RootPathBox.Text == previous.RootPath) RootPathBox.Text = settings.RootPath;
         if (reloadAccount || previous is null || PrefixBox.Text == previous.Prefix) PrefixBox.Text = settings.Prefix;
-        if (reloadPreferences || previous is null || FilesOnDemandSwitch.IsOn == previous.FilesOnDemand) FilesOnDemandSwitch.IsOn = settings.FilesOnDemand;
-        if (reloadPreferences || previous is null || UploadLimitBox.Value == previous.UploadBytesPerSecond / 1024d) UploadLimitBox.Value = settings.UploadBytesPerSecond / 1024d;
-        if (reloadPreferences || previous is null || DownloadLimitBox.Value == previous.DownloadBytesPerSecond / 1024d) DownloadLimitBox.Value = settings.DownloadBytesPerSecond / 1024d;
-        if (reloadPreferences || previous is null || ConcurrencyBox.Value == previous.UploadConcurrency) ConcurrencyBox.Value = settings.UploadConcurrency;
-        if (reloadPreferences || previous is null || MeteredBox.IsChecked == previous.PauseOnMetered) MeteredBox.IsChecked = settings.PauseOnMetered;
-        if (reloadPreferences || previous is null || BatterySaverBox.IsChecked == previous.PauseOnBatterySaver) BatterySaverBox.IsChecked = settings.PauseOnBatterySaver;
-        if (reloadPreferences || previous is null || StartAtSignInBox.IsChecked == previous.StartAtSignIn) StartAtSignInBox.IsChecked = settings.StartAtSignIn;
-        if (reloadPreferences || previous is null || ExclusionsBox.Text == string.Join(Environment.NewLine, previous.Exclusions)) ExclusionsBox.Text = string.Join(Environment.NewLine, settings.Exclusions);
-        if (reloadPreferences || previous is null || (ThemeBox.SelectedItem as ComboBoxItem)?.Tag as string == previous.Theme)
-            ThemeBox.SelectedItem = ThemeBox.Items.Cast<ComboBoxItem>().FirstOrDefault(item => (string)item.Tag == settings.Theme) ?? ThemeBox.Items[0];
-        AccountHeading.Text = settings.IsConfigured ? $"Connected to {settings.BucketName}" : "Connect your private bucket";
-        AccountDescription.Text = settings.IsConfigured ? "CloudBay protects your files using this Backblaze B2 bucket." : "Use a B2 application key with access to your chosen bucket.";
-        ConnectButton.Content = settings.IsConfigured ? "Update connection" : "Connect to Backblaze B2";
+        _loadingPreferences = true;
+        try
+        {
+            if (reloadPreferences || previous is null || FilesOnDemandSwitch.IsOn == previous.FilesOnDemand) FilesOnDemandSwitch.IsOn = settings.FilesOnDemand;
+            if (reloadPreferences || previous is null || NumberTextMatches(UploadLimitBox, previous.UploadBytesPerSecond / 1024d)) UploadLimitBox.Value = settings.UploadBytesPerSecond / 1024d;
+            if (reloadPreferences || previous is null || NumberTextMatches(DownloadLimitBox, previous.DownloadBytesPerSecond / 1024d)) DownloadLimitBox.Value = settings.DownloadBytesPerSecond / 1024d;
+            if (reloadPreferences || previous is null || NumberTextMatches(ConcurrencyBox, previous.UploadConcurrency)) ConcurrencyBox.Value = settings.UploadConcurrency;
+            if (reloadPreferences || previous is null || MeteredBox.IsOn == previous.PauseOnMetered) MeteredBox.IsOn = settings.PauseOnMetered;
+            if (reloadPreferences || previous is null || BatterySaverBox.IsOn == previous.PauseOnBatterySaver) BatterySaverBox.IsOn = settings.PauseOnBatterySaver;
+            if (reloadPreferences || previous is null || StartAtSignInBox.IsOn == previous.StartAtSignIn) StartAtSignInBox.IsOn = settings.StartAtSignIn;
+            if (reloadPreferences || previous is null || ExclusionsBox.Text == string.Join(Environment.NewLine, previous.Exclusions)) ExclusionsBox.Text = string.Join(Environment.NewLine, settings.Exclusions);
+            if (reloadPreferences || previous is null || (ThemeBox.SelectedItem as ComboBoxItem)?.Tag as string == previous.Theme)
+                ThemeBox.SelectedItem = ThemeBox.Items.Cast<ComboBoxItem>().FirstOrDefault(item => (string)item.Tag == settings.Theme) ?? ThemeBox.Items[0];
+        }
+        finally { _loadingPreferences = false; }
+        AccountHeading.Text = settings.IsConfigured ? "Manage your account" : "Connect to Backblaze B2";
+        AccountDescription.Text = settings.IsConfigured ? "Replace your application key or review connection options." : "Enter your private bucket and application key.";
+        ConnectButton.Content = settings.IsConfigured ? "Update connection" : "Connect account";
         // The sync root identity and key namespace are fixed once registered with
         // Windows. A credential refresh must not silently start another tree.
         BucketNameBox.IsReadOnly = RootPathBox.IsReadOnly = PrefixBox.IsReadOnly = settings.Backups.Count + settings.CustomBackups.Count > 0;
@@ -194,24 +269,14 @@ public sealed partial class MainWindow : Window
         // natural desired width even when it is arranged wider. Give it the
         // current viewport width explicitly so cards never slide offscreen.
         foreach (var (viewer, content) in new[] { (OverviewPage, OverviewContent), (BackupPage, BackupContent), (FilesPage, FilesContent), (SettingsPage, SettingsContent) })
-            if (viewer.ActualWidth > 0) content.Width = Math.Min(1020, viewer.ActualWidth);
+            if (viewer.ActualWidth > 0) content.Width = Math.Min(PageColumnWidth, viewer.ActualWidth);
+        if (ContentLayoutGrid.ActualWidth > 0) ActivityPage.Width = Math.Min(PageColumnWidth, ContentLayoutGrid.ActualWidth);
         var pane = Navigation.DisplayMode == NavigationViewDisplayMode.Expanded ? Navigation.OpenPaneLength :
             Navigation.DisplayMode == NavigationViewDisplayMode.Compact ? Navigation.CompactPaneLength : 0;
         var compact = Navigation.ActualWidth - pane < 670;
         if (_compactLayout == compact) return;
         _compactLayout = compact;
-        DashboardActions.Orientation = FileActions.Orientation = SettingsActions.Orientation = compact ? Orientation.Vertical : Orientation.Horizontal;
-        CloudStatsGrid.ColumnDefinitions.Clear();
-        CloudStatsGrid.RowDefinitions.Clear();
-        CloudStatsGrid.RowSpacing = compact ? 12 : 0;
-        FrameworkElement[] cards = [CloudFileCard, LocalFileCard, BackupFileCard];
-        for (var i = 0; i < cards.Length; i++)
-        {
-            if (compact) CloudStatsGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            else CloudStatsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            Grid.SetRow(cards[i], compact ? i : 0);
-            Grid.SetColumn(cards[i], compact ? 0 : i);
-        }
+        DashboardActions.Orientation = FileActions.Orientation = compact ? Orientation.Vertical : Orientation.Horizontal;
     }
 
     private void TextScaleFactor_Changed(UISettings sender, object args) =>
@@ -248,24 +313,21 @@ public sealed partial class MainWindow : Window
                 if (_backupAvailability[name] is { } restriction) description += Environment.NewLine + restriction;
             }
             catch { description = "This Windows folder is unavailable on this device"; _backupAvailability[name] = description; }
-            var grid = new Grid { ColumnSpacing = 16 };
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            var icon = new FontIcon { Glyph = glyph, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudBayFolderIconStyle"], VerticalAlignment = VerticalAlignment.Center };
-            grid.Children.Add(icon);
-            var labels = new StackPanel { Spacing = 4 };
-            labels.Children.Add(new TextBlock { Text = name, FontSize = 16, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
             var path = new TextBlock { Text = description, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudBaySecondaryTextStyle"], FontSize = 12 };
-            labels.Children.Add(path);
-            Grid.SetColumn(labels, 1);
-            grid.Children.Add(labels);
-            var toggle = new ToggleSwitch { Tag = name, OnContent = "On", OffContent = "Off", VerticalAlignment = VerticalAlignment.Center };
+            var toggle = new ToggleSwitch { Tag = name, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudBayToggleStyle"] };
             AutomationProperties.SetName(toggle, $"Back up {name}");
-            Grid.SetColumn(toggle, 2);
             toggle.Toggled += Backup_Toggled;
-            grid.Children.Add(toggle);
-            BackupRows.Children.Add(new Border { Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudBayCardStyle"], Child = grid });
+            var folderIcon = FolderIconProvider.GetIcon(name);
+            var card = new SettingsCard
+            {
+                Header = name,
+                Description = path,
+                HeaderIcon = folderIcon is not null ? new ImageIcon { Source = folderIcon, Width = 24, Height = 24 } : new FontIcon { Glyph = glyph },
+                Content = toggle
+            };
+            if (CommonBackups.Contains(name)) BackupRows.Children.Add(card);
+            else MoreWindowsFolders.Items.Add(card);
+            _backupCards.Add(name, card);
             _backupSwitches.Add(name, toggle);
             _backupPaths.Add(name, path);
         }
@@ -278,9 +340,21 @@ public sealed partial class MainWindow : Window
         {
             foreach (var (name, toggle) in _backupSwitches)
             {
-                var backup = _controller.Settings.Backups.FirstOrDefault(item => item.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                var backup = DisplaySettings.Backups.FirstOrDefault(item => item.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                var card = _backupCards[name];
+                var primary = CommonBackups.Contains(name) || backup is not null;
+                if (primary != BackupRows.Children.Contains(card))
+                {
+                    // An unexpanded Expander's content has no visual Parent,
+                    // but its collection still owns the card. Remove from the
+                    // owning collection before promoting an enabled folder.
+                    BackupRows.Children.Remove(card);
+                    MoreWindowsFolders.Items.Remove(card);
+                    if (primary) BackupRows.Children.Add(card);
+                    else MoreWindowsFolders.Items.Add(card);
+                }
                 toggle.IsOn = backup is not null;
-                toggle.IsEnabled = _controller.Settings.IsConfigured && !_busy && _backupAvailability[name] is null;
+                toggle.IsEnabled = DisplaySettings.IsConfigured && !_busy && _backupAvailability[name] is null;
                 if (backup is not null) _backupPaths[name].Text = backup.DestinationPath;
                 else if (_backupAvailability[name] is { } unavailable)
                 {
@@ -299,40 +373,40 @@ public sealed partial class MainWindow : Window
 
     private void RefreshCustomBackups()
     {
-        var settings = _controller.Settings;
+        var settings = DisplaySettings;
         var revision = string.Join("|", settings.CustomBackups.Select(folder => $"{folder.Name}:{folder.SourcePath}:{folder.Prefix}")) + $"|{_busy}";
         AddCustomBackupButton.IsEnabled = settings.IsConfigured && !_busy;
-        CustomBackupEmpty.Visibility = settings.CustomBackups.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        CustomBackupSection.Visibility = settings.CustomBackups.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         if (_customBackupRevision == revision) return;
         _customBackupRevision = revision;
         CustomBackupRows.Children.Clear();
         foreach (var folder in settings.CustomBackups)
         {
-            var content = new StackPanel { Spacing = 12 };
-            var heading = new Grid { ColumnSpacing = 14 };
-            heading.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            heading.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            heading.Children.Add(new FontIcon { Glyph = "\uE8B7", Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudBayFolderIconStyle"], VerticalAlignment = VerticalAlignment.Top });
-            var labels = new StackPanel { Spacing = 4 };
-            labels.Children.Add(new TextBlock { Text = folder.Name, FontSize = 16, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
-            labels.Children.Add(new TextBlock { Text = folder.SourcePath, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudBaySecondaryTextStyle"], FontSize = 12 });
-            labels.Children.Add(new TextBlock { Text = $"Backed up to {settings.BucketName}", Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudBaySecondaryTextStyle"], FontSize = 12 });
-            Grid.SetColumn(labels, 1);
-            heading.Children.Add(labels);
-            content.Children.Add(heading);
             var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
             var open = new Button { Content = "Open folder", Tag = folder.SourcePath };
             open.Click += (_, _) =>
             {
+                if (_viewModel.Preview is not null) return;
                 try { Process.Start(new ProcessStartInfo(folder.SourcePath) { UseShellExecute = true }); }
                 catch (Exception error) { ShowError(error); }
             };
             actions.Children.Add(open);
-            var stop = new Button { Content = "Stop backup", Tag = folder.Name, IsEnabled = !_busy };
+            var stop = new MenuFlyoutItem { Text = "Stop backup", Tag = folder.Name, IsEnabled = !_busy, Icon = new FontIcon { Glyph = "\uE711" } };
             stop.Click += RemoveCustomBackup_Click;
-            actions.Children.Add(stop);
-            content.Children.Add(actions);
-            CustomBackupRows.Children.Add(new Border { Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudBayCardStyle"], Child = content });
+            var menu = new MenuFlyout();
+            menu.Items.Add(stop);
+            var more = new Button { Content = new FontIcon { Glyph = "\uE712" }, Flyout = menu, IsEnabled = !_busy };
+            AutomationProperties.SetName(more, $"More options for {folder.Name}");
+            ToolTipService.SetToolTip(more, "More options");
+            actions.Children.Add(more);
+            CustomBackupRows.Children.Add(new SettingsCard
+            {
+                Header = folder.Name,
+                Description = new TextBlock { Text = folder.SourcePath, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudBaySecondaryTextStyle"] },
+                HeaderIcon = FolderIconProvider.GetCustomFolderIcon() is { } folderIcon
+                    ? new ImageIcon { Source = folderIcon, Width = 24, Height = 24 } : new FontIcon { Glyph = "\uE8B7" },
+                Content = actions
+            });
         }
     }
 
@@ -351,7 +425,8 @@ public sealed partial class MainWindow : Window
 
     private void RefreshFileScopes()
     {
-        var settings = _controller.Settings;
+        var settings = DisplaySettings;
+        FileScopeBox.Visibility = settings.CustomBackups.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         var revision = settings.RootPath + "|" + string.Join("|", settings.CustomBackups.Select(folder => $"{folder.Name}:{folder.SourcePath}"));
         if (_fileScopesRevision == revision) return;
         _fileScopesRevision = revision;
@@ -385,10 +460,13 @@ public sealed partial class MainWindow : Window
         if (FileScopeBox.SelectedItem is not SyncFolderItem scope) return;
         FileFolderName.Text = scope.BackupName is null ? "CloudBay folder" : scope.Name;
         FileFolderPath.Text = scope.RootPath;
+        FileLocationCard.HeaderIcon = FolderIconProvider.GetCustomFolderIcon() is { } folderIcon
+            ? new ImageIcon { Source = folderIcon, Width = 24, Height = 24 } : new FontIcon { Glyph = "\uE8B7" };
     }
 
     private void OpenFileFolder_Click(object sender, RoutedEventArgs args)
     {
+        if (_viewModel.Preview is not null) return;
         try { _controller.LaunchFolder(SelectedBackupName); }
         catch (Exception error) { ShowError(error); }
     }
@@ -400,8 +478,8 @@ public sealed partial class MainWindow : Window
             if (source.Length == 0) throw new InvalidOperationException("Choose the personal folder you want to back up.");
             var name = CustomBackupNameBox.Text.Trim();
             if (name.Length == 0) name = new DirectoryInfo(source).Name;
-            if (name.Length == 0 || name.Length > 80 || name is "." or ".." || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name.EndsWith('.') || name.EndsWith(' '))
-                throw new InvalidOperationException("Choose a backup name up to 80 characters without slashes or Windows filename symbols.");
+            if (name.Length == 0 || name.Length > 64 || name is "." or ".." || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name.EndsWith('.') || name.EndsWith(' '))
+                throw new InvalidOperationException("Choose a backup name up to 64 characters without slashes or Windows filename symbols.");
             await _controller.AddCustomBackupAsync(source, name);
             CustomBackupSourceBox.Text = CustomBackupNameBox.Text = "";
             ShowInfo($"{name} is now backed up. Its folder remains in its current location.");
@@ -409,7 +487,7 @@ public sealed partial class MainWindow : Window
 
     private async void RemoveCustomBackup_Click(object sender, RoutedEventArgs args)
     {
-        if (_busy || sender is not Button { Tag: string name }) return;
+        if (_busy || sender is not FrameworkElement { Tag: string name }) return;
         var folder = _controller.Settings.CustomBackups.SingleOrDefault(item => item.Name == name);
         if (folder is null) return;
         await RunAsync($"Preparing {name} before stopping backup…", async () =>
@@ -447,33 +525,74 @@ public sealed partial class MainWindow : Window
             if (string.IsNullOrWhiteSpace(ApplicationKeyBox.Password)) throw new InvalidOperationException("Enter your B2 application key to connect.");
             await _controller.ConnectAsync(KeyIdBox.Text.Trim(), ApplicationKeyBox.Password, BucketNameBox.Text.Trim(), RootPathBox.Text.Trim(), PrefixBox.Text.Trim());
             ApplicationKeyBox.Password = "";
+            _accountEditing = false;
             LoadSettings(reloadAccount: true);
         }, "Your Backblaze B2 bucket is connected. CloudBay is running in the background.");
     }
 
-    private async void SaveSettings_Click(object sender, RoutedEventArgs args)
+    private async void Preference_Toggled(object sender, RoutedEventArgs args)
     {
-        await RunAsync("Saving your settings…", async () =>
+        if (_loadingPreferences || _busy || _viewModel is null || _viewModel.Preview is not null) return;
+        var update = sender switch
+        {
+            ToggleSwitch toggle when ReferenceEquals(toggle, FilesOnDemandSwitch) => new PreferenceUpdate { FilesOnDemand = toggle.IsOn },
+            ToggleSwitch toggle when ReferenceEquals(toggle, MeteredBox) => new PreferenceUpdate { PauseOnMetered = toggle.IsOn },
+            ToggleSwitch toggle when ReferenceEquals(toggle, BatterySaverBox) => new PreferenceUpdate { PauseOnBatterySaver = toggle.IsOn },
+            ToggleSwitch toggle when ReferenceEquals(toggle, StartAtSignInBox) => new PreferenceUpdate { StartAtSignIn = toggle.IsOn },
+            _ => null
+        };
+        if (update is not null) await SavePreferenceAsync(update);
+    }
+
+    private async void Theme_SelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (_loadingPreferences || _busy || _viewModel is null || _viewModel.Preview is not null || ThemeBox.SelectedItem is not ComboBoxItem { Tag: string theme }) return;
+        ApplyTheme(theme);
+        await SavePreferenceAsync(new() { Theme = theme });
+    }
+
+    private async Task SavePreferenceAsync(PreferenceUpdate update)
+    {
+        await RunAsync("Applying your preference…", async () =>
+        {
+            await _controller.UpdatePreferencesAsync(update);
+        });
+        // A failed immediate toggle returns to its actual persisted value. Keep
+        // numeric and exclusion drafts untouched, including invalid input.
+        _loadingPreferences = true;
+        try
+        {
+            FilesOnDemandSwitch.IsOn = DisplaySettings.FilesOnDemand;
+            MeteredBox.IsOn = DisplaySettings.PauseOnMetered;
+            BatterySaverBox.IsOn = DisplaySettings.PauseOnBatterySaver;
+            StartAtSignInBox.IsOn = DisplaySettings.StartAtSignIn;
+            ThemeBox.SelectedItem = ThemeBox.Items.Cast<ComboBoxItem>().First(item => (string)item.Tag == DisplaySettings.Theme);
+            ApplyTheme(DisplaySettings.Theme);
+        }
+        finally { _loadingPreferences = false; }
+    }
+
+    private async void ApplyNetwork_Click(object sender, RoutedEventArgs args) =>
+        await RunAsync("Applying bandwidth limits…", async () =>
         {
             var upload = ReadWholeNumber(UploadLimitBox, "Upload limit", 0, 1048576);
             var download = ReadWholeNumber(DownloadLimitBox, "Download limit", 0, 1048576);
             var concurrency = ReadWholeNumber(ConcurrencyBox, "Concurrent uploads", 1, 16);
-            var settings = _controller.Settings with
+            await _controller.UpdatePreferencesAsync(new()
             {
-                FilesOnDemand = FilesOnDemandSwitch.IsOn,
                 UploadBytesPerSecond = upload * 1024L,
                 DownloadBytesPerSecond = download * 1024L,
-                UploadConcurrency = concurrency,
-                PauseOnMetered = MeteredBox.IsChecked == true,
-                PauseOnBatterySaver = BatterySaverBox.IsChecked == true,
-                StartAtSignIn = StartAtSignInBox.IsChecked == true,
-                Theme = (string)((ComboBoxItem)ThemeBox.SelectedItem).Tag,
-                Exclusions = ExclusionsBox.Text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
-            };
-            await _controller.SaveSettingsAsync(settings);
-            LoadSettings(reloadPreferences: true);
-        }, "Your settings are saved.");
-    }
+                UploadConcurrency = concurrency
+            });
+        }, "Bandwidth limits are applied.");
+
+    private async void ApplyExclusions_Click(object sender, RoutedEventArgs args) =>
+        await RunAsync("Applying excluded files…", async () =>
+        {
+            var exclusions = ExclusionsBox.Text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            await _controller.UpdatePreferencesAsync(new() { Exclusions = exclusions });
+        }, "File exclusions are applied.");
 
     private async void Disconnect_Click(object sender, RoutedEventArgs args)
     {
@@ -493,6 +612,7 @@ public sealed partial class MainWindow : Window
             if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
             await _controller.DisconnectAsync();
             ApplicationKeyBox.Password = "";
+            _accountEditing = false;
             LoadSettings(reloadAccount: true, reloadPreferences: true);
             ShowInfo("The account is disconnected. Your local files and B2 files were retained.");
         });
@@ -500,17 +620,21 @@ public sealed partial class MainWindow : Window
 
     private static int ReadWholeNumber(NumberBox box, string name, int min, int max)
     {
-        if (double.IsNaN(box.Value) || !double.IsFinite(box.Value) || box.Value < min || box.Value > max || box.Value != Math.Truncate(box.Value))
+        if (!double.TryParse(box.Text, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.CurrentCulture, out var value) ||
+            !double.IsFinite(value) || value < min || value > max || value != Math.Truncate(value))
             throw new InvalidOperationException($"{name} must be a whole number between {min:N0} and {max:N0}.");
-        return (int)box.Value;
+        return (int)value;
     }
+
+    private static bool NumberTextMatches(NumberBox box, double value) =>
+        double.TryParse(box.Text, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.CurrentCulture, out var displayed) && displayed == value;
 
     private async void SyncNow_Click(object sender, RoutedEventArgs args) =>
         await RunAsync("Checking for file changes…", () => _controller.SyncNowAsync());
 
     private void Pause_Click(object sender, RoutedEventArgs args)
     {
-        if (_busy) return;
+        if (_busy || _viewModel.Preview is not null) return;
         try
         {
             if (_controller.Snapshot.State == ClientState.Paused) _controller.Resume();
@@ -522,6 +646,7 @@ public sealed partial class MainWindow : Window
 
     private void OpenFolder_Click(object sender, RoutedEventArgs args)
     {
+        if (_viewModel.Preview is not null) return;
         try { _controller.LaunchFolder(); }
         catch (Exception error) { ShowError(error); }
     }
@@ -529,6 +654,22 @@ public sealed partial class MainWindow : Window
     private void ManageBackup_Click(object sender, RoutedEventArgs args) => Navigation.SelectedItem = Navigation.MenuItems[2];
     private void ViewActivity_Click(object sender, RoutedEventArgs args) => ShowActivity();
     private void Settings_Click(object sender, RoutedEventArgs args) => ShowSettings();
+
+    private void ManageAccount_Click(object sender, RoutedEventArgs args)
+    {
+        _accountEditing = true;
+        Refresh();
+        SettingsPage.ChangeView(null, 0, null, true);
+        ApplicationKeyBox.Focus(FocusState.Programmatic);
+    }
+
+    private void CancelConnection_Click(object sender, RoutedEventArgs args)
+    {
+        _accountEditing = false;
+        ApplicationKeyBox.Password = "";
+        LoadSettings(reloadAccount: true);
+        Refresh();
+    }
 
     private async void ChooseRoot_Click(object sender, RoutedEventArgs args)
     {
@@ -653,6 +794,7 @@ public sealed partial class MainWindow : Window
 
     private void Diagnostics_Click(object sender, RoutedEventArgs args)
     {
+        if (_viewModel.Preview is not null) return;
         try
         {
             var path = _controller.DiagnosticsPath;
@@ -665,6 +807,7 @@ public sealed partial class MainWindow : Window
 
     private async Task RunAsync(string message, Func<Task> operation, string? success = null)
     {
+        if (_viewModel.Preview is not null) return;
         if (_busy) return;
         _busy = true;
         SetBusy(true, message);
@@ -686,6 +829,7 @@ public sealed partial class MainWindow : Window
 
     private void SetBusy(bool busy, string message)
     {
+        BusyFooter.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         BusyRing.IsActive = busy;
         BusyRing.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         FooterStatus.Text = message;
@@ -694,6 +838,52 @@ public sealed partial class MainWindow : Window
         SyncNowButton.IsEnabled = DashboardPauseButton.IsEnabled = !busy && _controller.Settings.IsConfigured;
         RefreshBackups();
         RefreshCustomBackups();
+    }
+
+    private async void Catalog_Click(object sender, RoutedEventArgs args)
+    {
+        if (_busy) return;
+        CatalogDialog.XamlRoot = RootGrid.XamlRoot;
+        CatalogDialog.RequestedTheme = RootGrid.RequestedTheme;
+        UpdateCatalog(resetCategories: true);
+        await CatalogDialog.ShowAsync();
+    }
+
+    private void CatalogFilter_Changed(object sender, SelectionChangedEventArgs args)
+    {
+        if (CatalogList is null || _updatingCatalog) return;
+        UpdateCatalog(resetCategories: ReferenceEquals(sender, CatalogKind));
+    }
+
+    private void CatalogSearch_Changed(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
+    {
+        if (CatalogList is not null) UpdateCatalog();
+    }
+
+    private void UpdateCatalog(bool resetCategories = false)
+    {
+        var modes = CatalogKind.SelectedIndex == 1;
+        var options = modes ? ProductCatalog.Modes : ProductCatalog.Providers;
+        _updatingCatalog = true;
+        try
+        {
+            if (resetCategories || CatalogGroup.ItemsSource is null)
+            {
+                CatalogGroup.ItemsSource = new[] { "All categories" }.Concat(options.Select(item => item.Group).Distinct()).ToArray();
+                CatalogGroup.SelectedIndex = 0;
+            }
+            CatalogGroup.Visibility = modes ? Visibility.Collapsed : Visibility.Visible;
+            Grid.SetColumnSpan(CatalogKind, modes ? 2 : 1);
+            CatalogSearch.PlaceholderText = modes ? "Search modes" : "Search providers";
+            var category = CatalogGroup.SelectedItem as string;
+            var search = CatalogSearch.Text.Trim();
+            var matches = options.Where(item => (category is null or "All categories" || item.Group == category) &&
+                (search.Length == 0 || item.Name.Contains(search, StringComparison.OrdinalIgnoreCase) || item.Description.Contains(search, StringComparison.OrdinalIgnoreCase) || item.Group.Contains(search, StringComparison.OrdinalIgnoreCase))).ToArray();
+            CatalogList.ItemsSource = matches;
+            CatalogEmpty.Text = modes ? "No matching modes" : "No matching providers";
+            CatalogEmpty.Visibility = matches.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+        finally { _updatingCatalog = false; }
     }
 
     private void ShowError(Exception error)
@@ -728,102 +918,215 @@ public sealed partial class MainWindow : Window
     public async Task RunUiSmokeAsync(string outputDirectory)
     {
         Directory.CreateDirectory(outputDirectory);
-        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "layout.txt"), "");
+        var themeArgument = Environment.GetCommandLineArgs().FirstOrDefault(arg => arg.StartsWith("--ui-smoke-theme=", StringComparison.Ordinal))?[17..];
+        if (themeArgument != "Light")
+        {
+            await File.WriteAllTextAsync(Path.Combine(outputDirectory, "layout.txt"), "");
+            await File.WriteAllTextAsync(Path.Combine(outputDirectory, "capture-metrics.txt"), "");
+        }
         ShowWindow();
-        // Allow the first-run Loaded navigation to finish before selecting the
-        // first capture page. Otherwise its Settings redirect races Overview.
-        await Task.Delay(400);
-        // These checks exercise only local controls in the isolated UI-smoke
-        // profile. They never register a sync root, set startup, or contact B2.
-        var originalCustomSource = CustomBackupSourceBox.Text;
-        var originalCustomName = CustomBackupNameBox.Text;
+        await Task.Delay(300);
+        RootGrid.UpdateLayout();
+        var title = FindDescendant<TextBlock>(AppTitleBar, item => item.Text == "CloudBay");
+        if (AppTitleBar.Title != "CloudBay" || title is null || title.ActualWidth <= 0 || title.ActualHeight <= 0)
+            throw new InvalidOperationException("The native title bar brand must be visible and laid out.");
+        await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"),
+            $"native-title: title={title.Text}, bounds={title.ActualWidth:0.##}x{title.ActualHeight:0.##}; native Mica/compositor window frame is outside RenderTargetBitmap{Environment.NewLine}");
+        // Fixtures affect presentation only. This isolated process never writes
+        // account settings, registers Windows roots, or connects to a provider.
         CustomBackupSourceBox.Text = @"C:\CloudBay UI validation\Personal files";
         CustomBackupNameBox.Text = "Personal files";
         UploadLimitBox.Value = 512;
         ExclusionsBox.Text = "*.ui-validation";
         RootPathBox.Text = @"C:\CloudBay UI validation\CloudBay";
-        LoadSettings();
+        _viewModel.SetPreview(ClientPreview.Connected());
         Refresh();
         if (UploadLimitBox.Value != 512 || ExclusionsBox.Text != "*.ui-validation" ||
             RootPathBox.Text != @"C:\CloudBay UI validation\CloudBay" ||
             CustomBackupSourceBox.Text != @"C:\CloudBay UI validation\Personal files" ||
             CustomBackupNameBox.Text != "Personal files")
-            throw new InvalidOperationException("Refreshing the UI discarded an unsaved edit.");
-        LoadSettings(reloadAccount: true, reloadPreferences: true);
-        CustomBackupSourceBox.Text = originalCustomSource;
-        CustomBackupNameBox.Text = originalCustomName;
-        foreach (var theme in new[] { ElementTheme.Dark, ElementTheme.Light })
+            throw new InvalidOperationException("A background settings refresh discarded an unsaved edit.");
+        UploadLimitBox.Text = "invalid draft";
+        _viewModel.SetPreview(ClientPreview.Connected() with { Settings = ClientPreview.Connected().Settings with { Theme = "Light" } });
+        Refresh();
+        if (UploadLimitBox.Text != "invalid draft") throw new InvalidOperationException("A refresh discarded an invalid numeric draft.");
+        try
         {
-            RootGrid.RequestedTheme = theme;
+            ReadWholeNumber(UploadLimitBox, "Upload limit", 0, 1048576);
+            throw new InvalidOperationException("An invalid numeric draft was accepted.");
+        }
+        catch (InvalidOperationException error) when (error.Message.StartsWith("Upload limit must", StringComparison.Ordinal)) { }
+        CustomBackupSourceBox.Text = CustomBackupNameBox.Text = "";
+        _viewModel.SetPreview(null);
+        LoadSettings(reloadAccount: true, reloadPreferences: true);
+        Refresh();
+
+        var states = new[] { ClientState.NotConnected, ClientState.Connecting, ClientState.UpToDate, ClientState.Syncing,
+            ClientState.Paused, ClientState.Offline, ClientState.Attention };
+        var themes = themeArgument == "Light" ? new[] { ElementTheme.Light } : new[] { ElementTheme.Dark };
+        foreach (var theme in themes)
+        {
             var suffix = theme == ElementTheme.Light ? "-light" : "";
             foreach (var width in new[] { 1300, 1100, 800 })
             {
                 AppWindow.Resize(new SizeInt32(width, 840));
-                foreach (var page in new[] { "overview", "activity", "backup", "files", "settings" })
+                foreach (var state in states)
                 {
-                    Navigation.SelectedItem = page == "settings" ? Navigation.SettingsItem : Navigation.MenuItems.Cast<NavigationViewItem>().First(item => (string)item.Tag == page);
-                    ShowPage(page);
-                    await Task.Delay(350);
-                    RootGrid.UpdateLayout();
-                    if (page != "activity")
-                    {
-                        var viewer = page switch { "backup" => BackupPage, "files" => FilesPage, "settings" => SettingsPage, _ => OverviewPage };
-                        var content = (FrameworkElement)viewer.Content;
-                        var position = content.TransformToVisual(RootGrid).TransformPoint(new global::Windows.Foundation.Point());
-                        var viewportPosition = viewer.TransformToVisual(RootGrid).TransformPoint(new global::Windows.Foundation.Point());
-                        await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"),
-                            $"{theme} {page} {width}: root={RootGrid.ActualWidth}, viewport={viewer.ActualWidth}, content={content.ActualWidth}, x={position.X}{Environment.NewLine}");
-                        if (position.X < viewportPosition.X - 1 || position.X + content.ActualWidth > viewportPosition.X + viewer.ActualWidth + 1)
-                            throw new InvalidOperationException($"The {page} page extends beyond its visible area at width {width}.");
-                    }
-                    else
-                    {
-                        var position = ActivityPage.TransformToVisual(RootGrid).TransformPoint(new global::Windows.Foundation.Point());
-                        await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"),
-                            $"{theme} activity {width}: root={RootGrid.ActualWidth}, content={ActivityPage.ActualWidth}, x={position.X}{Environment.NewLine}");
-                        if (position.X < -1 || position.X + ActivityPage.ActualWidth > RootGrid.ActualWidth + 1)
-                            throw new InvalidOperationException($"The activity page extends beyond its visible area at width {width}.");
-                    }
-                    await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"{page}-{width}{suffix}.png"));
-                    if (page == "backup")
-                    {
-                        BackupPage.ChangeView(null, Math.Min(650, BackupPage.ScrollableHeight), null, true);
-                        await Task.Delay(250);
-                        await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"backup-middle-{width}{suffix}.png"));
-                        BackupPage.ChangeView(null, BackupPage.ScrollableHeight, null, true);
-                        await Task.Delay(250);
-                        await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"backup-bottom-{width}{suffix}.png"));
-                    }
-                    if (page == "settings")
-                    {
-                        SettingsPage.ChangeView(null, Math.Min(650, SettingsPage.ScrollableHeight), null, true);
-                        await Task.Delay(250);
-                        await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"settings-middle-{width}{suffix}.png"));
-                        SettingsPage.ChangeView(null, SettingsPage.ScrollableHeight, null, true);
-                        await Task.Delay(250);
-                        await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"settings-bottom-{width}{suffix}.png"));
-                    }
+                    SetPresentation(ClientPreview.ForState(state), theme);
+                    ValidatePresentation(state);
+                    await CapturePageAsync("overview", $"overview-{state}-{width}{suffix}");
                 }
+                SetPresentation(ClientPreview.Connected(), theme);
+                if (BackupRows.Children.Count != 5 || BackupRows.Children.Count + MoreWindowsFolders.Items.Count != KnownFolderBackup.FolderIds.Count)
+                    throw new InvalidOperationException("Common and enabled folders must remain visible, with all other Windows folders accessible.");
+                foreach (var page in new[] { "activity", "backup", "files", "settings" })
+                    await CapturePageAsync(page, $"{page}-{width}{suffix}");
+                var longHistory = Enumerable.Range(0, 180).Select(index => new ActivityEvent(DateTimeOffset.UtcNow.AddMinutes(-index),
+                    ActivityKind.Upload, $"Documents/Project {index:D3}/A document with a longer file name {index:D3}.docx", "Uploaded", 184320)).ToArray();
+                SetPresentation(ClientPreview.Connected() with { Activity = longHistory }, theme);
+                await CapturePageAsync("activity", $"activity-history-{width}{suffix}");
+                ActivityList.ScrollIntoView(_viewModel.Activity[^1]);
+                await Task.Delay(250);
+                var activityScroller = FindDescendant<ScrollViewer>(ActivityList);
+                if (activityScroller is null || activityScroller.ScrollableHeight <= 0 || activityScroller.VerticalOffset <= 0)
+                    throw new InvalidOperationException("A long activity history must allow the oldest item to be reached.");
+                await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"activity-history-bottom-{width}{suffix}.png"));
+                SetPresentation(ClientPreview.Connected(), theme);
+                MoreWindowsFolders.IsExpanded = true;
+                await CapturePageAsync("backup", $"backup-all-folders-{width}{suffix}");
+                BackupPage.ChangeView(null, BackupPage.ScrollableHeight, null, true);
+                await Task.Delay(180);
+                await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"backup-bottom-{width}{suffix}.png"));
+                MoreWindowsFolders.IsExpanded = false;
+                CustomBackupExpander.IsExpanded = true;
+                await CapturePageAsync("backup", $"backup-custom-{width}{suffix}");
+                BackupPage.ChangeView(null, BackupPage.ScrollableHeight, null, true);
+                await Task.Delay(180);
+                await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"backup-custom-bottom-{width}{suffix}.png"));
+                CustomBackupExpander.IsExpanded = false;
+                NetworkSettingsExpander.IsExpanded = ExclusionsExpander.IsExpanded = true;
+                await CapturePageAsync("settings", $"settings-expanded-{width}{suffix}");
+                SettingsPage.ChangeView(null, Math.Min(650, SettingsPage.ScrollableHeight), null, true);
+                await Task.Delay(180);
+                await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"settings-middle-{width}{suffix}.png"));
+                SettingsPage.ChangeView(null, SettingsPage.ScrollableHeight, null, true);
+                await Task.Delay(180);
+                await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"settings-bottom-{width}{suffix}.png"));
+                NetworkSettingsExpander.IsExpanded = ExclusionsExpander.IsExpanded = false;
+                SetPresentation(ClientPreview.ForState(ClientState.NotConnected), theme);
+                await CapturePageAsync("settings", $"settings-connect-{width}{suffix}");
+            }
+            AppWindow.Resize(new SizeInt32(1100, 840));
+            SetPresentation(ClientPreview.Connected() with { Activity = [] }, theme);
+            await CapturePageAsync("overview", $"overview-quiet-1100{suffix}");
+            if (RecentActivitySection.Visibility != Visibility.Collapsed)
+                throw new InvalidOperationException("An empty activity history must not take space on Overview.");
+            SetBusy(true, "Preparing your files before disconnecting…");
+            await CapturePageAsync("settings", $"settings-busy-1100{suffix}");
+            if (BusyFooter.Visibility != Visibility.Visible || !BusyRing.IsActive)
+                throw new InvalidOperationException("A running operation must expose its progress status.");
+            SetBusy(false, "");
+            SetPresentation(ClientPreview.Connected(), theme);
+            await CapturePageAsync("settings", $"settings-catalog{suffix}");
+            CatalogDialog.XamlRoot = RootGrid.XamlRoot;
+            CatalogDialog.RequestedTheme = theme;
+            CatalogKind.SelectedIndex = 0;
+            CatalogSearch.Text = "";
+            UpdateCatalog(resetCategories: true);
+            if (((ProductOption[])CatalogList.ItemsSource).Length != ProductCatalog.Providers.Count ||
+                ProductCatalog.Providers.Count(item => item.Available) != 1 || ProductCatalog.Modes.Count(item => item.Available) != 1)
+                throw new InvalidOperationException("The catalog must expose every planned provider and only the implemented options as available.");
+            // InPlace keeps the real dialog template in the window's visual
+            // tree. RenderTargetBitmap cannot capture popup-hosted content.
+            var dialogTask = CatalogDialog.ShowAsync(ContentDialogPlacement.InPlace);
+            await Task.Delay(300);
+            await CaptureCatalogAsync($"catalog-providers{suffix}");
+            CatalogSearch.Text = "Amazon";
+            await WaitForCatalogAsync(() => ((ProductOption[])CatalogList.ItemsSource) is [{ Id: "aws-s3", Available: false }], "Catalog search returned an incorrect provider or availability.");
+            await Task.Delay(180);
+            await CaptureCatalogAsync($"catalog-search{suffix}");
+            CatalogKind.SelectedIndex = 1;
+            CatalogSearch.Text = "";
+            await WaitForCatalogAsync(() => ((ProductOption[])CatalogList.ItemsSource).SequenceEqual(ProductCatalog.Modes), "The mode catalog must expose Native backup and both planned modes.");
+            await Task.Delay(180);
+            await CaptureCatalogAsync($"catalog-modes{suffix}");
+            CatalogDialog.Hide();
+            await dialogTask;
+        }
+        _viewModel.SetPreview(null);
+        LoadSettings(reloadAccount: true, reloadPreferences: true);
+        Refresh();
+        ShowPage("overview");
+
+        void SetPresentation(ClientPreview preview, ElementTheme theme)
+        {
+            _viewModel.SetPreview(preview with { Settings = preview.Settings with { Theme = theme.ToString() } });
+            _accountEditing = false;
+            LoadSettings(reloadAccount: true, reloadPreferences: true);
+            Refresh();
+        }
+
+        void ValidatePresentation(ClientState state)
+        {
+            if ((WelcomePanel.Visibility == Visibility.Visible) != (state == ClientState.NotConnected) ||
+                (TransferProgressPanel.Visibility == Visibility.Visible) != (state is ClientState.Syncing or ClientState.Connecting) ||
+                (ReviewDeletionsButton.Visibility == Visibility.Visible) != (state == ClientState.Attention))
+                throw new InvalidOperationException($"The {state} overview exposed controls from another state.");
+        }
+
+        async Task CaptureCatalogAsync(string fileName)
+        {
+            await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"), $"{fileName}: in-place dialog rendering{Environment.NewLine}");
+            await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"{fileName}.png"));
+        }
+
+        static async Task WaitForCatalogAsync(Func<bool> condition, string message)
+        {
+            // AutoSuggestBox delivers TextChanged after the current dispatcher
+            // work item, including when text is assigned programmatically.
+            var timeout = Stopwatch.StartNew();
+            while (!condition())
+            {
+                if (timeout.Elapsed > TimeSpan.FromSeconds(3)) throw new InvalidOperationException(message);
+                await Task.Delay(20);
             }
         }
-        Navigation.SelectedItem = Navigation.MenuItems[0];
-        ShowPage("overview");
-        AppWindow.Resize(new SizeInt32(1100, 840));
-        RootGrid.RequestedTheme = ElementTheme.Light;
-        await Task.Delay(300);
-        await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, "overview-light.png"));
-        Navigation.SelectedItem = Navigation.SettingsItem;
-        ShowPage("settings");
-        SettingsPage.ChangeView(null, Math.Min(650, SettingsPage.ScrollableHeight), null, true);
-        await Task.Delay(300);
-        await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, "settings-middle-light.png"));
-        Navigation.SelectedItem = Navigation.MenuItems[2];
-        ShowPage("backup");
-        BackupPage.ChangeView(null, Math.Min(650, BackupPage.ScrollableHeight), null, true);
-        await Task.Delay(300);
-        await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, "backup-middle-light.png"));
-        ApplyTheme(_controller.Settings.Theme);
-        Navigation.SelectedItem = Navigation.MenuItems[0];
-        ShowPage("overview");
+
+        async Task CapturePageAsync(string page, string fileName)
+        {
+            Navigation.SelectedItem = page == "settings" ? Navigation.SettingsItem : Navigation.MenuItems.Cast<NavigationViewItem>().First(item => (string)item.Tag == page);
+            ShowPage(page);
+            await Task.Delay(500);
+            RootGrid.UpdateLayout();
+            if (page != "activity")
+            {
+                var viewer = page switch { "backup" => BackupPage, "files" => FilesPage, "settings" => SettingsPage, _ => OverviewPage };
+                var content = (FrameworkElement)viewer.Content;
+                var position = content.TransformToVisual(RootGrid).TransformPoint(new global::Windows.Foundation.Point());
+                var viewportPosition = viewer.TransformToVisual(RootGrid).TransformPoint(new global::Windows.Foundation.Point());
+                await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"),
+                    $"{fileName}: root={RootGrid.ActualWidth}, viewport={viewer.ActualWidth}, content={content.ActualWidth}, x={position.X}{Environment.NewLine}");
+                if (position.X < viewportPosition.X - 1 || position.X + content.ActualWidth > viewportPosition.X + viewer.ActualWidth + 1)
+                    throw new InvalidOperationException($"The {page} page extends beyond its visible area.");
+            }
+            else
+            {
+                var position = ActivityPage.TransformToVisual(RootGrid).TransformPoint(new global::Windows.Foundation.Point());
+                if (position.X < -1 || position.X + ActivityPage.ActualWidth > RootGrid.ActualWidth + 1)
+                    throw new InvalidOperationException("The activity page extends beyond its visible area.");
+            }
+            await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"{fileName}.png"));
+        }
+    }
+
+    private static T? FindDescendant<T>(DependencyObject parent, Func<T, bool>? predicate = null) where T : DependencyObject
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, index);
+            if (child is T match && (predicate is null || predicate(match))) return match;
+            if (FindDescendant<T>(child, predicate) is { } descendant) return descendant;
+        }
+        return null;
     }
 }
