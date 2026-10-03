@@ -84,9 +84,9 @@ public sealed partial class TrayWindow : Window
         if (GetDpiForMonitor(monitor, 0, out var monitorDpi, out _) == 0) dpi = monitorDpi;
         var scale = dpi > 0 ? dpi / 96d : 1;
         var margin = (int)Math.Round(12 * scale);
-        var width = Math.Min((int)Math.Round(420 * scale), Math.Max(320, work.Width - margin * 2));
+        var width = Math.Min((int)Math.Round(448 * scale), Math.Max(1, work.Width - margin * 2));
         TrayRoot.Measure(new global::Windows.Foundation.Size(width / scale, double.PositiveInfinity));
-        var height = Math.Min((int)Math.Ceiling(Math.Max(210, TrayRoot.DesiredSize.Height) * scale), work.Height - margin * 2);
+        var height = Math.Min((int)Math.Ceiling(Math.Max(210, TrayRoot.DesiredSize.Height) * scale), Math.Max(1, work.Height - margin * 2));
         _lastHeight = height;
         var x = work.X + work.Width - width - margin;
         var y = work.Y + work.Height - height - margin;
@@ -125,14 +125,19 @@ public sealed partial class TrayWindow : Window
         TrayViewActivity.Visibility = _viewModel.HasActivity ? Visibility.Visible : Visibility.Collapsed;
         TrayActivityColumn.Width = _viewModel.HasActivity ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
         TrayBucket.Visibility = settings.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
-        TrayStatusDetail.Visibility = _viewModel.HasStatusDetail ? Visibility.Visible : Visibility.Collapsed;
+        TrayStatusDetail.Visibility = _viewModel.HasStatusDetail || snapshot.State == ClientState.NotConnected
+            ? Visibility.Visible : Visibility.Collapsed;
         TrayLastSync.Visibility = _viewModel.HasLastSync ? Visibility.Visible : Visibility.Collapsed;
         TrayTransferPanel.Visibility = _viewModel.IsProgressVisible ? Visibility.Visible : Visibility.Collapsed;
         TrayProgress.IsIndeterminate = snapshot.TransferTotalBytes <= 0;
-        TrayOpenFolder.Content = settings.IsConfigured ? "Open folder" : "Connect account";
-        QuickSyncNow.IsEnabled = QuickOpenFolder.IsEnabled = settings.IsConfigured;
-        PauseMenu.IsEnabled = settings.IsConfigured && snapshot.State != ClientState.Paused;
-        ResumeMenu.IsEnabled = settings.IsConfigured && snapshot.State == ClientState.Paused;
+        TrayProgressDetail.Visibility = string.IsNullOrEmpty(_viewModel.ProgressLabel) ? Visibility.Collapsed : Visibility.Visible;
+        TrayPrimaryLabel.Text = settings.IsConfigured ? "Open folder" : "Connect account";
+        TrayPrimaryGlyph.Glyph = settings.IsConfigured ? "\uE8B7" : "\uE753";
+        QuickSyncNow.IsEnabled = settings.IsConfigured && !_busy;
+        QuickOpenFolder.IsEnabled = settings.IsConfigured;
+        PauseMenu.Visibility = snapshot.State == ClientState.Paused ? Visibility.Collapsed : Visibility.Visible;
+        ResumeMenu.Visibility = snapshot.State == ClientState.Paused ? Visibility.Visible : Visibility.Collapsed;
+        PauseMenu.IsEnabled = ResumeMenu.IsEnabled = settings.IsConfigured && !_busy;
         MeteredQuickSetting.IsChecked = settings.PauseOnMetered;
         BatteryQuickSetting.IsChecked = settings.PauseOnBatterySaver;
         MeteredQuickSetting.IsEnabled = BatteryQuickSetting.IsEnabled = !_busy;
@@ -142,6 +147,14 @@ public sealed partial class TrayWindow : Window
             "Dark" => ElementTheme.Dark,
             _ => ElementTheme.Default
         };
+        var statusStyle = snapshot.State switch
+        {
+            ClientState.UpToDate => "TraySuccessIconStyle",
+            ClientState.Attention => "TrayCautionIconStyle",
+            ClientState.Offline or ClientState.Paused => "TrayNeutralIconStyle",
+            _ => "TrayAccentIconStyle"
+        };
+        TrayStatusGlyph.Style = (Style)TrayRoot.Resources[statusStyle];
         if (AppWindow.IsVisible && !_menuOpen) ResizeToContent();
     }
 
@@ -191,6 +204,7 @@ public sealed partial class TrayWindow : Window
     {
         if (_busy || _viewModel.Preview is not null) return;
         _busy = true;
+        Refresh();
         try { await _controller.SyncNowAsync(); }
         catch (Exception error) { ShowError(error); }
         finally { _busy = false; Refresh(); }
@@ -239,13 +253,23 @@ public sealed partial class TrayWindow : Window
         App.MainWindow?.ShowActivity();
     }
 
-    private void Quit_Click(object sender, RoutedEventArgs args) => _quit();
+    private void Quit_Click(object sender, RoutedEventArgs args)
+    {
+        if (_viewModel.Preview is not null) return;
+        _quit();
+    }
+
+    private void TrayError_Closed(InfoBar sender, InfoBarClosedEventArgs args)
+    {
+        if (!_closed && AppWindow.IsVisible && !_menuOpen) ResizeToContent();
+    }
 
     private void ShowError(Exception error)
     {
         TrayError.Title = "Needs attention";
         TrayError.Message = error.Message;
         TrayError.IsOpen = true;
+        if (AppWindow.IsVisible && !_menuOpen) ResizeToContent();
     }
 
     public async Task RunUiSmokeAsync(string outputDirectory)
@@ -262,6 +286,10 @@ public sealed partial class TrayWindow : Window
                 ShowAtTray();
                 await Task.Delay(220);
                 ResizeToContent();
+                TrayRoot.UpdateLayout();
+                AssertTrayLayout(state);
+                await File.AppendAllTextAsync(Path.Combine(outputDirectory, "tray-assertions.txt"),
+                    $"PASS: {state}{suffix} has the correct contextual content, native gear dimensions, and reachable footer actions.{Environment.NewLine}");
                 await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"), $"tray-{state}{suffix}: width={AppWindow.Size.Width}, height={AppWindow.Size.Height}{Environment.NewLine}");
                 await UiSmokeCapture.SaveAsync(TrayRoot, Path.Combine(outputDirectory, $"tray-{state}{suffix}.png"));
             }
@@ -274,9 +302,58 @@ public sealed partial class TrayWindow : Window
             if (TrayActivitySection.Visibility != Visibility.Collapsed || AppWindow.Size.Height >= historyHeight)
                 throw new InvalidOperationException("The tray must shrink when there is no activity to display.");
             await UiSmokeCapture.SaveAsync(TrayRoot, Path.Combine(outputDirectory, $"tray-quiet{suffix}.png"));
+
+            var bounded = ClientPreview.ForState(ClientState.Attention);
+            _viewModel.SetPreview(bounded with
+            {
+                Settings = bounded.Settings with { Theme = theme.ToString() },
+                Snapshot = bounded.Snapshot with
+                {
+                    Message = string.Join(" ", Enumerable.Repeat(
+                        "CloudBay is waiting for you to review changes before it syncs these deletions to Backblaze B2.", 6))
+                }
+            });
+            ShowAtTray();
+            var scale = GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this)) / 96d;
+            AppWindow.Resize(new SizeInt32((int)Math.Round(448 * scale), (int)Math.Round(320 * scale)));
+            await Task.Delay(220);
+            TrayRoot.UpdateLayout();
+            AssertFooterWithinViewport();
+            if (TrayContentScroll.ScrollableHeight <= 0)
+                throw new InvalidOperationException("A height-constrained tray must scroll its content while retaining the footer.");
+            await UiSmokeCapture.SaveAsync(TrayRoot, Path.Combine(outputDirectory, $"tray-bounded{suffix}.png"));
+            await File.AppendAllTextAsync(Path.Combine(outputDirectory, "tray-assertions.txt"),
+                $"PASS: quiet{suffix} shrinks and hides empty history; bounded{suffix} scrolls long content while retaining both footer actions.{Environment.NewLine}");
         }
         _viewModel.SetPreview(null);
         Refresh();
+    }
+
+    private void AssertTrayLayout(ClientState state)
+    {
+        var hasHistory = _viewModel.HasActivity;
+        var hasProgress = state is ClientState.Syncing or ClientState.Connecting;
+        if ((TrayActivitySection.Visibility == Visibility.Visible) != hasHistory ||
+            (TrayActivityHeading.Visibility == Visibility.Visible) != hasHistory ||
+            (TrayViewActivity.Visibility == Visibility.Visible) != hasHistory ||
+            (TrayTransferPanel.Visibility == Visibility.Visible) != hasProgress ||
+            (ResumeMenu.Visibility == Visibility.Visible) != (state == ClientState.Paused))
+            throw new InvalidOperationException($"The {state} tray contains an irrelevant section or omits a relevant action.");
+        if (Math.Abs(QuickSettingsIcon.ActualWidth - 20) > 0.5 ||
+            Math.Abs(QuickSettingsIcon.ActualHeight - 20) > 0.5 ||
+            QuickSettingsButton.ActualWidth < 40 || QuickSettingsButton.ActualHeight < 40)
+            throw new InvalidOperationException("The settings animation must stay within a 20 px icon and a 40 px button.");
+        AssertFooterWithinViewport();
+    }
+
+    private void AssertFooterWithinViewport()
+    {
+        foreach (var button in new[] { TrayOpenFolder, TrayViewActivity }.Where(button => button.Visibility == Visibility.Visible))
+        {
+            var origin = button.TransformToVisual(TrayRoot).TransformPoint(new global::Windows.Foundation.Point(0, 0));
+            if (button.ActualHeight < 48 || origin.Y < 0 || origin.Y + button.ActualHeight > TrayRoot.ActualHeight + 1)
+                throw new InvalidOperationException("Tray footer actions must retain their target size and remain inside the window.");
+        }
     }
 
     [StructLayout(LayoutKind.Sequential)] private struct Point { public int X; public int Y; }

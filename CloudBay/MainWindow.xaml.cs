@@ -11,6 +11,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Input;
 using Windows.Graphics;
 using Windows.Storage.Pickers;
 using Windows.UI.ViewManagement;
@@ -23,13 +24,13 @@ namespace CloudBay;
 public sealed partial class MainWindow : Window
 {
     private readonly ClientController _controller;
-    private const double PageColumnWidth = 860;
-    private readonly FontIconSource _overviewStatusIcon = new() { FontSize = 12 };
+    private const double PageColumnWidth = 1120;
     private string _statusStyleKey = "";
     private readonly ClientViewModel _viewModel;
     private readonly Dictionary<string, ToggleSwitch> _backupSwitches = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, TextBlock> _backupPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string?> _backupAvailability = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _backupMetadataPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, SettingsCard> _backupCards = new(StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<string> CommonBackups = new(StringComparer.OrdinalIgnoreCase) { "Desktop", "Documents", "Pictures", "Downloads" };
     private bool _accountEditing;
@@ -37,6 +38,8 @@ public sealed partial class MainWindow : Window
     private AppSettings DisplaySettings => _viewModel.Preview?.Settings ?? _controller.Settings;
     private SyncSnapshot DisplaySnapshot => _viewModel.Preview?.Snapshot ?? _controller.Snapshot;
     private string _customBackupRevision = "";
+    private string _backupPresentationRevision = "";
+    private int _backupMetadataRevision;
     private string _fileScopesRevision = "";
     private bool _refreshingFileScopes;
     private bool _busy;
@@ -47,6 +50,8 @@ public sealed partial class MainWindow : Window
     private AppSettings? _loadedSettings;
     private string _versionPath = "";
     private bool? _compactLayout;
+    private string _settingsRoute = "home";
+    private Control? _settingsOrigin;
     private readonly UISettings _uiSettings = new();
     private readonly Style? _openFolderAccentStyle;
     private readonly string? _livePagePath = Environment.GetCommandLineArgs().Contains("--ui-live")
@@ -61,11 +66,14 @@ public sealed partial class MainWindow : Window
         _openFolderAccentStyle = OpenFolderButton.Style;
         _viewModel = new ClientViewModel(controller);
         RootGrid.DataContext = _viewModel;
-        OverviewStatusBadge.IconSource = _overviewStatusIcon;
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
         AppWindow.Title = "CloudBay";
-        AppWindow.Resize(new SizeInt32(1180, 840));
+        var workArea = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Nearest).WorkArea;
+        var initialWidth = Math.Min(1360, workArea.Width - 32);
+        var initialHeight = Math.Min(900, workArea.Height - 32);
+        AppWindow.MoveAndResize(new RectInt32(workArea.X + (workArea.Width - initialWidth) / 2,
+            workArea.Y + (workArea.Height - initialHeight) / 2, initialWidth, initialHeight));
         var icon = Path.Combine(AppContext.BaseDirectory, "Assets", "CloudBay.ico");
         if (File.Exists(icon)) AppWindow.SetIcon(icon);
         AppWindow.Closing += (_, args) =>
@@ -83,6 +91,7 @@ public sealed partial class MainWindow : Window
         CreateBackupRows();
         LoadSettings();
         Refresh();
+        if (Navigation.SelectedItem is NavigationViewItem { Tag: "backup" }) RefreshBackups(refreshMetadata: true);
         _controller.Changed += Controller_Changed;
         var initialPage = Environment.GetCommandLineArgs().FirstOrDefault(arg => arg.StartsWith("--page=", StringComparison.Ordinal))?[7..];
         if (initialPage is null && _livePagePath is not null)
@@ -91,8 +100,19 @@ public sealed partial class MainWindow : Window
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
         }
-        Navigation.SelectedItem = initialPage == "settings" ? Navigation.SettingsItem :
+        Navigation.SelectedItem = initialPage?.StartsWith("settings", StringComparison.Ordinal) == true ? Navigation.SettingsItem :
             Navigation.MenuItems.Cast<NavigationViewItem>().FirstOrDefault(item => (string)item.Tag == initialPage) ?? Navigation.MenuItems[0];
+        if (initialPage?.StartsWith("settings/", StringComparison.Ordinal) == true) OpenSettingsRoute(initialPage[9..]);
+        Navigation.ItemInvoked += (_, args) => { if (args.IsSettingsInvoked) OpenSettingsRoute("home"); };
+        RootGrid.KeyDown += (_, args) =>
+        {
+            if (args.Key == global::Windows.System.VirtualKey.GoBack ||
+                (args.Key == global::Windows.System.VirtualKey.Left &&
+                 Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(global::Windows.System.VirtualKey.Menu).HasFlag(global::Windows.UI.Core.CoreVirtualKeyStates.Down)))
+            {
+                if (SettingsPage.Visibility == Visibility.Visible && _settingsRoute != "home") { ReturnToSettingsHome(); args.Handled = true; }
+            }
+        };
         RootGrid.SizeChanged += (_, _) => UpdateResponsiveLayout();
         OverviewPage.SizeChanged += (_, _) => UpdateResponsiveLayout();
         BackupPage.SizeChanged += (_, _) => UpdateResponsiveLayout();
@@ -117,6 +137,7 @@ public sealed partial class MainWindow : Window
     {
         Navigation.SelectedItem = Navigation.SettingsItem;
         ShowPage("settings");
+        OpenSettingsRoute("home");
         ShowWindow();
     }
 
@@ -141,20 +162,19 @@ public sealed partial class MainWindow : Window
     {
         if (_closed) return;
         _viewModel.Refresh();
-        _overviewStatusIcon.Glyph = _viewModel.StatusGlyph;
         var settings = DisplaySettings;
         var snapshot = DisplaySnapshot;
         var badgeStyle = snapshot.State switch
         {
-            ClientState.UpToDate => "SuccessDotInfoBadgeStyle",
-            ClientState.Attention => "CautionDotInfoBadgeStyle",
-            ClientState.Offline or ClientState.Paused => "InformationalDotInfoBadgeStyle",
-            _ => "DefaultInfoBadgeStyle"
+            ClientState.UpToDate => "CloudBayStatusSuccessIconStyle",
+            ClientState.Attention => "CloudBayStatusCautionIconStyle",
+            ClientState.Offline or ClientState.Paused => "CloudBayStatusNeutralIconStyle",
+            _ => "CloudBayStatusAccentIconStyle"
         };
         if (_statusStyleKey != badgeStyle)
         {
             _statusStyleKey = badgeStyle;
-            OverviewStatusBadge.Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources[badgeStyle];
+            OverviewStatusIcon.Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources[badgeStyle];
         }
         WelcomePanel.Visibility = FilesConnectPanel.Visibility = settings.IsConfigured ? Visibility.Collapsed : Visibility.Visible;
         ConnectedOverview.Visibility = FilesConnectedPanel.Visibility = settings.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
@@ -174,6 +194,13 @@ public sealed partial class MainWindow : Window
         ReviewDeletionsButton.Visibility = snapshot.State == ClientState.Attention && snapshot.Message.StartsWith("Review required:", StringComparison.Ordinal) ? Visibility.Visible : Visibility.Collapsed;
         OpenFolderButton.Style = snapshot.State == ClientState.Attention ? null : _openFolderAccentStyle;
         DisconnectButton.Visibility = settings.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
+        DisconnectAccountCard.Visibility = settings.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
+        StartAtSignInBox.IsEnabled = settings.IsConfigured && !_busy;
+        StartupSettingsCard.Description = settings.IsConfigured ? "Start CloudBay automatically when you sign in." : "Connect an account to use automatic startup.";
+        SettingsAccountCard.Header = settings.IsConfigured ? settings.BucketName : "Connect your account";
+        SettingsAccountCard.Description = settings.IsConfigured ? "Backblaze B2 · Native backup" : "Backblaze B2 · Connect a private bucket to start protecting your files.";
+        SyncCategory.Description = settings.FilesOnDemand ? "Files on demand is on · Windows manages downloaded files." : "Keep your files downloaded on this PC.";
+        AppearanceCategory.Description = settings.Theme == "System" ? "Use your Windows theme." : $"{settings.Theme} theme";
         OpenFolderButton.IsEnabled = _viewModel.IsConfigured;
         OpenFolderButton.Visibility = SyncNowButton.Visibility = DashboardPauseButton.Visibility = _viewModel.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
         SyncNowButton.Visibility = _viewModel.IsConfigured && snapshot.State is not (ClientState.Syncing or ClientState.Connecting or ClientState.Attention) ? Visibility.Visible : Visibility.Collapsed;
@@ -207,13 +234,14 @@ public sealed partial class MainWindow : Window
             _ => OverviewPage
         };
         selected.Visibility = Visibility.Visible;
+        if (page == "backup") RefreshBackups(refreshMetadata: true);
         if (selected is ScrollViewer viewer) viewer.ChangeView(null, 0, null, true);
         if (_livePagePath is not null)
         {
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(_livePagePath)!);
-                File.WriteAllText(_livePagePath, page);
+                File.WriteAllText(_livePagePath, page == "settings" && _settingsRoute != "home" ? $"settings/{_settingsRoute}" : page);
             }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
@@ -254,7 +282,7 @@ public sealed partial class MainWindow : Window
                 ThemeBox.SelectedItem = ThemeBox.Items.Cast<ComboBoxItem>().FirstOrDefault(item => (string)item.Tag == settings.Theme) ?? ThemeBox.Items[0];
         }
         finally { _loadingPreferences = false; }
-        AccountHeading.Text = settings.IsConfigured ? "Manage your account" : "Connect to Backblaze B2";
+        AccountHeading.Text = "Backblaze B2";
         AccountDescription.Text = settings.IsConfigured ? "Replace your application key or review connection options." : "Enter your private bucket and application key.";
         ConnectButton.Content = settings.IsConfigured ? "Update connection" : "Connect account";
         // The sync root identity and key namespace are fixed once registered with
@@ -271,9 +299,14 @@ public sealed partial class MainWindow : Window
         foreach (var (viewer, content) in new[] { (OverviewPage, OverviewContent), (BackupPage, BackupContent), (FilesPage, FilesContent), (SettingsPage, SettingsContent) })
             if (viewer.ActualWidth > 0) content.Width = Math.Min(PageColumnWidth, viewer.ActualWidth);
         if (ContentLayoutGrid.ActualWidth > 0) ActivityPage.Width = Math.Min(PageColumnWidth, ContentLayoutGrid.ActualWidth);
+        ArrangeTiles(SettingsCategories, SettingsContent.Width - 64 >= 660 * _uiSettings.TextScaleFactor ? 2 : 1);
         var pane = Navigation.DisplayMode == NavigationViewDisplayMode.Expanded ? Navigation.OpenPaneLength :
             Navigation.DisplayMode == NavigationViewDisplayMode.Compact ? Navigation.CompactPaneLength : 0;
         var compact = Navigation.ActualWidth - pane < 670;
+        var backupColumns = BackupContent.Width - 64 >= 660 * _uiSettings.TextScaleFactor ? 2 : 1;
+        ArrangeTiles(BackupRows, backupColumns);
+        ArrangeTiles(MoreBackupRows, backupColumns);
+        ArrangeTiles(CustomBackupRows, backupColumns);
         if (_compactLayout == compact) return;
         _compactLayout = compact;
         DashboardActions.Orientation = FileActions.Orientation = compact ? Orientation.Vertical : Orientation.Horizontal;
@@ -296,6 +329,7 @@ public sealed partial class MainWindow : Window
 
     private void CreateBackupRows()
     {
+        RefreshBackupMetadata();
         foreach (var name in KnownFolderBackup.FolderIds.Keys)
         {
             var glyph = name switch
@@ -305,36 +339,55 @@ public sealed partial class MainWindow : Window
                 "Favorites" => "\uE734", "Contacts" => "\uE77B", "Saved Games" => "\uE7FC",
                 "Links" => "\uE71B", "Searches" => "\uE721", _ => "\uE8B7"
             };
-            string description;
-            try
-            {
-                description = KnownFolderBackup.GetPath(name);
-                _backupAvailability[name] = KnownFolderBackup.GetRestriction(name);
-                if (_backupAvailability[name] is { } restriction) description += Environment.NewLine + restriction;
-            }
-            catch { description = "This Windows folder is unavailable on this device"; _backupAvailability[name] = description; }
-            var path = new TextBlock { Text = description, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudBaySecondaryTextStyle"], FontSize = 12 };
+            var description = _backupMetadataPaths[name];
+            var path = new TextBlock { Text = description, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudBaySecondaryTextStyle"],
+                TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis };
+            ToolTipService.SetToolTip(path, description);
             var toggle = new ToggleSwitch { Tag = name, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudBayToggleStyle"] };
             AutomationProperties.SetName(toggle, $"Back up {name}");
             toggle.Toggled += Backup_Toggled;
             var folderIcon = FolderIconProvider.GetIcon(name);
             var card = new SettingsCard
             {
-                Header = name,
+                Header = new TextBlock { Text = name, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["BodyStrongTextBlockStyle"] },
                 Description = path,
-                HeaderIcon = folderIcon is not null ? new ImageIcon { Source = folderIcon, Width = 24, Height = 24 } : new FontIcon { Glyph = glyph },
-                Content = toggle
+                HeaderIcon = folderIcon is not null ? new ImageIcon { Source = folderIcon, Width = 32, Height = 32 } : new FontIcon { Glyph = glyph, FontSize = 28 },
+                Content = toggle,
+                MinHeight = 104,
+                Padding = new Thickness(16)
             };
+            card.Resources["SettingsCardHeaderIconMaxSize"] = 32d;
+            card.Resources["SettingsCardWrapThreshold"] = 0d;
             if (CommonBackups.Contains(name)) BackupRows.Children.Add(card);
-            else MoreWindowsFolders.Items.Add(card);
+            else MoreBackupRows.Children.Add(card);
             _backupCards.Add(name, card);
             _backupSwitches.Add(name, toggle);
             _backupPaths.Add(name, path);
         }
     }
 
-    private void RefreshBackups()
+    private void RefreshBackupMetadata()
     {
+        foreach (var name in KnownFolderBackup.FolderIds.Keys)
+        {
+            try
+            {
+                _backupMetadataPaths[name] = KnownFolderBackup.GetPath(name);
+                _backupAvailability[name] = KnownFolderBackup.GetRestriction(name);
+            }
+            catch { _backupMetadataPaths[name] = "This Windows folder is unavailable on this device"; _backupAvailability[name] = _backupMetadataPaths[name]; }
+        }
+        _backupMetadataRevision++;
+    }
+
+    private void RefreshBackups(bool refreshMetadata = false)
+    {
+        if (refreshMetadata) RefreshBackupMetadata();
+        var settings = DisplaySettings;
+        var revision = $"{settings.RootPath}|{settings.IsConfigured}|{_busy}|{_backupMetadataRevision}|" +
+            string.Join('|', settings.Backups.Select(folder => $"{folder.Name}:{folder.DestinationPath}"));
+        if (_backupPresentationRevision == revision) return;
+        _backupPresentationRevision = revision;
         _refreshingBackups = true;
         try
         {
@@ -349,26 +402,20 @@ public sealed partial class MainWindow : Window
                     // but its collection still owns the card. Remove from the
                     // owning collection before promoting an enabled folder.
                     BackupRows.Children.Remove(card);
-                    MoreWindowsFolders.Items.Remove(card);
+                    MoreBackupRows.Children.Remove(card);
                     if (primary) BackupRows.Children.Add(card);
-                    else MoreWindowsFolders.Items.Add(card);
+                    else MoreBackupRows.Children.Add(card);
                 }
                 toggle.IsOn = backup is not null;
                 toggle.IsEnabled = DisplaySettings.IsConfigured && !_busy && _backupAvailability[name] is null;
                 if (backup is not null) _backupPaths[name].Text = backup.DestinationPath;
-                else if (_backupAvailability[name] is { } unavailable)
-                {
-                    try { _backupPaths[name].Text = KnownFolderBackup.GetPath(name) + Environment.NewLine + unavailable; }
-                    catch { _backupPaths[name].Text = unavailable; }
-                }
-                else
-                {
-                    try { _backupPaths[name].Text = KnownFolderBackup.GetPath(name); }
-                    catch { _backupPaths[name].Text = "This Windows folder is unavailable on this device"; toggle.IsEnabled = false; }
-                }
+                else _backupPaths[name].Text = _backupMetadataPaths[name];
+                ToolTipService.SetToolTip(_backupPaths[name], _backupPaths[name].Text + (_backupAvailability[name] is { } unavailable ? Environment.NewLine + unavailable : ""));
+                AutomationProperties.SetHelpText(toggle, _backupAvailability[name] ?? "");
             }
         }
         finally { _refreshingBackups = false; }
+        UpdateResponsiveLayout();
     }
 
     private void RefreshCustomBackups()
@@ -401,13 +448,17 @@ public sealed partial class MainWindow : Window
             actions.Children.Add(more);
             CustomBackupRows.Children.Add(new SettingsCard
             {
-                Header = folder.Name,
-                Description = new TextBlock { Text = folder.SourcePath, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudBaySecondaryTextStyle"] },
+                Header = new TextBlock { Text = folder.Name, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["BodyStrongTextBlockStyle"] },
+                Description = new TextBlock { Text = folder.SourcePath, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudBaySecondaryTextStyle"], TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis },
                 HeaderIcon = FolderIconProvider.GetCustomFolderIcon() is { } folderIcon
-                    ? new ImageIcon { Source = folderIcon, Width = 24, Height = 24 } : new FontIcon { Glyph = "\uE8B7" },
-                Content = actions
+                    ? new ImageIcon { Source = folderIcon, Width = 32, Height = 32 } : new FontIcon { Glyph = "\uE8B7" },
+                Content = actions,
+                MinHeight = 104
             });
+            ToolTipService.SetToolTip(CustomBackupRows.Children[^1], folder.SourcePath);
+            ((SettingsCard)CustomBackupRows.Children[^1]).Resources["SettingsCardHeaderIconMaxSize"] = 32d;
         }
+        UpdateResponsiveLayout();
     }
 
     private async void ChooseCustomBackup_Click(object sender, RoutedEventArgs args) =>
@@ -515,7 +566,7 @@ public sealed partial class MainWindow : Window
         var enabled = toggle.IsOn;
         await RunAsync(enabled ? $"Setting up {name} backup…" : $"Restoring {name} to its original location…",
             () => _controller.SetBackupAsync(name, enabled), enabled ? $"{name} backup is on." : $"{name} backup is off.");
-        RefreshBackups();
+        RefreshBackups(refreshMetadata: true);
     }
 
     private async void Connect_Click(object sender, RoutedEventArgs args)
@@ -614,6 +665,7 @@ public sealed partial class MainWindow : Window
             ApplicationKeyBox.Password = "";
             _accountEditing = false;
             LoadSettings(reloadAccount: true, reloadPreferences: true);
+            RefreshBackups(refreshMetadata: true);
             ShowInfo("The account is disconnected. Your local files and B2 files were retained.");
         });
     }
@@ -653,12 +705,54 @@ public sealed partial class MainWindow : Window
 
     private void ManageBackup_Click(object sender, RoutedEventArgs args) => Navigation.SelectedItem = Navigation.MenuItems[2];
     private void ViewActivity_Click(object sender, RoutedEventArgs args) => ShowActivity();
-    private void Settings_Click(object sender, RoutedEventArgs args) => ShowSettings();
+    private void Settings_Click(object sender, RoutedEventArgs args)
+    {
+        ShowSettings();
+        OpenSettingsRoute("account");
+    }
+
+    private async void SettingsCategory_Click(object sender, RoutedEventArgs args)
+    {
+        if (sender is not FrameworkElement { Tag: string route } element) return;
+        if (route == "catalog") { await OpenCatalogAsync(); return; }
+        _settingsOrigin = element as Control;
+        OpenSettingsRoute(route);
+        DispatcherQueue.TryEnqueue(() => { if (!_closed) SettingsBackButton.Focus(FocusState.Programmatic); });
+    }
+
+    private void SettingsBack_Click(object sender, RoutedEventArgs args) => ReturnToSettingsHome();
+
+    private void ReturnToSettingsHome()
+    {
+        OpenSettingsRoute("home");
+        _settingsOrigin?.Focus(FocusState.Programmatic);
+    }
+
+    private void OpenSettingsRoute(string route)
+    {
+        var routes = new Dictionary<string, (FrameworkElement Panel, string Title)>(StringComparer.Ordinal)
+        {
+            ["account"] = (AccountSettingsDetail, "Account"), ["sync"] = (SyncSettingsDetail, "Sync"),
+            ["network"] = (NetworkSettingsDetail, "Network and power"), ["appearance"] = (AppearanceSettingsDetail, "Appearance"),
+            ["general"] = (GeneralSettingsDetail, "General"), ["about"] = (AboutSettingsDetail, "About CloudBay")
+        };
+        _settingsRoute = routes.ContainsKey(route) ? route : "home";
+        foreach (var item in routes.Values) item.Panel.Visibility = Visibility.Collapsed;
+        SettingsHub.Visibility = _settingsRoute == "home" ? Visibility.Visible : Visibility.Collapsed;
+        SettingsDetail.Visibility = _settingsRoute == "home" ? Visibility.Collapsed : Visibility.Visible;
+        if (routes.TryGetValue(_settingsRoute, out var detail))
+        {
+            detail.Panel.Visibility = Visibility.Visible;
+            SettingsDetailTitle.Text = detail.Title;
+        }
+        if (SettingsPage.Visibility == Visibility.Visible) ShowPage("settings");
+    }
 
     private void ManageAccount_Click(object sender, RoutedEventArgs args)
     {
         _accountEditing = true;
         Refresh();
+        OpenSettingsRoute("account");
         SettingsPage.ChangeView(null, 0, null, true);
         ApplicationKeyBox.Focus(FocusState.Programmatic);
     }
@@ -840,7 +934,9 @@ public sealed partial class MainWindow : Window
         RefreshCustomBackups();
     }
 
-    private async void Catalog_Click(object sender, RoutedEventArgs args)
+    private async void Catalog_Click(object sender, RoutedEventArgs args) => await OpenCatalogAsync();
+
+    private async Task OpenCatalogAsync()
     {
         if (_busy) return;
         CatalogDialog.XamlRoot = RootGrid.XamlRoot;
@@ -956,6 +1052,16 @@ public sealed partial class MainWindow : Window
             throw new InvalidOperationException("An invalid numeric draft was accepted.");
         }
         catch (InvalidOperationException error) when (error.Message.StartsWith("Upload limit must", StringComparison.Ordinal)) { }
+        ShowPage("settings");
+        SettingsCategory_Click(SyncCategory, new RoutedEventArgs());
+        await Task.Delay(80);
+        if (SettingsHub.Visibility != Visibility.Collapsed || SyncSettingsDetail.Visibility != Visibility.Visible ||
+            AccountSettingsDetail.Visibility != Visibility.Collapsed || UploadLimitBox.Text != "invalid draft" || ExclusionsBox.Text != "*.ui-validation")
+            throw new InvalidOperationException("Opening a settings category must retain drafts and expose only its focused detail.");
+        ReturnToSettingsHome();
+        if (SettingsHub.Visibility != Visibility.Visible || SettingsDetail.Visibility != Visibility.Collapsed ||
+            SyncCategory.FocusState == FocusState.Unfocused || UploadLimitBox.Text != "invalid draft")
+            throw new InvalidOperationException("Back must restore the category, keyboard focus, and unsaved drafts.");
         CustomBackupSourceBox.Text = CustomBackupNameBox.Text = "";
         _viewModel.SetPreview(null);
         LoadSettings(reloadAccount: true, reloadPreferences: true);
@@ -977,7 +1083,7 @@ public sealed partial class MainWindow : Window
                     await CapturePageAsync("overview", $"overview-{state}-{width}{suffix}");
                 }
                 SetPresentation(ClientPreview.Connected(), theme);
-                if (BackupRows.Children.Count != 5 || BackupRows.Children.Count + MoreWindowsFolders.Items.Count != KnownFolderBackup.FolderIds.Count)
+                if (BackupRows.Children.Count != 5 || BackupRows.Children.Count + MoreBackupRows.Children.Count != KnownFolderBackup.FolderIds.Count)
                     throw new InvalidOperationException("Common and enabled folders must remain visible, with all other Windows folders accessible.");
                 foreach (var page in new[] { "activity", "backup", "files", "settings" })
                     await CapturePageAsync(page, $"{page}-{width}{suffix}");
@@ -1004,17 +1110,21 @@ public sealed partial class MainWindow : Window
                 await Task.Delay(180);
                 await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"backup-custom-bottom-{width}{suffix}.png"));
                 CustomBackupExpander.IsExpanded = false;
+                foreach (var route in new[] { "account", "sync", "network", "appearance", "general", "about" })
+                    await CapturePageAsync("settings", $"settings-{route}-{width}{suffix}", route);
                 NetworkSettingsExpander.IsExpanded = ExclusionsExpander.IsExpanded = true;
-                await CapturePageAsync("settings", $"settings-expanded-{width}{suffix}");
-                SettingsPage.ChangeView(null, Math.Min(650, SettingsPage.ScrollableHeight), null, true);
-                await Task.Delay(180);
-                await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"settings-middle-{width}{suffix}.png"));
+                await CapturePageAsync("settings", $"settings-sync-expanded-{width}{suffix}", "sync");
                 SettingsPage.ChangeView(null, SettingsPage.ScrollableHeight, null, true);
                 await Task.Delay(180);
-                await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"settings-bottom-{width}{suffix}.png"));
+                await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"settings-sync-bottom-{width}{suffix}.png"));
+                await CapturePageAsync("settings", $"settings-network-expanded-{width}{suffix}", "network");
+                SettingsPage.ChangeView(null, SettingsPage.ScrollableHeight, null, true);
+                await Task.Delay(180);
+                await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"settings-network-bottom-{width}{suffix}.png"));
                 NetworkSettingsExpander.IsExpanded = ExclusionsExpander.IsExpanded = false;
                 SetPresentation(ClientPreview.ForState(ClientState.NotConnected), theme);
-                await CapturePageAsync("settings", $"settings-connect-{width}{suffix}");
+                await CapturePageAsync("settings", $"settings-connect-{width}{suffix}", "account");
+                await CapturePageAsync("settings", $"settings-home-disconnected-{width}{suffix}");
             }
             AppWindow.Resize(new SizeInt32(1100, 840));
             SetPresentation(ClientPreview.Connected() with { Activity = [] }, theme);
@@ -1092,10 +1202,11 @@ public sealed partial class MainWindow : Window
             }
         }
 
-        async Task CapturePageAsync(string page, string fileName)
+        async Task CapturePageAsync(string page, string fileName, string settingsRoute = "home")
         {
             Navigation.SelectedItem = page == "settings" ? Navigation.SettingsItem : Navigation.MenuItems.Cast<NavigationViewItem>().First(item => (string)item.Tag == page);
             ShowPage(page);
+            if (page == "settings") OpenSettingsRoute(settingsRoute);
             await Task.Delay(500);
             RootGrid.UpdateLayout();
             if (page != "activity")
@@ -1128,5 +1239,29 @@ public sealed partial class MainWindow : Window
             if (FindDescendant<T>(child, predicate) is { } descendant) return descendant;
         }
         return null;
+    }
+
+    private static void ArrangeTiles(Grid grid, int columns)
+    {
+        if (grid.ColumnDefinitions.Count != columns)
+        {
+            grid.ColumnDefinitions.Clear();
+            for (var index = 0; index < columns; index++) grid.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+        }
+        var rows = (grid.Children.Count + columns - 1) / columns;
+        while (grid.RowDefinitions.Count > rows) grid.RowDefinitions.RemoveAt(grid.RowDefinitions.Count - 1);
+        while (grid.RowDefinitions.Count < rows) grid.RowDefinitions.Add(new() { Height = GridLength.Auto });
+        for (var index = 0; index < grid.Children.Count; index++)
+        {
+            Grid.SetRow((FrameworkElement)grid.Children[index], index / columns);
+            Grid.SetColumn((FrameworkElement)grid.Children[index], index % columns);
+        }
+    }
+
+    private static bool IsWithin(DependencyObject child, DependencyObject ancestor)
+    {
+        for (var current = child; current is not null; current = VisualTreeHelper.GetParent(current))
+            if (ReferenceEquals(current, ancestor)) return true;
+        return false;
     }
 }

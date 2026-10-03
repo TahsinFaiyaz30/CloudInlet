@@ -4,272 +4,256 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:animated="using:Microsoft.UI.Xaml.Controls.AnimatedVisuals">
     <Window.SystemBackdrop>
-        <MicaBackdrop
-            Kind="BaseAlt" />
+        <MicaBackdrop Kind="BaseAlt" />
     </Window.SystemBackdrop>
-    <Border
+    <Grid
         x:Name="TrayRoot"
-        Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}"
-        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-        BorderThickness="1"
-        CornerRadius="8">
-        <Grid>
-            <Grid.RowDefinitions>
-                <RowDefinition
-                    Height="Auto" />
-                <RowDefinition
-                    Height="Auto" />
-                <RowDefinition
-                    Height="Auto" />
-                <RowDefinition
-                    Height="Auto" />
-                <RowDefinition
-                    Height="Auto" />
-            </Grid.RowDefinitions>
-            <Grid
-                Padding="20,16"
-                ColumnSpacing="10">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition
-                        Width="Auto" />
-                    <ColumnDefinition
-                        Width="*" />
-                    <ColumnDefinition
-                        Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <Image
-                    Source="/Assets/CloudBay-32.png"
-                    Width="28"
-                    Height="28" />
-                <StackPanel
-                    Grid.Column="1"
-                    Spacing="2">
-                    <TextBlock
-                        Text="CloudBay"
-                        Style="{StaticResource BodyLargeTextBlockStyle}"
-                        FontWeight="SemiBold" />
-                    <TextBlock
-                        x:Name="TrayBucket"
-                        Text="{Binding BucketLabel}"
-                        FontSize="12"
-                        Style="{StaticResource CloudBaySecondaryTextStyle}"
-                        TextTrimming="CharacterEllipsis" />
-                </StackPanel>
-                <Button
-                    x:Name="QuickSettingsButton"
-                    Grid.Column="2"
-                    Background="Transparent"
-                    BorderThickness="0"
-                    AutomationProperties.Name="Quick settings"
-                    ToolTipService.ToolTip="Quick settings"
-                    PointerEntered="QuickSettings_PointerEntered"
-                    PointerExited="QuickSettings_PointerExited"
-                    GotFocus="QuickSettings_GotFocus"
-                    LostFocus="QuickSettings_LostFocus">
-                    <AnimatedIcon
-                        x:Name="QuickSettingsIcon"
-                        Width="20"
-                        Height="20">
-                        <AnimatedIcon.Source>
-                            <animated:AnimatedSettingsVisualSource />
-                        </AnimatedIcon.Source>
-                        <AnimatedIcon.FallbackIconSource>
-                            <FontIconSource
-                                FontFamily="{ThemeResource SymbolThemeFontFamily}"
-                                Glyph="" />
-                        </AnimatedIcon.FallbackIconSource>
-                    </AnimatedIcon>
-                    <Button.Flyout>
-                        <MenuFlyout
-                            x:Name="QuickSettingsMenu"
-                            Placement="BottomEdgeAlignedRight"
-                            Opening="QuickSettings_Opening"
-                            Closed="QuickSettings_Closed">
-                            <MenuFlyoutItem
-                                x:Name="QuickSyncNow"
-                                Text="Sync now"
-                                Click="SyncNow_Click">
-                                <MenuFlyoutItem.Icon>
-                                    <FontIcon
-                                        Glyph="" />
-                                </MenuFlyoutItem.Icon>
-                            </MenuFlyoutItem>
-                            <MenuFlyoutSubItem
-                                x:Name="PauseMenu"
-                                Text="Pause syncing">
-                                <MenuFlyoutSubItem.Icon>
-                                    <FontIcon
-                                        Glyph="" />
-                                </MenuFlyoutSubItem.Icon>
-                                <MenuFlyoutItem
-                                    Text="For 1 hour"
-                                    Tag="1"
-                                    Click="PauseFor_Click" />
-                                <MenuFlyoutItem
-                                    Text="For 2 hours"
-                                    Tag="2"
-                                    Click="PauseFor_Click" />
-                                <MenuFlyoutItem
-                                    Text="For 8 hours"
-                                    Tag="8"
-                                    Click="PauseFor_Click" />
-                                <MenuFlyoutItem
-                                    Text="Until I resume"
-                                    Tag="0"
-                                    Click="PauseFor_Click" />
-                            </MenuFlyoutSubItem>
-                            <MenuFlyoutItem
-                                x:Name="ResumeMenu"
-                                Text="Resume syncing"
-                                Click="Resume_Click">
-                                <MenuFlyoutItem.Icon>
-                                    <FontIcon
-                                        Glyph="" />
-                                </MenuFlyoutItem.Icon>
-                            </MenuFlyoutItem>
-                            <MenuFlyoutSeparator />
-                            <ToggleMenuFlyoutItem
-                                x:Name="MeteredQuickSetting"
-                                Text="Pause on metered connections"
-                                Click="MeteredQuickSetting_Click" />
-                            <ToggleMenuFlyoutItem
-                                x:Name="BatteryQuickSetting"
-                                Text="Pause with Battery Saver"
-                                Click="BatteryQuickSetting_Click" />
-                            <MenuFlyoutSeparator />
-                            <MenuFlyoutItem
-                                x:Name="QuickOpenFolder"
-                                Text="Open CloudBay folder"
-                                Click="OpenFolder_Click">
-                                <MenuFlyoutItem.Icon>
-                                    <FontIcon
-                                        Glyph="" />
-                                </MenuFlyoutItem.Icon>
-                            </MenuFlyoutItem>
-                            <MenuFlyoutItem
-                                Text="All settings"
-                                Click="AllSettings_Click">
-                                <MenuFlyoutItem.Icon>
-                                    <FontIcon
-                                        Glyph="" />
-                                </MenuFlyoutItem.Icon>
-                            </MenuFlyoutItem>
-                            <MenuFlyoutSeparator />
-                            <MenuFlyoutItem
-                                Text="Quit CloudBay"
-                                Click="Quit_Click">
-                                <MenuFlyoutItem.Icon>
-                                    <FontIcon
-                                        Glyph="" />
-                                </MenuFlyoutItem.Icon>
-                            </MenuFlyoutItem>
-                        </MenuFlyout>
-                    </Button.Flyout>
-                </Button>
-            </Grid>
-            <StackPanel
-                Grid.Row="1"
-                Padding="20,4,20,18"
-                Spacing="12">
-                <Grid
-                    ColumnSpacing="12">
+        Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}">
+        <Grid.Resources>
+            <Style x:Key="TraySuccessIconStyle" TargetType="FontIcon">
+                <Setter Property="Foreground" Value="{ThemeResource SystemFillColorSuccessBrush}" />
+            </Style>
+            <Style x:Key="TrayCautionIconStyle" TargetType="FontIcon">
+                <Setter Property="Foreground" Value="{ThemeResource SystemFillColorCautionBrush}" />
+            </Style>
+            <Style x:Key="TrayNeutralIconStyle" TargetType="FontIcon">
+                <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+            </Style>
+            <Style x:Key="TrayAccentIconStyle" TargetType="FontIcon">
+                <Setter Property="Foreground" Value="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+            </Style>
+            <DataTemplate x:Key="TrayRecentActivityTemplate">
+                <Grid Padding="0,12" ColumnSpacing="16">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition
-                            Width="Auto" />
-                        <ColumnDefinition
-                            Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
                     <FontIcon
-                        Glyph="{Binding StatusGlyph}"
-                        FontSize="24"
-                        VerticalAlignment="Top"
+                        Glyph="{Binding Glyph}"
+                        FontSize="20"
                         Margin="0,2,0,0"
-                        Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
-                    <StackPanel
-                        Grid.Column="1"
-                        Spacing="4">
+                        VerticalAlignment="Top"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <StackPanel Grid.Column="1" Spacing="4">
                         <TextBlock
-                            Text="{Binding StatusTitle}"
+                            Text="{Binding FileName}"
                             Style="{StaticResource BodyStrongTextBlockStyle}"
-                            TextWrapping="Wrap" />
+                            TextTrimming="CharacterEllipsis"
+                            ToolTipService.ToolTip="{Binding Path}" />
                         <TextBlock
-                            x:Name="TrayStatusDetail"
-                            Text="{Binding StatusDescription}"
+                            Text="{Binding Summary}"
                             Style="{StaticResource CloudBaySecondaryTextStyle}"
-                            FontSize="12" />
+                            ToolTipService.ToolTip="{Binding TimeFullText}" />
                         <TextBlock
-                            x:Name="TrayLastSync"
-                            Text="{Binding LastSyncLabel}"
-                            ToolTipService.ToolTip="{Binding LastSyncFullLabel}"
-                            Style="{StaticResource CloudBaySecondaryTextStyle}"
-                            FontSize="12" />
+                            Text="{Binding Detail}"
+                            Visibility="{Binding DetailVisibility}"
+                            Style="{StaticResource CloudBaySecondaryTextStyle}" />
                     </StackPanel>
                 </Grid>
-                <StackPanel
-                    x:Name="TrayTransferPanel"
-                    Visibility="Collapsed"
-                    Spacing="6">
-                    <ProgressBar
-                        x:Name="TrayProgress"
-                        Value="{Binding Progress}"
-                        Maximum="100" />
-                    <TextBlock
-                        Text="{Binding ProgressLabel}"
-                        Style="{StaticResource CloudBaySecondaryTextStyle}"
-                        FontSize="12" />
-                </StackPanel>
-                <InfoBar
-                    x:Name="TrayError"
-                    IsOpen="False"
-                    IsClosable="True"
-                    Severity="Error" />
-            </StackPanel>
-            <Grid
-                x:Name="TrayActivityHeading"
-                Grid.Row="2"
-                Padding="20,12,20,8"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+            </DataTemplate>
+        </Grid.Resources>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- The identity stays on Mica; the activity uses one distinct content layer. -->
+        <Grid Padding="24,20,20,20" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Image Source="/Assets/CloudBay-32.png" Width="32" Height="32" />
+            <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                <TextBlock Text="CloudBay" Style="{StaticResource BodyStrongTextBlockStyle}" />
                 <TextBlock
-                    Text="Recent activity"
-                    Style="{StaticResource BodyStrongTextBlockStyle}" />
-            </Grid>
-            <Grid
-                x:Name="TrayActivitySection"
-                Grid.Row="3"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
-                <ListView
-                    ItemsSource="{Binding RecentActivity}"
-                    ItemTemplate="{StaticResource TrayActivityTemplate}"
-                    SelectionMode="None"
-                    HorizontalContentAlignment="Stretch"
-                    Padding="8,0,8,8"
-                    MaxHeight="250" />
-            </Grid>
-            <Grid
-                Grid.Row="4"
-                Padding="20,14"
-                ColumnSpacing="8">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition
-                        x:Name="TrayPrimaryColumn"
-                        Width="*" />
-                    <ColumnDefinition
-                        x:Name="TrayActivityColumn"
-                        Width="*" />
-                </Grid.ColumnDefinitions>
-                <Button
-                    x:Name="TrayOpenFolder"
-                    Content="Open folder"
-                    Style="{StaticResource AccentButtonStyle}"
-                    HorizontalAlignment="Stretch"
-                    Click="OpenFolder_Click" />
-                <Button
-                    x:Name="TrayViewActivity"
-                    Grid.Column="1"
-                    Content="View activity"
-                    HorizontalAlignment="Stretch"
-                    Click="ViewActivity_Click" />
-            </Grid>
+                    x:Name="TrayBucket"
+                    Text="{Binding BucketLabel}"
+                    Style="{StaticResource CloudBaySecondaryTextStyle}"
+                    TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+            <Button
+                x:Name="QuickSettingsButton"
+                Grid.Column="2"
+                Width="40"
+                Height="40"
+                Padding="10"
+                Style="{StaticResource SubtleButtonStyle}"
+                AutomationProperties.Name="Quick settings"
+                ToolTipService.ToolTip="Quick settings"
+                PointerEntered="QuickSettings_PointerEntered"
+                PointerExited="QuickSettings_PointerExited"
+                GotFocus="QuickSettings_GotFocus"
+                LostFocus="QuickSettings_LostFocus">
+                <AnimatedIcon x:Name="QuickSettingsIcon" Width="20" Height="20">
+                    <AnimatedIcon.Source>
+                        <animated:AnimatedSettingsVisualSource />
+                    </AnimatedIcon.Source>
+                    <AnimatedIcon.FallbackIconSource>
+                        <FontIconSource FontFamily="{ThemeResource SymbolThemeFontFamily}" Glyph="&#xE713;" />
+                    </AnimatedIcon.FallbackIconSource>
+                </AnimatedIcon>
+                <Button.Flyout>
+                    <MenuFlyout
+                        x:Name="QuickSettingsMenu"
+                        Placement="BottomEdgeAlignedRight"
+                        Opening="QuickSettings_Opening"
+                        Closed="QuickSettings_Closed">
+                        <MenuFlyoutItem x:Name="QuickSyncNow" Text="Sync now" Click="SyncNow_Click">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE895;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutSubItem x:Name="PauseMenu" Text="Pause syncing">
+                            <MenuFlyoutSubItem.Icon><FontIcon Glyph="&#xE769;" /></MenuFlyoutSubItem.Icon>
+                            <MenuFlyoutItem Text="For 1 hour" Tag="1" Click="PauseFor_Click" />
+                            <MenuFlyoutItem Text="For 2 hours" Tag="2" Click="PauseFor_Click" />
+                            <MenuFlyoutItem Text="For 8 hours" Tag="8" Click="PauseFor_Click" />
+                            <MenuFlyoutItem Text="Until I resume" Tag="0" Click="PauseFor_Click" />
+                        </MenuFlyoutSubItem>
+                        <MenuFlyoutItem x:Name="ResumeMenu" Text="Resume syncing" Click="Resume_Click">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE768;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutSeparator />
+                        <ToggleMenuFlyoutItem
+                            x:Name="MeteredQuickSetting"
+                            Text="Pause on metered connections"
+                            Click="MeteredQuickSetting_Click" />
+                        <ToggleMenuFlyoutItem
+                            x:Name="BatteryQuickSetting"
+                            Text="Pause with Battery Saver"
+                            Click="BatteryQuickSetting_Click" />
+                        <MenuFlyoutSeparator />
+                        <MenuFlyoutItem x:Name="QuickOpenFolder" Text="Open CloudBay folder" Click="OpenFolder_Click">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8B7;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem Text="All settings" Click="AllSettings_Click">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE713;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutSeparator />
+                        <MenuFlyoutItem Text="Quit CloudBay" Click="Quit_Click">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE7E8;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                    </MenuFlyout>
+                </Button.Flyout>
+            </Button>
         </Grid>
-    </Border>
+
+        <Border
+            x:Name="TrayContentSurface"
+            Grid.Row="1"
+            Margin="12,0,12,0"
+            CornerRadius="8"
+            Background="{ThemeResource LayerFillColorDefaultBrush}">
+            <!-- This viewport can shrink on a small monitor without hiding the footer. -->
+            <ScrollViewer
+                x:Name="TrayContentScroll"
+                MaxHeight="520"
+                Padding="24"
+                VerticalScrollBarVisibility="Auto"
+                HorizontalScrollBarVisibility="Disabled"
+                HorizontalScrollMode="Disabled">
+                <StackPanel Spacing="20">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <FontIcon
+                            x:Name="TrayStatusGlyph"
+                            Glyph="{Binding StatusGlyph}"
+                            FontSize="32"
+                            VerticalAlignment="Top"
+                            Margin="0,2,0,0" />
+                        <StackPanel Grid.Column="1" Spacing="8">
+                            <TextBlock
+                                x:Name="TrayStatusTitle"
+                                Text="{Binding StatusTitle}"
+                                Style="{StaticResource SubtitleTextBlockStyle}"
+                                TextWrapping="Wrap" />
+                            <TextBlock
+                                x:Name="TrayStatusDetail"
+                                Text="{Binding StatusDescription}"
+                                Style="{StaticResource BodyTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextWrapping="Wrap" />
+                            <TextBlock
+                                x:Name="TrayLastSync"
+                                Text="{Binding LastSyncLabel}"
+                                ToolTipService.ToolTip="{Binding LastSyncFullLabel}"
+                                Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                        </StackPanel>
+                    </Grid>
+                    <StackPanel x:Name="TrayTransferPanel" Visibility="Collapsed" Spacing="8">
+                        <ProgressBar x:Name="TrayProgress" Value="{Binding Progress}" Maximum="100" />
+                        <TextBlock
+                            x:Name="TrayProgressDetail"
+                            Text="{Binding ProgressLabel}"
+                            Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                    </StackPanel>
+                    <InfoBar
+                        x:Name="TrayError"
+                        IsOpen="False"
+                        IsClosable="True"
+                        Severity="Error"
+                        Closed="TrayError_Closed" />
+                    <Grid x:Name="TrayActivityHeading" RowSpacing="16">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+                        <TextBlock Grid.Row="1" Text="Recent activity" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                    </Grid>
+                    <ListView
+                        x:Name="TrayActivitySection"
+                        ItemsSource="{Binding RecentActivity}"
+                        ItemTemplate="{StaticResource TrayRecentActivityTemplate}"
+                        SelectionMode="None"
+                        HorizontalContentAlignment="Stretch"
+                        Margin="0,-12,0,-12"
+                        Padding="0"
+                        ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                        ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="Padding" Value="0" />
+                                <Setter Property="Margin" Value="0" />
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                    </ListView>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <Grid Grid.Row="2" Padding="20,16,20,20" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition x:Name="TrayPrimaryColumn" Width="*" />
+                <ColumnDefinition x:Name="TrayActivityColumn" Width="*" />
+            </Grid.ColumnDefinitions>
+            <Button
+                x:Name="TrayOpenFolder"
+                Style="{StaticResource AccentButtonStyle}"
+                MinHeight="48"
+                HorizontalAlignment="Stretch"
+                Click="OpenFolder_Click">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon x:Name="TrayPrimaryGlyph" Glyph="&#xE8B7;" FontSize="16" />
+                    <TextBlock x:Name="TrayPrimaryLabel" Text="Open folder" />
+                </StackPanel>
+            </Button>
+            <Button
+                x:Name="TrayViewActivity"
+                Grid.Column="1"
+                MinHeight="48"
+                HorizontalAlignment="Stretch"
+                Click="ViewActivity_Click">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon Glyph="&#xE81C;" FontSize="16" />
+                    <TextBlock Text="Activity" />
+                </StackPanel>
+            </Button>
+        </Grid>
+    </Grid>
 </Window>

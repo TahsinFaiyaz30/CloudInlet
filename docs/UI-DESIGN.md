@@ -1,13 +1,14 @@
 # Windows 11 interface
 
-CloudBay uses native WinUI controls and Windows Community Toolkit SettingsCard and SettingsExpander controls. Their theme, focus, keyboard, hover, and adaptive layout behavior provide the Windows 11 foundation. The app's identity comes from the sync status, activity history, and folder organization.
+CloudBay uses native WinUI controls and Windows Community Toolkit SettingsCard and SettingsExpander controls. Their theme, focus, keyboard, hover, and adaptive layout behavior provide the Windows 11 foundation. The interface is being rebuilt around the Windows 11 page and navigation patterns shown in the owner's references. The app's identity comes from the sync status, activity history, and recognizable folder icons.
 
 ## Structure
 
 - Mica Alt is the window base. Navigation uses the commanding layer; NavigationView supplies the content layer once.
-- Page titles and section headings sit on the page above their content. A status or activity section does not need a large enclosing card.
-- Settings and backup controls use compact native rows: icon, label and description, then an action or switch. Related rows share a section heading. Advanced options expand on demand.
-- Pages share a bounded content width and consistent outer gutters. Activity remains a bounded, scrollable list.
+- Page titles and section headings provide hierarchy above purposeful content surfaces. Generous spacing and comfortable controls take priority over compactness.
+- Settings opens a home page with functional categories. Focused detail pages expose the account form, sync preferences, network options, appearance, and support when selected. Native back navigation connects the two levels; breadcrumbs are reserved for deeper hierarchies.
+- Backup uses recognizable Windows folder tiles, accessible switches, and paths in tooltips. Less common folders remain discoverable on demand.
+- Pages share consistent outer gutters and adapt to the available window width. Activity remains a bounded, scrollable list.
 - The tray uses a compact layout: current state, relevant progress, recent activity when present, and quick actions. Its height follows the visible content.
 
 ## Interaction
@@ -25,6 +26,8 @@ Review the five pages together at the same width and theme, then narrow layouts,
 ## Microsoft references
 
 - [App settings](https://learn.microsoft.com/en-us/windows/apps/design/app-settings/guidelines-for-app-settings)
+- [NavigationView](https://learn.microsoft.com/en-us/windows/apps/develop/ui/controls/navigationview)
+- [BreadcrumbBar](https://learn.microsoft.com/en-us/windows/apps/develop/ui/controls/breadcrumbbar)
 - [SettingsCard](https://learn.microsoft.com/en-us/dotnet/communitytoolkit/windows/settingscontrols/settingscard)
 - [Mica and Mica Alt layers](https://learn.microsoft.com/en-us/windows/apps/design/style/mica)
 - [Layering and elevation](https://learn.microsoft.com/en-us/windows/apps/design/signature-experiences/layering)

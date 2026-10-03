@@ -17,7 +17,7 @@
                 TargetType="StackPanel">
                 <Setter
                     Property="MaxWidth"
-                    Value="860" />
+                    Value="1120" />
                 <Setter
                     Property="Padding"
                     Value="{StaticResource CloudBayPageInset}" />
@@ -166,6 +166,34 @@
                         Style="{StaticResource CloudBaySecondaryTextStyle}" />
                 </Grid>
             </DataTemplate>
+            <Style
+                x:Key="CloudBayStatusSuccessIconStyle"
+                TargetType="FontIcon">
+                <Setter
+                    Property="Foreground"
+                    Value="{ThemeResource SystemFillColorSuccessBrush}" />
+            </Style>
+            <Style
+                x:Key="CloudBayStatusCautionIconStyle"
+                TargetType="FontIcon">
+                <Setter
+                    Property="Foreground"
+                    Value="{ThemeResource SystemFillColorCautionBrush}" />
+            </Style>
+            <Style
+                x:Key="CloudBayStatusNeutralIconStyle"
+                TargetType="FontIcon">
+                <Setter
+                    Property="Foreground"
+                    Value="{ThemeResource TextFillColorSecondaryBrush}" />
+            </Style>
+            <Style
+                x:Key="CloudBayStatusAccentIconStyle"
+                TargetType="FontIcon">
+                <Setter
+                    Property="Foreground"
+                    Value="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>
