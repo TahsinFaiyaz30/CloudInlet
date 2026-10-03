@@ -84,6 +84,12 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
         _openFolderAccentStyle = OpenFolderButton.Style;
         _viewModel = new ClientViewModel(controller);
+        ExclusionsEditor.OwnerWindowHandle = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        ExclusionsEditor.SaveChangesAsync = async update =>
+        {
+            if (_viewModel.Preview is not null) return;
+            await _controller.UpdatePreferencesAsync(update);
+        };
         RootGrid.DataContext = _viewModel;
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
@@ -432,7 +438,7 @@ public sealed partial class MainWindow : Window
             if (reloadPreferences || previous is null || MeteredBox.IsOn == previous.PauseOnMetered) MeteredBox.IsOn = settings.PauseOnMetered;
             if (reloadPreferences || previous is null || BatterySaverBox.IsOn == previous.PauseOnBatterySaver) BatterySaverBox.IsOn = settings.PauseOnBatterySaver;
             if (reloadPreferences || previous is null || StartAtSignInBox.IsOn == previous.StartAtSignIn) StartAtSignInBox.IsOn = settings.StartAtSignIn;
-            if (reloadPreferences || previous is null || ExclusionsBox.Text == string.Join(Environment.NewLine, previous.Exclusions)) ExclusionsBox.Text = string.Join(Environment.NewLine, settings.Exclusions);
+            ExclusionsEditor.SetSettings(settings, presentationOnly: _viewModel.Preview is not null);
             if (reloadPreferences || previous is null || (ThemeBox.SelectedItem as ComboBoxItem)?.Tag as string == previous.Theme)
                 ThemeBox.SelectedItem = ThemeBox.Items.Cast<ComboBoxItem>().FirstOrDefault(item => (string)item.Tag == settings.Theme) ?? ThemeBox.Items[0];
         }
@@ -460,7 +466,7 @@ public sealed partial class MainWindow : Window
         ArrangeTiles(SettingsCategories, settingsWidth >= 660 * _uiSettings.TextScaleFactor ? 2 : 1);
         if (settingsWidth > 0)
         {
-            ConnectionPanel.Width = Math.Min(900, settingsWidth);
+            ConnectionPanel.Width = Math.Min(720, settingsWidth);
             // Keep the secret full width. The shorter account identifiers share
             // a row only when their labels and inputs have comfortable space.
             var paired = ConnectionPanel.Width - ConnectionPanel.Padding.Left - ConnectionPanel.Padding.Right >= 560 * _uiSettings.TextScaleFactor;
@@ -926,14 +932,6 @@ public sealed partial class MainWindow : Window
             });
         }, "Bandwidth limits are applied.");
 
-    private async void ApplyExclusions_Click(object sender, RoutedEventArgs args) =>
-        await RunAsync("Applying excluded files…", async () =>
-        {
-            var exclusions = ExclusionsBox.Text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            await _controller.UpdatePreferencesAsync(new() { Exclusions = exclusions });
-        }, "File exclusions are applied.");
-
     private async void Disconnect_Click(object sender, RoutedEventArgs args)
     {
         if (_busy) return;
@@ -1003,6 +1001,17 @@ public sealed partial class MainWindow : Window
         _settingsOrigin = SyncCategory;
         OpenSettingsRoute("sync");
         FocusSettingsAfterLayout(SettingsBackButton, "sync");
+    }
+
+    private void ExclusionsSettings_Click(object sender, RoutedEventArgs args)
+    {
+        SyncSettings_Click(sender, args);
+        ExclusionsExpander.IsExpanded = true;
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_closed || CurrentRoute != "settings/sync") return;
+            ExclusionsExpander.StartBringIntoView();
+        });
     }
 
     private async void SettingsCategory_Click(object sender, RoutedEventArgs args)
@@ -1284,6 +1293,7 @@ public sealed partial class MainWindow : Window
         StatusInfoBar.Message = error.Message;
         StatusInfoBar.Severity = InfoBarSeverity.Error;
         StatusInfoBar.ActionButton = error.Message.Contains("OneDrive", StringComparison.OrdinalIgnoreCase) ? CreateWindowsBackupSettingsButton() : null;
+        StatusInfoBar.Visibility = Visibility.Visible;
         StatusInfoBar.IsOpen = true;
     }
 
@@ -1293,8 +1303,12 @@ public sealed partial class MainWindow : Window
         StatusInfoBar.Message = message;
         StatusInfoBar.Severity = InfoBarSeverity.Success;
         StatusInfoBar.ActionButton = null;
+        StatusInfoBar.Visibility = Visibility.Visible;
         StatusInfoBar.IsOpen = true;
     }
+
+    private void StatusInfoBar_Closed(InfoBar sender, InfoBarClosedEventArgs args) =>
+        sender.Visibility = Visibility.Collapsed;
 
     private Button CreateWindowsBackupSettingsButton()
     {
@@ -1321,6 +1335,17 @@ public sealed partial class MainWindow : Window
         await Task.Delay(300);
         RootGrid.UpdateLayout();
         AssertNavigationPresentation(_restoredInitialRoute);
+        if (StatusInfoBar.Visibility != Visibility.Collapsed)
+            throw new InvalidOperationException("A closed notice must not reserve space between the heading and page content.");
+        ShowInfo("UI validation notice");
+        RootGrid.UpdateLayout();
+        if (StatusInfoBar.Visibility != Visibility.Visible || StatusInfoBar.ActualHeight <= 0)
+            throw new InvalidOperationException("An open notice must remain visible and accessible.");
+        StatusInfoBar.IsOpen = false;
+        await Task.Delay(100);
+        RootGrid.UpdateLayout();
+        if (StatusInfoBar.Visibility != Visibility.Collapsed)
+            throw new InvalidOperationException("Dismissing a notice must restore the page's normal spacing.");
         await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"),
             $"startup-navigation-{themeArgument}: actual route={CurrentRoute}, title={CurrentPageTitle}, selected={Navigation.SelectedItem is NavigationViewItem}{Environment.NewLine}");
         await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"startup-navigation-{themeArgument?.ToLowerInvariant() ?? "dark"}.png"));
@@ -1349,11 +1374,10 @@ public sealed partial class MainWindow : Window
         CustomBackupSourceBox.Text = @"C:\CloudBay UI validation\Personal files";
         CustomBackupNameBox.Text = "Personal files";
         UploadLimitBox.Value = 512;
-        ExclusionsBox.Text = "*.ui-validation";
         RootPathBox.Text = @"C:\CloudBay UI validation\CloudBay";
         _viewModel.SetPreview(ClientPreview.Connected());
         Refresh();
-        if (UploadLimitBox.Value != 512 || ExclusionsBox.Text != "*.ui-validation" ||
+        if (UploadLimitBox.Value != 512 ||
             RootPathBox.Text != @"C:\CloudBay UI validation\CloudBay" ||
             CustomBackupSourceBox.Text != @"C:\CloudBay UI validation\Personal files" ||
             CustomBackupNameBox.Text != "Personal files")
@@ -1372,7 +1396,7 @@ public sealed partial class MainWindow : Window
         SettingsCategory_Click(SyncCategory, new RoutedEventArgs());
         await Task.Delay(80);
         if (SettingsHub.Visibility != Visibility.Collapsed || SyncSettingsDetail.Visibility != Visibility.Visible ||
-            AccountSettingsDetail.Visibility != Visibility.Collapsed || UploadLimitBox.Text != "invalid draft" || ExclusionsBox.Text != "*.ui-validation")
+            AccountSettingsDetail.Visibility != Visibility.Collapsed || UploadLimitBox.Text != "invalid draft")
             throw new InvalidOperationException("Opening a settings category must retain drafts and expose only its focused detail.");
         ReturnToSettingsHome();
         await WaitForUiAsync(() => SyncCategory.FocusState != FocusState.Unfocused,
@@ -1461,6 +1485,23 @@ public sealed partial class MainWindow : Window
             AppWindow.Resize(new SizeInt32(1600, 840));
             SetPresentation(ClientPreview.Connected(), theme);
             await CapturePageAsync("settings", $"settings-home-1600{suffix}");
+            AppWindow.Resize(new SizeInt32(1100, 840));
+            SetPresentation(ClientPreview.Connected(), theme);
+            ExclusionsExpander.IsExpanded = true;
+            Navigation.SelectedItem = Navigation.SettingsItem;
+            ShowPage("settings");
+            OpenSettingsRoute("sync");
+            await Task.Delay(100);
+            ExclusionsExpander.StartBringIntoView();
+            await ExclusionsEditor.RunUiValidationAsync(outputDirectory, async name =>
+            {
+                await Task.Delay(100);
+                if (name.Contains("save-failure", StringComparison.Ordinal))
+                    SettingsPage.ChangeView(null, SettingsPage.ScrollableHeight, null, true);
+                await Task.Delay(100);
+                await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, name + ".png"));
+            });
+            ExclusionsExpander.IsExpanded = false;
             AppWindow.Resize(new SizeInt32(800, 840));
             var externalPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Another provider", "Desktop");
             SetPresentation(ClientPreview.Connected() with { WindowsFolderPaths = new Dictionary<string, string>
@@ -1599,7 +1640,7 @@ public sealed partial class MainWindow : Window
             var pagePosition = selectedPage.TransformToVisual(RootGrid).TransformPoint(new global::Windows.Foundation.Point());
             var contentPosition = ForegroundLayout.TransformToVisual(RootGrid).TransformPoint(new global::Windows.Foundation.Point());
             if (headerPosition.Y < AppTitleBar.ActualHeight - 1 ||
-                contentPosition.Y + 1 < headerPosition.Y + PageHeader.ActualHeight + 12 ||
+                contentPosition.Y + 1 < headerPosition.Y + PageHeader.ActualHeight ||
                 pagePosition.Y + 1 < contentPosition.Y || !IsWithin(PageTitle, PageHeader) ||
                 !IsWithin(PageHeader, nativeContent) || !IsWithin(selectedPage, nativeContent) ||
                 IsWithin(PageTitle, selectedPage) || !IsWithin(selectedPage, ForegroundLayout) ||

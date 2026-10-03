@@ -19,6 +19,10 @@ CloudBay uses native WinUI controls and Windows Community Toolkit SettingsCard a
 
 Account setup remains an explicit operation. Preference changes apply immediately through a field-specific controller update that preserves account and folder ownership. Numeric values and exclusions commit only when valid. Failed saves remain visible and recoverable.
 
+Exclusions use one shared editor reached from Folder backup or Files and storage. The rule list shows readable names, scope, and an enable switch; editing and removal sit in each row's options menu. Add exclusion offers Windows file and folder pickers, file types, plain-text name matching, and an advanced token builder. Scope and an optional example check make advanced behavior reviewable before saving. A failed save retains the complete draft. Existing legacy patterns remain unchanged unless the user explicitly edits them.
+
+The fixed page header and task content use a single spacing interval. Closed notices take no layout space, quiet status cards size to their contents, and Account fields retain a comfortable maximum width. These changes adjust composition while retaining native text and control sizes.
+
 Settings routes retain their instantiated editors, so returning Home and opening another category preserves drafts. Back restores focus to the originating action after layout. Account actions open the editor directly and focus the bucket field for setup or the application-key field for an existing connection. Backup tiles use cached Windows mappings and show attention when another app changes a location; they cannot advertise that external location as a protected CloudBay folder.
 
 Fluent icons communicate actions consistently. Personal folders use Windows' own colored icons, retrieved from their Known Folder definitions; custom folders use the Windows stock folder icon. The icon reader opens only local Windows resource files, frees native handles after rendering, and caches a bounded set of images on each UI thread. Missing resources retain a Fluent icon fallback.

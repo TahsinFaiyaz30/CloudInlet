@@ -8,12 +8,13 @@ The previous mounted-drive migration helper is preserved on the **`legacy` branc
 
 - Notification area icon and activity flyout with upload/download history, pause/resume, quick settings, and full settings.
 - Files On-Demand, native Explorer status, download progress, always-available files, and freeing local space.
-- Windows Storage Sense integration for eligible clean, unpinned cloud content. Windows owns cache retention; configure it through **Settings → Sync → Windows Storage Sense**.
+- Windows Storage Sense integration for eligible clean, unpinned cloud content. Windows owns cache retention; configure it through **Settings → Files and storage → Windows Storage Sense**.
 - Backup for Desktop, Documents, Pictures, Music, Videos, Downloads, Favorites, Contacts, Saved Games, Links, Searches, and 3D Objects where Windows makes them available. Turning on a personal folder backup changes its actual Windows default location after a verified copy. Apps using that Windows folder then save to CloudBay automatically.
 - Custom personal folder backup in its existing location, with its own native sync root. No symlinks or mounted drives.
 - Persistent B2 connections and reusable exclusive upload sessions for small files, streaming multipart uploads, concurrency controls, and shared upload/download speed caps.
 - Durable sync state, conflict copies, exact-set review of large deletion batches, version-preserving B2 deletion, empty-folder sync, and previous-version restore.
-- Optional pause on metered connections or Battery Saver, sign-in startup, exclusions, and Windows light/dark/system themes.
+- Visual exclusions: browse for files or folders, choose file types, match names, or assemble advanced path patterns from named parts. Rules can apply to all backups, one backup, or a specific folder, and can be edited, disabled, or removed.
+- Optional pause on metered connections or Battery Saver, sign-in startup, and Windows light/dark/system themes.
 - Application keys encrypted with current-user Windows DPAPI. Account disconnect downloads and converts cloud files into normal local files before removing provider registrations.
 
 ## Run
@@ -42,6 +43,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1
 5. In Explorer, use availability commands for offline access. The **Files** page can pin/free files and folders, browse B2 versions, and restore a selected version. Its folder selector includes custom backup roots.
 
 Closing the main window keeps CloudBay running. Use the tray menu's **Quit CloudBay** to exit. A second launch opens the running app.
+
+## Choose exclusions
+
+Open **Folder backup → Exclusions** or **Settings → Files and storage → Exclusions**, then select **Add exclusion**. File and folder selections use the Windows picker and stay tied to the backup containing the selected item. File-type and name rules use ordinary text and matching choices. The advanced builder offers literal text, any text within a name, one character, folder separators, and any number of subfolders; parts can be moved or removed. Its preview and optional example check show how a rule behaves before saving.
+
+Choose whether a rule matches files, folders and their contents, or both, then choose its scope. Exclusions skip backup and sync; existing local files and cloud copies are retained. Removing or disabling a rule resumes normal reconciliation. Previously saved patterns keep their original behavior until explicitly edited; disabling them preserves their exact pattern.
 
 ## Data and recovery
 

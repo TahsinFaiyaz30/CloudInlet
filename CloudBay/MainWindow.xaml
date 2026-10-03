@@ -2,6 +2,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:settings="using:CommunityToolkit.WinUI.Controls"
+    xmlns:views="using:CloudBay.Views"
     x:Class="CloudBay.MainWindow">
     <Window.SystemBackdrop>
         <MicaBackdrop Kind="BaseAlt" />
@@ -51,7 +52,7 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
-                <Grid x:Name="PageHeader" MaxWidth="1120" HorizontalAlignment="Center" Margin="8,0,12,0" Padding="24,24,24,0">
+                <Grid x:Name="PageHeader" MaxWidth="1120" HorizontalAlignment="Center" Margin="8,0,12,0" Padding="24,24,24,16">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
@@ -99,10 +100,12 @@
                 <InfoBar
                     x:Name="StatusInfoBar"
                     Grid.Row="1"
-                    Margin="32,16,32,0"
+                    Margin="32,12,32,0"
                     IsOpen="False"
+                    Visibility="Collapsed"
+                    Closed="StatusInfoBar_Closed"
                     IsClosable="True" />
-                <Grid x:Name="ForegroundLayout" Grid.Row="2" Margin="8,20,12,12">
+                <Grid x:Name="ForegroundLayout" Grid.Row="2" Margin="8,0,12,12">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
@@ -150,8 +153,7 @@
                                     Padding="24"
                                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                    BorderThickness="1"
-                                    MinHeight="200">
+                                    BorderThickness="1">
                                     <StackPanel Spacing="20">
                                         <Grid ColumnSpacing="16">
                                             <Grid.ColumnDefinitions>
@@ -421,6 +423,12 @@
                                     </settings:SettingsCard>
                                 </settings:SettingsExpander.Items>
                             </settings:SettingsExpander>
+                            <settings:SettingsCard Header="Exclusions" Description="Choose what to leave out of your backups."
+                                                   IsClickEnabled="True" Click="ExclusionsSettings_Click">
+                                <settings:SettingsCard.HeaderIcon>
+                                    <FontIcon Glyph="" />
+                                </settings:SettingsCard.HeaderIcon>
+                            </settings:SettingsCard>
                             <settings:SettingsExpander Header="How folder backup works">
                                 <settings:SettingsExpander.HeaderIcon>
                                     <FontIcon Glyph="" />
@@ -844,7 +852,7 @@
                                     <Border
                                         x:Name="ConnectionPanel"
                                         Padding="0"
-                                        MaxWidth="900"
+                                        MaxWidth="720"
                                         HorizontalAlignment="Left">
                                         <StackPanel Spacing="16">
                                             <Grid ColumnSpacing="12">
@@ -975,27 +983,17 @@
                                     <settings:SettingsExpander
                                         x:Name="ExclusionsExpander"
                                         Header="Excluded files and folders"
-                                        Description="Matching files stay local and are not backed up.">
+                                        Description="Choose files, folders, file types, or build a rule.">
                                         <settings:SettingsExpander.HeaderIcon>
                                             <FontIcon Glyph="" />
                                         </settings:SettingsExpander.HeaderIcon>
                                         <settings:SettingsExpander.Items>
                                             <settings:SettingsCard
-                                                Header="One name or pattern per line"
                                                 ContentAlignment="Vertical"
-                                                HorizontalContentAlignment="Stretch">
-                                                <StackPanel>
-                                                    <TextBox
-                                                        x:Name="ExclusionsBox"
-                                                        AcceptsReturn="True"
-                                                        MinHeight="120"
-                                                        TextWrapping="Wrap"
-                                                        PlaceholderText="node_modules&#xA;*.tmp" />
-                                                    <Button
-                                                        Content="Apply exclusions"
-                                                        Click="ApplyExclusions_Click"
-                                                        Margin="0,12,0,0" />
-                                                </StackPanel>
+                                                HorizontalContentAlignment="Stretch"
+                                                Background="Transparent"
+                                                BorderThickness="0">
+                                                <views:ExclusionEditor x:Name="ExclusionsEditor" />
                                             </settings:SettingsCard>
                                         </settings:SettingsExpander.Items>
                                     </settings:SettingsExpander>
