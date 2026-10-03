@@ -144,7 +144,7 @@
             Grid.Row="1"
             Margin="12,0,12,0"
             CornerRadius="8"
-            Background="{ThemeResource LayerFillColorDefaultBrush}">
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
             <!-- This viewport can shrink on a small monitor without hiding the footer. -->
             <ScrollViewer
                 x:Name="TrayContentScroll"
@@ -211,7 +211,6 @@
                         ItemTemplate="{StaticResource TrayRecentActivityTemplate}"
                         SelectionMode="None"
                         HorizontalContentAlignment="Stretch"
-                        Margin="0,-12,0,-12"
                         Padding="0"
                         ScrollViewer.VerticalScrollBarVisibility="Disabled"
                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
@@ -227,7 +226,11 @@
             </ScrollViewer>
         </Border>
 
-        <Grid Grid.Row="2" Padding="20,16,20,20" ColumnSpacing="12">
+        <Grid x:Name="TrayFooter" Grid.Row="2" Padding="20,16,20,20" ColumnSpacing="12">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition x:Name="TrayPrimaryColumn" Width="*" />
                 <ColumnDefinition x:Name="TrayActivityColumn" Width="*" />
@@ -237,7 +240,7 @@
                 Style="{StaticResource AccentButtonStyle}"
                 MinHeight="48"
                 HorizontalAlignment="Stretch"
-                Click="OpenFolder_Click">
+                Click="TrayPrimary_Click">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <FontIcon x:Name="TrayPrimaryGlyph" Glyph="&#xE8B7;" FontSize="16" />
                     <TextBlock x:Name="TrayPrimaryLabel" Text="Open folder" />
@@ -247,11 +250,12 @@
                 x:Name="TrayViewActivity"
                 Grid.Column="1"
                 MinHeight="48"
+                AutomationProperties.Name="View activity"
                 HorizontalAlignment="Stretch"
                 Click="ViewActivity_Click">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <FontIcon Glyph="&#xE81C;" FontSize="16" />
-                    <TextBlock Text="Activity" />
+                    <TextBlock x:Name="TrayActivityLabel" Text="Activity" />
                 </StackPanel>
             </Button>
         </Grid>

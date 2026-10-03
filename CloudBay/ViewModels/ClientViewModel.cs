@@ -180,6 +180,8 @@ public sealed record SyncFolderItem(string Name, string? BackupName, string Root
 // registration, or transfer code. Never used outside the --ui-smoke process.
 public sealed record ClientPreview(AppSettings Settings, SyncSnapshot Snapshot, IReadOnlyList<ActivityEvent> Activity)
 {
+    public IReadOnlyDictionary<string, string>? WindowsFolderPaths { get; init; }
+
     public static ClientPreview ForState(ClientState state)
     {
         if (state == ClientState.NotConnected)

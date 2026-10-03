@@ -44,12 +44,13 @@
             <Style
                 x:Key="CloudBayListItemStyle"
                 TargetType="ListViewItem">
+                <Setter Property="CornerRadius" Value="4" />
                 <Setter
                     Property="Padding"
                     Value="0" />
                 <Setter
                     Property="Margin"
-                    Value="0" />
+                    Value="0,0,0,8" />
                 <Setter
                     Property="HorizontalContentAlignment"
                     Value="Stretch" />
@@ -64,6 +65,13 @@
                 <Setter
                     Property="TextWrapping"
                     Value="Wrap" />
+            </Style>
+            <Style x:Key="CloudBayBodySecondaryTextStyle" TargetType="TextBlock" BasedOn="{StaticResource BodyTextBlockStyle}">
+                <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+                <Setter Property="TextWrapping" Value="Wrap" />
+            </Style>
+            <Style x:Key="CloudBayAttentionTextStyle" TargetType="TextBlock" BasedOn="{StaticResource CloudBaySecondaryTextStyle}">
+                <Setter Property="Foreground" Value="{ThemeResource SystemFillColorCautionBrush}" />
             </Style>
             <DataTemplate
                 x:Key="ActivityTemplate">
@@ -87,7 +95,7 @@
                         Spacing="4">
                         <TextBlock
                             Text="{Binding FileName}"
-                            Style="{StaticResource BodyStrongTextBlockStyle}"
+                            Style="{StaticResource BodyTextBlockStyle}"
                             TextTrimming="CharacterEllipsis"
                             ToolTipService.ToolTip="{Binding Path}" />
                         <TextBlock
@@ -100,6 +108,11 @@
                             Style="{StaticResource CloudBaySecondaryTextStyle}" />
                     </StackPanel>
                 </Grid>
+            </DataTemplate>
+            <DataTemplate x:Key="ActivityRowTemplate">
+                <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="4" Padding="16,0">
+                    <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource ActivityTemplate}" />
+                </Border>
             </DataTemplate>
             <DataTemplate
                 x:Key="TrayActivityTemplate">

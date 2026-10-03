@@ -26,6 +26,8 @@ public sealed partial class TrayWindow : Window
     private readonly PointerEventHandler _settingsPressedHandler;
     private readonly PointerEventHandler _settingsReleasedHandler;
     private bool _anchorToTop;
+    private bool _footerStacked;
+    private bool _suppressAutoResize;
     private AppSettings DisplaySettings => _viewModel.Preview?.Settings ?? _controller.Settings;
     private SyncSnapshot DisplaySnapshot => _viewModel.Preview?.Snapshot ?? _controller.Snapshot;
 
@@ -42,6 +44,13 @@ public sealed partial class TrayWindow : Window
         AnimatedIcon.SetState(QuickSettingsIcon, "Normal");
         _viewModel = new ClientViewModel(controller);
         TrayRoot.DataContext = _viewModel;
+        TrayRoot.SizeChanged += (_, _) => UpdateFooterLayout();
+        TrayPrimaryLabel.SizeChanged += (_, _) => UpdateFooterLayout();
+        TrayActivityLabel.SizeChanged += (_, _) => UpdateFooterLayout();
+        TrayFooter.SizeChanged += (_, _) =>
+        {
+            if (!_closed && AppWindow.IsVisible && !_menuOpen && !_suppressAutoResize) ResizeToContent();
+        };
         AppWindow.Title = "CloudBay activity";
         AppWindow.IsShownInSwitchers = false;
         if (AppWindow.Presenter is OverlappedPresenter presenter)
@@ -85,8 +94,14 @@ public sealed partial class TrayWindow : Window
         var scale = dpi > 0 ? dpi / 96d : 1;
         var margin = (int)Math.Round(12 * scale);
         var width = Math.Min((int)Math.Round(448 * scale), Math.Max(1, work.Width - margin * 2));
-        TrayRoot.Measure(new global::Windows.Foundation.Size(width / scale, double.PositiveInfinity));
-        var height = Math.Min((int)Math.Ceiling(Math.Max(210, TrayRoot.DesiredSize.Height) * scale), Math.Max(1, work.Height - margin * 2));
+        var frameWidth = Math.Max(0, AppWindow.Size.Width - AppWindow.ClientSize.Width);
+        var frameHeight = Math.Max(0, AppWindow.Size.Height - AppWindow.ClientSize.Height);
+        // AppWindow.Size includes the remaining native frame even without a
+        // title bar. Measure wrapping against client pixels and retain enough
+        // outer height for the full content rather than silently clipping it.
+        TrayRoot.Measure(new global::Windows.Foundation.Size(Math.Max(1, width - frameWidth) / scale, double.PositiveInfinity));
+        var height = Math.Min((int)Math.Ceiling(Math.Max(210, TrayRoot.DesiredSize.Height) * scale) + frameHeight,
+            Math.Max(1, work.Height - margin * 2));
         _lastHeight = height;
         var x = work.X + work.Width - width - margin;
         var y = work.Y + work.Height - height - margin;
@@ -123,7 +138,6 @@ public sealed partial class TrayWindow : Window
         var snapshot = DisplaySnapshot;
         TrayActivityHeading.Visibility = TrayActivitySection.Visibility = _viewModel.HasActivity ? Visibility.Visible : Visibility.Collapsed;
         TrayViewActivity.Visibility = _viewModel.HasActivity ? Visibility.Visible : Visibility.Collapsed;
-        TrayActivityColumn.Width = _viewModel.HasActivity ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
         TrayBucket.Visibility = settings.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
         TrayStatusDetail.Visibility = _viewModel.HasStatusDetail || snapshot.State == ClientState.NotConnected
             ? Visibility.Visible : Visibility.Collapsed;
@@ -131,8 +145,11 @@ public sealed partial class TrayWindow : Window
         TrayTransferPanel.Visibility = _viewModel.IsProgressVisible ? Visibility.Visible : Visibility.Collapsed;
         TrayProgress.IsIndeterminate = snapshot.TransferTotalBytes <= 0;
         TrayProgressDetail.Visibility = string.IsNullOrEmpty(_viewModel.ProgressLabel) ? Visibility.Collapsed : Visibility.Visible;
-        TrayPrimaryLabel.Text = settings.IsConfigured ? "Open folder" : "Connect account";
-        TrayPrimaryGlyph.Glyph = settings.IsConfigured ? "\uE8B7" : "\uE753";
+        TrayPrimaryLabel.Text = snapshot.State == ClientState.Attention
+            ? snapshot.Message.StartsWith("Review required:", StringComparison.Ordinal) ? "Review changes" : "Open CloudBay"
+            : settings.IsConfigured ? "Open folder" : "Connect account";
+        TrayPrimaryGlyph.Glyph = snapshot.State == ClientState.Attention ? "\uE7BA" : settings.IsConfigured ? "\uE8B7" : "\uE753";
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(TrayOpenFolder, TrayPrimaryLabel.Text);
         QuickSyncNow.IsEnabled = settings.IsConfigured && !_busy;
         QuickOpenFolder.IsEnabled = settings.IsConfigured;
         PauseMenu.Visibility = snapshot.State == ClientState.Paused ? Visibility.Collapsed : Visibility.Visible;
@@ -155,7 +172,32 @@ public sealed partial class TrayWindow : Window
             _ => "TrayAccentIconStyle"
         };
         TrayStatusGlyph.Style = (Style)TrayRoot.Resources[statusStyle];
+        UpdateFooterLayout();
         if (AppWindow.IsVisible && !_menuOpen) ResizeToContent();
+    }
+
+    private void UpdateFooterLayout()
+    {
+        if (_closed || TrayRoot.ActualWidth <= 0) return;
+        var hasActivity = TrayViewActivity.Visibility == Visibility.Visible;
+        var availableWidth = TrayRoot.ActualWidth - TrayFooter.Padding.Left - TrayFooter.Padding.Right;
+        double NaturalWidth(Button button)
+        {
+            if (button.Content is not FrameworkElement content) return button.MinWidth;
+            content.Measure(new global::Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+            return Math.Max(button.MinWidth, content.DesiredSize.Width + button.Padding.Left + button.Padding.Right +
+                button.BorderThickness.Left + button.BorderThickness.Right);
+        }
+        // Native text scaling and changing captions participate in the actual
+        // measure, so large text gets full-width actions without a fixed scale
+        // threshold or a change to the user's Windows accessibility setting.
+        _footerStacked = hasActivity && Math.Max(NaturalWidth(TrayOpenFolder), NaturalWidth(TrayViewActivity)) * 2 + 12 > availableWidth;
+        TrayPrimaryColumn.Width = new GridLength(1, GridUnitType.Star);
+        TrayActivityColumn.Width = hasActivity && !_footerStacked ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
+        TrayFooter.ColumnSpacing = hasActivity && !_footerStacked ? 12 : 0;
+        TrayFooter.RowSpacing = hasActivity && _footerStacked ? 12 : 0;
+        Grid.SetRow(TrayViewActivity, _footerStacked ? 1 : 0);
+        Grid.SetColumn(TrayViewActivity, _footerStacked ? 0 : 1);
     }
 
     private void ResizeToContent()
@@ -164,9 +206,12 @@ public sealed partial class TrayWindow : Window
         var scale = dpi > 0 ? dpi / 96d : 1;
         var position = AppWindow.Position;
         var size = AppWindow.Size;
+        var clientSize = AppWindow.ClientSize;
+        var frameHeight = Math.Max(0, size.Height - clientSize.Height);
         var work = DisplayArea.GetFromPoint(position, DisplayAreaFallback.Nearest).WorkArea;
-        TrayRoot.Measure(new global::Windows.Foundation.Size(size.Width / scale, double.PositiveInfinity));
-        var height = Math.Min((int)Math.Ceiling(Math.Max(210, TrayRoot.DesiredSize.Height) * scale), work.Height - (int)(24 * scale));
+        TrayRoot.Measure(new global::Windows.Foundation.Size(Math.Max(1, clientSize.Width) / scale, double.PositiveInfinity));
+        var height = Math.Min((int)Math.Ceiling(Math.Max(210, TrayRoot.DesiredSize.Height) * scale) + frameHeight,
+            Math.Max(1, work.Height - (int)(24 * scale)));
         if (height == _lastHeight) return;
         _lastHeight = height;
         var y = Math.Clamp(_anchorToTop ? position.Y : position.Y + size.Height - height,
@@ -239,6 +284,24 @@ public sealed partial class TrayWindow : Window
         if (!_controller.Settings.IsConfigured) { AllSettings_Click(sender, args); return; }
         try { _controller.LaunchFolder(); AppWindow.Hide(); }
         catch (Exception error) { ShowError(error); }
+    }
+
+    private void TrayPrimary_Click(object sender, RoutedEventArgs args)
+    {
+        if (_viewModel.Preview is not null) return;
+        if (DisplaySnapshot.State == ClientState.Attention)
+        {
+            AppWindow.Hide();
+            App.MainWindow?.ShowOverview();
+            return;
+        }
+        if (!DisplaySettings.IsConfigured)
+        {
+            AppWindow.Hide();
+            App.MainWindow?.ShowAccount();
+            return;
+        }
+        OpenFolder_Click(sender, args);
     }
 
     private void AllSettings_Click(object sender, RoutedEventArgs args)
@@ -324,6 +387,42 @@ public sealed partial class TrayWindow : Window
             await UiSmokeCapture.SaveAsync(TrayRoot, Path.Combine(outputDirectory, $"tray-bounded{suffix}.png"));
             await File.AppendAllTextAsync(Path.Combine(outputDirectory, "tray-assertions.txt"),
                 $"PASS: quiet{suffix} shrinks and hides empty history; bounded{suffix} scrolls long content while retaining both footer actions.{Environment.NewLine}");
+
+            var primaryFontSize = TrayPrimaryLabel.FontSize;
+            var activityFontSize = TrayActivityLabel.FontSize;
+            try
+            {
+                _suppressAutoResize = true;
+                TrayPrimaryLabel.FontSize = 28;
+                TrayActivityLabel.FontSize = 28;
+                UpdateFooterLayout();
+                AppWindow.Resize(new SizeInt32((int)Math.Round(448 * scale), (int)Math.Round(380 * scale)));
+                await Task.Delay(220);
+                TrayRoot.UpdateLayout();
+                UpdateFooterLayout();
+                if (!_footerStacked || Grid.GetRow(TrayViewActivity) != 1 || Grid.GetColumn(TrayViewActivity) != 0)
+                    throw new InvalidOperationException("Large tray action text must stack rather than overflow two narrow columns.");
+                if (AppWindow.Size.Height != (int)Math.Round(380 * scale) || TrayContentScroll.ScrollableHeight <= 0)
+                    throw new InvalidOperationException("The large-text proof must retain its bounded height and a scrolling body.");
+                AssertFooterWithinViewport();
+                foreach (var button in new[] { TrayOpenFolder, TrayViewActivity })
+                {
+                    var content = (FrameworkElement)button.Content;
+                    if (content.DesiredSize.Width + button.Padding.Left + button.Padding.Right +
+                        button.BorderThickness.Left + button.BorderThickness.Right > button.ActualWidth + 1)
+                        throw new InvalidOperationException("A large-text tray action must fit completely within its button.");
+                }
+                await UiSmokeCapture.SaveAsync(TrayRoot, Path.Combine(outputDirectory, $"tray-large-text{suffix}.png"));
+                await File.AppendAllTextAsync(Path.Combine(outputDirectory, "tray-assertions.txt"),
+                    $"PASS: large-text{suffix} measures native action content, stacks the footer, and retains complete captions within the bounded window.{Environment.NewLine}");
+            }
+            finally
+            {
+                TrayPrimaryLabel.FontSize = primaryFontSize;
+                TrayActivityLabel.FontSize = activityFontSize;
+                UpdateFooterLayout();
+                _suppressAutoResize = false;
+            }
         }
         _viewModel.SetPreview(null);
         Refresh();
@@ -339,10 +438,21 @@ public sealed partial class TrayWindow : Window
             (TrayTransferPanel.Visibility == Visibility.Visible) != hasProgress ||
             (ResumeMenu.Visibility == Visibility.Visible) != (state == ClientState.Paused))
             throw new InvalidOperationException($"The {state} tray contains an irrelevant section or omits a relevant action.");
+        if (state == ClientState.Attention && TrayPrimaryLabel.Text != "Review changes")
+            throw new InvalidOperationException("A pending-deletion warning must offer its review action instead of opening Explorer.");
         if (Math.Abs(QuickSettingsIcon.ActualWidth - 20) > 0.5 ||
             Math.Abs(QuickSettingsIcon.ActualHeight - 20) > 0.5 ||
             QuickSettingsButton.ActualWidth < 40 || QuickSettingsButton.ActualHeight < 40)
             throw new InvalidOperationException("The settings animation must stay within a 20 px icon and a 40 px button.");
+        if (!hasHistory && Math.Abs(TrayOpenFolder.ActualWidth - (TrayRoot.ActualWidth - TrayFooter.Padding.Left - TrayFooter.Padding.Right)) > 1)
+            throw new InvalidOperationException("A quiet tray's primary action must fill its footer without a gap for the hidden action.");
+        if (hasHistory && TrayContentScroll.ScrollableHeight <= 0.5 &&
+            TrayActivitySection.ContainerFromIndex(_viewModel.RecentActivity.Count - 1) is FrameworkElement lastEntry)
+        {
+            var origin = lastEntry.TransformToVisual(TrayContentScroll).TransformPoint(new global::Windows.Foundation.Point(0, 0));
+            if (origin.Y + lastEntry.ActualHeight > TrayContentScroll.ActualHeight - TrayContentScroll.Padding.Bottom + 1)
+                throw new InvalidOperationException("The final recent activity entry must fit completely inside the tray viewport.");
+        }
         AssertFooterWithinViewport();
     }
 

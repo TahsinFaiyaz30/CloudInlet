@@ -22,8 +22,8 @@
             PaneDisplayMode="Auto"
             OpenPaneLength="224"
             CompactPaneLength="56"
-            CompactModeThresholdWidth="820"
-            ExpandedModeThresholdWidth="1020"
+            CompactModeThresholdWidth="641"
+            ExpandedModeThresholdWidth="1008"
             IsBackButtonVisible="Collapsed"
             IsSettingsVisible="True"
             AlwaysShowHeader="False"
@@ -48,118 +48,191 @@
                     HorizontalScrollBarVisibility="Disabled"
                     HorizontalContentAlignment="Stretch">
                     <StackPanel x:Name="OverviewContent" Style="{StaticResource CloudBayPageContentStyle}">
-                        <StackPanel x:Name="WelcomePanel" Spacing="24" Margin="0,16,0,0">
-                            <FontIcon
-                                Glyph=""
-                                FontSize="40"
-                                Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
-                                HorizontalAlignment="Left" />
-                            <StackPanel Spacing="8">
-                                <TextBlock
-                                    Text="A home for your files"
-                                    Style="{StaticResource TitleTextBlockStyle}"
-                                    TextWrapping="Wrap" />
-                                <TextBlock
-                                    Text="Back up your folders to Backblaze B2 and open your files right from Windows."
-                                    Style="{StaticResource CloudBaySecondaryTextStyle}" />
-                            </StackPanel>
-                            <Button
-                                x:Name="ConnectAccountButton"
-                                Content="Connect your account"
-                                Style="{StaticResource AccentButtonStyle}"
-                                Click="Settings_Click" />
-                        </StackPanel>
-                        <StackPanel x:Name="ConnectedOverview" Spacing="32" Visibility="Collapsed">
-                            <TextBlock Text="Overview" Style="{StaticResource TitleTextBlockStyle}" />
+                        <TextBlock Text="Overview" Style="{StaticResource TitleTextBlockStyle}" />
+                        <Border
+                            CornerRadius="8"
+                            Padding="24"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            x:Name="WelcomePanel"
+                            MinHeight="240">
                             <StackPanel Spacing="20">
-                                <Grid ColumnSpacing="16">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <Grid Width="48" Height="48" VerticalAlignment="Top">
-                                        <FontIcon
-                                            Glyph=""
-                                            FontSize="44"
-                                            Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
-                                        <Border
-                                            VerticalAlignment="Bottom"
-                                            Height="20"
-                                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                                            Width="20"
-                                            HorizontalAlignment="Right"
-                                            CornerRadius="10">
+                                <FontIcon
+                                    Glyph=""
+                                    FontSize="56"
+                                    Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                    HorizontalAlignment="Left" />
+                                <StackPanel Spacing="8">
+                                    <TextBlock
+                                        Text="Back up with Backblaze B2"
+                                        Style="{StaticResource SubtitleTextBlockStyle}"
+                                        TextWrapping="Wrap" />
+                                    <TextBlock
+                                        Text="Back up your folders to Backblaze B2 and open your files right from Windows."
+                                        Style="{StaticResource CloudBayBodySecondaryTextStyle}" />
+                                </StackPanel>
+                                <Button
+                                    x:Name="ConnectAccountButton"
+                                    Content="Connect your account"
+                                    Style="{StaticResource AccentButtonStyle}"
+                                    Click="Settings_Click"
+                                    MinHeight="40" />
+                            </StackPanel>
+                        </Border>
+                        <StackPanel x:Name="ConnectedOverview" Spacing="24" Visibility="Collapsed">
+                            <Border
+                                CornerRadius="8"
+                                Padding="24"
+                                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                BorderThickness="1"
+                                MinHeight="200">
+                                <StackPanel Spacing="20">
+                                    <Grid ColumnSpacing="16">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid Width="64" Height="64" VerticalAlignment="Top">
                                             <FontIcon
-                                                Glyph="{Binding StatusGlyph}"
-                                                FontSize="12"
-                                                x:Name="OverviewStatusIcon" />
-                                        </Border>
+                                                Glyph=""
+                                                FontSize="56"
+                                                Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                                            <Border
+                                                VerticalAlignment="Bottom"
+                                                Height="20"
+                                                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                                Width="20"
+                                                HorizontalAlignment="Right"
+                                                CornerRadius="10">
+                                                <FontIcon
+                                                    Glyph="{Binding StatusGlyph}"
+                                                    FontSize="12"
+                                                    x:Name="OverviewStatusIcon" />
+                                            </Border>
+                                        </Grid>
+                                        <StackPanel Grid.Column="1" Spacing="6">
+                                            <TextBlock
+                                                Text="{Binding StatusTitle}"
+                                                Style="{StaticResource SubtitleTextBlockStyle}"
+                                                TextWrapping="Wrap" />
+                                            <TextBlock
+                                                x:Name="OverviewStatusDetail"
+                                                Text="{Binding StatusDescription}"
+                                                Style="{StaticResource CloudBayBodySecondaryTextStyle}" />
+                                            <TextBlock
+                                                x:Name="OverviewLastSync"
+                                                Text="{Binding LastSyncLabel}"
+                                                ToolTipService.ToolTip="{Binding LastSyncFullLabel}"
+                                                Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                                        </StackPanel>
                                     </Grid>
-                                    <StackPanel Grid.Column="1" Spacing="6">
+                                    <StackPanel x:Name="TransferProgressPanel" Spacing="8" Visibility="Collapsed">
+                                        <ProgressBar
+                                            x:Name="TransferProgress"
+                                            Value="{Binding Progress}"
+                                            Maximum="100" />
                                         <TextBlock
-                                            Text="{Binding StatusTitle}"
-                                            Style="{StaticResource SubtitleTextBlockStyle}"
-                                            TextWrapping="Wrap" />
-                                        <TextBlock
-                                            x:Name="OverviewStatusDetail"
-                                            Text="{Binding StatusDescription}"
-                                            Style="{StaticResource CloudBaySecondaryTextStyle}" />
-                                        <TextBlock
-                                            x:Name="OverviewLastSync"
-                                            Text="{Binding LastSyncLabel}"
-                                            ToolTipService.ToolTip="{Binding LastSyncFullLabel}"
+                                            Text="{Binding ProgressLabel}"
                                             Style="{StaticResource CloudBaySecondaryTextStyle}" />
                                     </StackPanel>
-                                </Grid>
-                                <StackPanel x:Name="TransferProgressPanel" Spacing="8" Visibility="Collapsed">
-                                    <ProgressBar x:Name="TransferProgress" Value="{Binding Progress}" Maximum="100" />
-                                    <TextBlock
-                                        Text="{Binding ProgressLabel}"
-                                        Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                                    <StackPanel x:Name="DashboardActions" Orientation="Horizontal" Spacing="8">
+                                        <Button
+                                            x:Name="ReviewDeletionsButton"
+                                            Content="Review pending deletions"
+                                            Style="{StaticResource AccentButtonStyle}"
+                                            Visibility="Collapsed"
+                                            Click="ReviewDeletions_Click"
+                                            MinHeight="40" />
+                                        <Button
+                                            x:Name="OpenFolderButton"
+                                            Content="Open folder"
+                                            Style="{StaticResource AccentButtonStyle}"
+                                            Click="OpenFolder_Click"
+                                            MinHeight="40" />
+                                        <Button
+                                            x:Name="SyncNowButton"
+                                            Content="Sync now"
+                                            Click="SyncNow_Click"
+                                            MinHeight="40" />
+                                        <Button
+                                            x:Name="DashboardPauseButton"
+                                            Content="{Binding PauseLabel}"
+                                            Click="Pause_Click"
+                                            MinHeight="40" />
+                                    </StackPanel>
                                 </StackPanel>
-                                <StackPanel x:Name="DashboardActions" Orientation="Horizontal" Spacing="8">
-                                    <Button
-                                        x:Name="ReviewDeletionsButton"
-                                        Content="Review pending deletions"
-                                        Style="{StaticResource AccentButtonStyle}"
-                                        Visibility="Collapsed"
-                                        Click="ReviewDeletions_Click" />
-                                    <Button
-                                        x:Name="OpenFolderButton"
-                                        Content="Open folder"
-                                        Style="{StaticResource AccentButtonStyle}"
-                                        Click="OpenFolder_Click" />
-                                    <Button x:Name="SyncNowButton" Content="Sync now" Click="SyncNow_Click" />
-                                    <Button
-                                        x:Name="DashboardPauseButton"
-                                        Content="{Binding PauseLabel}"
-                                        Click="Pause_Click" />
-                                </StackPanel>
-                            </StackPanel>
+                            </Border>
                             <StackPanel x:Name="BackupSuggestion" Spacing="12" Visibility="Collapsed">
-                                <TextBlock
-                                    Text="Protect your everyday folders"
-                                    Style="{StaticResource BodyStrongTextBlockStyle}" />
-                                <TextBlock
-                                    Text="Choose the Windows folders you want to back up."
-                                    Style="{StaticResource CloudBaySecondaryTextStyle}" />
-                                <Button Content="Choose folders" Click="ManageBackup_Click" />
+                                <settings:SettingsCard
+                                    Header="Choose folders to back up"
+                                    Description="Protect your Windows folders and other personal folders."
+                                    IsClickEnabled="True"
+                                    Click="ManageBackup_Click"
+                                    MinHeight="76">
+                                    <settings:SettingsCard.HeaderIcon>
+                                        <FontIcon Glyph="" />
+                                    </settings:SettingsCard.HeaderIcon>
+                                </settings:SettingsCard>
                             </StackPanel>
-                            <StackPanel x:Name="RecentActivitySection" Spacing="12" Visibility="Collapsed">
-                                <Grid>
-                                    <TextBlock
-                                        Text="Recent activity"
-                                        Style="{StaticResource BodyStrongTextBlockStyle}" />
-                                    <HyperlinkButton
-                                        Content="View all"
-                                        HorizontalAlignment="Right"
-                                        Padding="0"
-                                        Click="ViewActivity_Click" />
-                                </Grid>
-                                <ItemsControl
-                                    ItemsSource="{Binding RecentActivity}"
-                                    ItemTemplate="{StaticResource ActivityTemplate}" />
-                            </StackPanel>
+                            <Grid x:Name="OverviewSections" ColumnSpacing="24" RowSpacing="24">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="3*" />
+                                    <ColumnDefinition Width="2*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <StackPanel x:Name="ProtectedFoldersSection" Spacing="12" Visibility="Collapsed">
+                                    <Grid>
+                                        <TextBlock
+                                            Text="Backed-up folders"
+                                            Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                        <HyperlinkButton
+                                            Content="Manage"
+                                            HorizontalAlignment="Right"
+                                            Padding="0"
+                                            Click="ManageBackup_Click" />
+                                    </Grid>
+                                    <Border
+                                        CornerRadius="8"
+                                        Padding="24"
+                                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                        BorderThickness="1"
+                                        x:Name="ProtectedFolderSurface">
+                                        <Grid x:Name="ProtectedFolderRows" ColumnSpacing="8" RowSpacing="8" />
+                                    </Border>
+                                </StackPanel>
+                                <StackPanel
+                                    x:Name="RecentActivitySection"
+                                    Spacing="12"
+                                    Visibility="Collapsed"
+                                    Grid.Column="1">
+                                    <Grid>
+                                        <TextBlock
+                                            Text="Recent activity"
+                                            Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                        <HyperlinkButton
+                                            Content="View all"
+                                            HorizontalAlignment="Right"
+                                            Padding="0"
+                                            Click="ViewActivity_Click" />
+                                    </Grid>
+                                    <Border
+                                        CornerRadius="8"
+                                        Padding="24"
+                                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                        BorderThickness="1">
+                                        <ItemsControl
+                                            ItemsSource="{Binding RecentActivity}"
+                                            ItemTemplate="{StaticResource ActivityTemplate}" />
+                                    </Border>
+                                </StackPanel>
+                            </Grid>
                         </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
@@ -186,7 +259,7 @@
                         <ListView
                             x:Name="ActivityList"
                             ItemsSource="{Binding Activity}"
-                            ItemTemplate="{StaticResource ActivityTemplate}"
+                            ItemTemplate="{StaticResource ActivityRowTemplate}"
                             ItemContainerStyle="{StaticResource CloudBayListItemStyle}"
                             SelectionMode="None"
                             HorizontalContentAlignment="Stretch" />
@@ -310,7 +383,7 @@
                                             Style="{StaticResource CloudBaySecondaryTextStyle}" />
                                         <HyperlinkButton
                                             Content="Review sync settings"
-                                            Click="Settings_Click"
+                                            Click="SyncSettings_Click"
                                             HorizontalAlignment="Left"
                                             Padding="0" />
                                     </StackPanel>
@@ -334,30 +407,56 @@
                                 Style="{StaticResource CloudBaySecondaryTextStyle}"
                                 Visibility="Collapsed" />
                         </StackPanel>
-                        <StackPanel x:Name="FilesConnectPanel" Spacing="16">
-                            <TextBlock
-                                Text="Connect your account to open your cloud files."
-                                Style="{StaticResource CloudBaySecondaryTextStyle}" />
-                            <Button
-                                Content="Connect account"
-                                Style="{StaticResource AccentButtonStyle}"
-                                Click="Settings_Click" />
-                        </StackPanel>
+                        <Border
+                            CornerRadius="8"
+                            Padding="24"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            x:Name="FilesConnectPanel"
+                            MinHeight="200">
+                            <StackPanel Spacing="16">
+                                <FontIcon
+                                    Glyph=""
+                                    FontSize="48"
+                                    Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                    HorizontalAlignment="Left" />
+                                <TextBlock
+                                    Text="Connect your account to open your cloud files."
+                                    Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                                <Button
+                                    Content="Connect account"
+                                    Style="{StaticResource AccentButtonStyle}"
+                                    Click="Settings_Click"
+                                    MinHeight="40" />
+                            </StackPanel>
+                        </Border>
                         <StackPanel x:Name="FilesConnectedPanel" Spacing="24" Visibility="Collapsed">
                             <ComboBox
                                 x:Name="FileScopeBox"
                                 Header="Folder"
                                 DisplayMemberPath="Name"
-                                HorizontalAlignment="Stretch"
-                                SelectionChanged="FileScope_SelectionChanged" />
+                                HorizontalAlignment="Left"
+                                SelectionChanged="FileScope_SelectionChanged"
+                                MaxWidth="480" />
                             <StackPanel Spacing="8">
                                 <TextBlock Text="On this PC" Style="{StaticResource BodyStrongTextBlockStyle}" />
-                                <settings:SettingsCard x:Name="FileLocationCard">
+                                <settings:SettingsCard
+                                    x:Name="FileLocationCard"
+                                    MinHeight="128"
+                                    CornerRadius="8"
+                                    Padding="24">
                                     <settings:SettingsCard.Header>
-                                        <TextBlock x:Name="FileFolderName" Text="CloudBay folder" />
+                                        <TextBlock
+                                            x:Name="FileFolderName"
+                                            Text="CloudBay folder"
+                                            Style="{StaticResource SubtitleTextBlockStyle}" />
                                     </settings:SettingsCard.Header>
                                     <settings:SettingsCard.Description>
-                                        <TextBlock x:Name="FileFolderPath" TextWrapping="Wrap" />
+                                        <TextBlock
+                                            x:Name="FileFolderPath"
+                                            TextWrapping="Wrap"
+                                            Style="{StaticResource CloudBayBodySecondaryTextStyle}" />
                                     </settings:SettingsCard.Description>
                                     <settings:SettingsCard.HeaderIcon>
                                         <FontIcon Glyph="" />
@@ -365,7 +464,11 @@
                                     <Button
                                         Content="Open folder"
                                         Style="{StaticResource AccentButtonStyle}"
-                                        Click="OpenFileFolder_Click" />
+                                        Click="OpenFileFolder_Click"
+                                        MinHeight="40" />
+                                    <settings:SettingsCard.Resources>
+                                        <x:Double x:Key="SettingsCardHeaderIconMaxSize">48</x:Double>
+                                    </settings:SettingsCard.Resources>
                                 </settings:SettingsCard>
                                 <TextBlock
                                     Text="Use Explorer to keep files on this device or free up downloaded space."
@@ -484,187 +587,229 @@
                             <TextBlock Text="Settings" Style="{StaticResource TitleTextBlockStyle}" />
                             <settings:SettingsCard
                                 x:Name="SettingsAccountCard"
-                                Header="Backblaze B2"
                                 Description="Connect a private bucket to start protecting your files."
-                                MinHeight="108"
-                                Padding="24"
+                                MinHeight="76"
+                                Padding="0"
                                 CornerRadius="8"
-                                IsClickEnabled="True"
-                                Tag="account"
-                                Click="SettingsCategory_Click">
+                                IsClickEnabled="False"
+                                Background="Transparent"
+                                BorderThickness="0">
+                                <settings:SettingsCard.Header>
+                                    <TextBlock
+                                        x:Name="SettingsAccountHeading"
+                                        Text="Backblaze B2"
+                                        Style="{StaticResource SubtitleTextBlockStyle}"
+                                        TextWrapping="Wrap" />
+                                </settings:SettingsCard.Header>
                                 <settings:SettingsCard.HeaderIcon>
                                     <FontIcon
                                         Glyph=""
-                                        FontSize="32"
-                                        Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                                        FontSize="20"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                 </settings:SettingsCard.HeaderIcon>
-                                <settings:SettingsCard.Resources>
-                                    <x:Double x:Key="SettingsCardHeaderIconMaxSize">32</x:Double>
-                                </settings:SettingsCard.Resources>
+                                <Button
+                                    x:Name="SettingsAccountAction"
+                                    Content="Connect account"
+                                    Click="SettingsAccount_Click"
+                                    Style="{StaticResource AccentButtonStyle}"
+                                    MinHeight="40" />
                             </settings:SettingsCard>
-                            <Grid x:Name="SettingsCategories" ColumnSpacing="16" RowSpacing="16">
-                                <settings:SettingsCard
-                                    x:Name="SyncCategory"
-                                    Description="Files on demand and downloaded file storage."
-                                    MinHeight="144"
-                                    Padding="24"
-                                    IsClickEnabled="True"
-                                    Tag="sync"
-                                    Click="SettingsCategory_Click"
-                                    CornerRadius="8">
-                                    <settings:SettingsCard.Header>
+                            <Grid x:Name="SettingsCategories" ColumnSpacing="24" RowSpacing="24">
+                                <Border
+                                    CornerRadius="8"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                    <StackPanel Spacing="0">
                                         <TextBlock
-                                            Text="Sync"
-                                            Style="{StaticResource BodyStrongTextBlockStyle}"
-                                            TextWrapping="Wrap" />
-                                    </settings:SettingsCard.Header>
-                                    <settings:SettingsCard.HeaderIcon>
-                                        <FontIcon
-                                            Glyph=""
-                                            FontSize="32"
-                                            Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
-                                    </settings:SettingsCard.HeaderIcon>
-                                    <settings:SettingsCard.Resources>
-                                        <ResourceDictionary>
-                                            <x:Double x:Key="SettingsCardHeaderIconMaxSize">32</x:Double>
-                                        </ResourceDictionary>
-                                    </settings:SettingsCard.Resources>
-                                </settings:SettingsCard>
-                                <settings:SettingsCard
-                                    x:Name="NetworkCategory"
-                                    Description="Transfer limits and automatic pauses."
-                                    MinHeight="144"
-                                    Padding="24"
-                                    IsClickEnabled="True"
-                                    Tag="network"
-                                    Click="SettingsCategory_Click"
-                                    CornerRadius="8">
-                                    <settings:SettingsCard.Header>
+                                            Text="Files and backup"
+                                            FontSize="16"
+                                            FontWeight="SemiBold"
+                                            Margin="20,20,20,12" />
+                                        <settings:SettingsCard
+                                            x:Name="SyncCategory"
+                                            Description="Files on demand and downloaded file storage."
+                                            MinHeight="68"
+                                            Padding="20,14"
+                                            IsClickEnabled="True"
+                                            Tag="sync"
+                                            Click="SettingsCategory_Click"
+                                            CornerRadius="4"
+                                            Background="Transparent"
+                                            BorderThickness="0">
+                                            <settings:SettingsCard.Header>
+                                                <TextBlock
+                                                    Text="Sync"
+                                                    Style="{StaticResource BodyTextBlockStyle}"
+                                                    TextWrapping="Wrap" />
+                                            </settings:SettingsCard.Header>
+                                            <settings:SettingsCard.HeaderIcon>
+                                                <FontIcon
+                                                    Glyph=""
+                                                    FontSize="20"
+                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                            </settings:SettingsCard.HeaderIcon>
+                                        </settings:SettingsCard>
+                                        <Border
+                                            Height="1"
+                                            Background="{ThemeResource DividerStrokeColorDefaultBrush}"
+                                            Margin="20,0" />
+                                        <settings:SettingsCard
+                                            x:Name="NetworkCategory"
+                                            Description="Transfer limits and automatic pauses."
+                                            MinHeight="68"
+                                            Padding="20,14"
+                                            IsClickEnabled="True"
+                                            Tag="network"
+                                            Click="SettingsCategory_Click"
+                                            CornerRadius="4"
+                                            Background="Transparent"
+                                            BorderThickness="0">
+                                            <settings:SettingsCard.Header>
+                                                <TextBlock
+                                                    Text="Network and power"
+                                                    Style="{StaticResource BodyTextBlockStyle}"
+                                                    TextWrapping="Wrap" />
+                                            </settings:SettingsCard.Header>
+                                            <settings:SettingsCard.HeaderIcon>
+                                                <FontIcon
+                                                    Glyph=""
+                                                    FontSize="20"
+                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                            </settings:SettingsCard.HeaderIcon>
+                                        </settings:SettingsCard>
+                                    </StackPanel>
+                                </Border>
+                                <Border
+                                    CornerRadius="8"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                    <StackPanel Spacing="0">
                                         <TextBlock
-                                            Text="Network and power"
-                                            Style="{StaticResource BodyStrongTextBlockStyle}"
-                                            TextWrapping="Wrap" />
-                                    </settings:SettingsCard.Header>
-                                    <settings:SettingsCard.HeaderIcon>
-                                        <FontIcon
-                                            Glyph=""
-                                            FontSize="32"
-                                            Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
-                                    </settings:SettingsCard.HeaderIcon>
-                                    <settings:SettingsCard.Resources>
-                                        <ResourceDictionary>
-                                            <x:Double x:Key="SettingsCardHeaderIconMaxSize">32</x:Double>
-                                        </ResourceDictionary>
-                                    </settings:SettingsCard.Resources>
-                                </settings:SettingsCard>
-                                <settings:SettingsCard
-                                    x:Name="AppearanceCategory"
-                                    Description="Choose your app theme."
-                                    MinHeight="144"
-                                    Padding="24"
-                                    IsClickEnabled="True"
-                                    Tag="appearance"
-                                    Click="SettingsCategory_Click"
-                                    CornerRadius="8">
-                                    <settings:SettingsCard.Header>
+                                            Text="App preferences"
+                                            FontSize="16"
+                                            FontWeight="SemiBold"
+                                            Margin="20,20,20,12" />
+                                        <settings:SettingsCard
+                                            x:Name="AppearanceCategory"
+                                            Description="Choose your app theme."
+                                            MinHeight="68"
+                                            Padding="20,14"
+                                            IsClickEnabled="True"
+                                            Tag="appearance"
+                                            Click="SettingsCategory_Click"
+                                            CornerRadius="4"
+                                            Background="Transparent"
+                                            BorderThickness="0">
+                                            <settings:SettingsCard.Header>
+                                                <TextBlock
+                                                    Text="Appearance"
+                                                    Style="{StaticResource BodyTextBlockStyle}"
+                                                    TextWrapping="Wrap" />
+                                            </settings:SettingsCard.Header>
+                                            <settings:SettingsCard.HeaderIcon>
+                                                <FontIcon
+                                                    Glyph=""
+                                                    FontSize="20"
+                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                            </settings:SettingsCard.HeaderIcon>
+                                        </settings:SettingsCard>
+                                        <Border
+                                            Height="1"
+                                            Background="{ThemeResource DividerStrokeColorDefaultBrush}"
+                                            Margin="20,0" />
+                                        <settings:SettingsCard
+                                            x:Name="GeneralCategory"
+                                            Description="Background startup and Windows integration."
+                                            MinHeight="68"
+                                            Padding="20,14"
+                                            IsClickEnabled="True"
+                                            Tag="general"
+                                            Click="SettingsCategory_Click"
+                                            CornerRadius="4"
+                                            Background="Transparent"
+                                            BorderThickness="0">
+                                            <settings:SettingsCard.Header>
+                                                <TextBlock
+                                                    Text="General"
+                                                    Style="{StaticResource BodyTextBlockStyle}"
+                                                    TextWrapping="Wrap" />
+                                            </settings:SettingsCard.Header>
+                                            <settings:SettingsCard.HeaderIcon>
+                                                <FontIcon
+                                                    Glyph=""
+                                                    FontSize="20"
+                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                            </settings:SettingsCard.HeaderIcon>
+                                        </settings:SettingsCard>
+                                    </StackPanel>
+                                </Border>
+                                <Border
+                                    CornerRadius="8"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                    <StackPanel Spacing="0">
                                         <TextBlock
-                                            Text="Appearance"
-                                            Style="{StaticResource BodyStrongTextBlockStyle}"
-                                            TextWrapping="Wrap" />
-                                    </settings:SettingsCard.Header>
-                                    <settings:SettingsCard.HeaderIcon>
-                                        <FontIcon
-                                            Glyph=""
-                                            FontSize="32"
-                                            Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
-                                    </settings:SettingsCard.HeaderIcon>
-                                    <settings:SettingsCard.Resources>
-                                        <ResourceDictionary>
-                                            <x:Double x:Key="SettingsCardHeaderIconMaxSize">32</x:Double>
-                                        </ResourceDictionary>
-                                    </settings:SettingsCard.Resources>
-                                </settings:SettingsCard>
-                                <settings:SettingsCard
-                                    x:Name="GeneralCategory"
-                                    Description="Background startup and Windows integration."
-                                    MinHeight="144"
-                                    Padding="24"
-                                    IsClickEnabled="True"
-                                    Tag="general"
-                                    Click="SettingsCategory_Click"
-                                    CornerRadius="8">
-                                    <settings:SettingsCard.Header>
-                                        <TextBlock
-                                            Text="General"
-                                            Style="{StaticResource BodyStrongTextBlockStyle}"
-                                            TextWrapping="Wrap" />
-                                    </settings:SettingsCard.Header>
-                                    <settings:SettingsCard.HeaderIcon>
-                                        <FontIcon
-                                            Glyph=""
-                                            FontSize="32"
-                                            Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
-                                    </settings:SettingsCard.HeaderIcon>
-                                    <settings:SettingsCard.Resources>
-                                        <ResourceDictionary>
-                                            <x:Double x:Key="SettingsCardHeaderIconMaxSize">32</x:Double>
-                                        </ResourceDictionary>
-                                    </settings:SettingsCard.Resources>
-                                </settings:SettingsCard>
-                                <settings:SettingsCard
-                                    x:Name="CatalogCategory"
-                                    Description="See available and planned connections."
-                                    MinHeight="144"
-                                    Padding="24"
-                                    IsClickEnabled="True"
-                                    Tag="catalog"
-                                    Click="SettingsCategory_Click"
-                                    CornerRadius="8">
-                                    <settings:SettingsCard.Header>
-                                        <TextBlock
-                                            Text="Providers and modes"
-                                            Style="{StaticResource BodyStrongTextBlockStyle}"
-                                            TextWrapping="Wrap" />
-                                    </settings:SettingsCard.Header>
-                                    <settings:SettingsCard.HeaderIcon>
-                                        <FontIcon
-                                            Glyph=""
-                                            FontSize="32"
-                                            Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
-                                    </settings:SettingsCard.HeaderIcon>
-                                    <settings:SettingsCard.Resources>
-                                        <ResourceDictionary>
-                                            <x:Double x:Key="SettingsCardHeaderIconMaxSize">32</x:Double>
-                                        </ResourceDictionary>
-                                    </settings:SettingsCard.Resources>
-                                </settings:SettingsCard>
-                                <settings:SettingsCard
-                                    x:Name="AboutCategory"
-                                    Description="Version information and local diagnostics."
-                                    MinHeight="144"
-                                    Padding="24"
-                                    IsClickEnabled="True"
-                                    Tag="about"
-                                    Click="SettingsCategory_Click"
-                                    CornerRadius="8">
-                                    <settings:SettingsCard.Header>
-                                        <TextBlock
-                                            Text="About CloudBay"
-                                            Style="{StaticResource BodyStrongTextBlockStyle}"
-                                            TextWrapping="Wrap" />
-                                    </settings:SettingsCard.Header>
-                                    <settings:SettingsCard.HeaderIcon>
-                                        <FontIcon
-                                            Glyph=""
-                                            FontSize="32"
-                                            Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
-                                    </settings:SettingsCard.HeaderIcon>
-                                    <settings:SettingsCard.Resources>
-                                        <ResourceDictionary>
-                                            <x:Double x:Key="SettingsCardHeaderIconMaxSize">32</x:Double>
-                                        </ResourceDictionary>
-                                    </settings:SettingsCard.Resources>
-                                </settings:SettingsCard>
+                                            Text="Connections and support"
+                                            FontSize="16"
+                                            FontWeight="SemiBold"
+                                            Margin="20,20,20,12" />
+                                        <settings:SettingsCard
+                                            x:Name="CatalogCategory"
+                                            Description="See available and planned connections."
+                                            MinHeight="68"
+                                            Padding="20,14"
+                                            IsClickEnabled="True"
+                                            Tag="catalog"
+                                            Click="SettingsCategory_Click"
+                                            CornerRadius="4"
+                                            Background="Transparent"
+                                            BorderThickness="0">
+                                            <settings:SettingsCard.Header>
+                                                <TextBlock
+                                                    Text="Providers and modes"
+                                                    Style="{StaticResource BodyTextBlockStyle}"
+                                                    TextWrapping="Wrap" />
+                                            </settings:SettingsCard.Header>
+                                            <settings:SettingsCard.HeaderIcon>
+                                                <FontIcon
+                                                    Glyph=""
+                                                    FontSize="20"
+                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                            </settings:SettingsCard.HeaderIcon>
+                                        </settings:SettingsCard>
+                                        <Border
+                                            Height="1"
+                                            Background="{ThemeResource DividerStrokeColorDefaultBrush}"
+                                            Margin="20,0" />
+                                        <settings:SettingsCard
+                                            x:Name="AboutCategory"
+                                            Description="Version information and local diagnostics."
+                                            MinHeight="68"
+                                            Padding="20,14"
+                                            IsClickEnabled="True"
+                                            Tag="about"
+                                            Click="SettingsCategory_Click"
+                                            CornerRadius="4"
+                                            Background="Transparent"
+                                            BorderThickness="0">
+                                            <settings:SettingsCard.Header>
+                                                <TextBlock
+                                                    Text="About CloudBay"
+                                                    Style="{StaticResource BodyTextBlockStyle}"
+                                                    TextWrapping="Wrap" />
+                                            </settings:SettingsCard.Header>
+                                            <settings:SettingsCard.HeaderIcon>
+                                                <FontIcon
+                                                    Glyph=""
+                                                    FontSize="20"
+                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                            </settings:SettingsCard.HeaderIcon>
+                                        </settings:SettingsCard>
+                                    </StackPanel>
+                                </Border>
                             </Grid>
                         </StackPanel>
                         <StackPanel x:Name="SettingsDetail" Spacing="24" Visibility="Collapsed">
@@ -677,6 +822,7 @@
                                     x:Name="SettingsBackButton"
                                     Width="40"
                                     Height="40"
+                                    Style="{StaticResource SubtleButtonStyle}"
                                     Click="SettingsBack_Click"
                                     AutomationProperties.Name="Back to settings">
                                     <FontIcon Glyph="" FontSize="18" />
@@ -690,16 +836,6 @@
                                     TextWrapping="Wrap" />
                             </Grid>
                             <StackPanel x:Name="AccountSettingsDetail" Spacing="4" Visibility="Collapsed">
-                                <settings:SettingsCard
-                                    x:Name="ConnectedAccountPanel"
-                                    Header="{Binding BucketLabel}"
-                                    Description="Backblaze B2"
-                                    Visibility="Collapsed">
-                                    <settings:SettingsCard.HeaderIcon>
-                                        <FontIcon Glyph="" />
-                                    </settings:SettingsCard.HeaderIcon>
-                                    <Button Content="Manage account" Click="ManageAccount_Click" />
-                                </settings:SettingsCard>
                                 <Border
                                     CornerRadius="8"
                                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
@@ -854,6 +990,9 @@
                                 <settings:SettingsCard
                                     Header="Metered connections"
                                     Description="Pause syncing to limit mobile data use.">
+                                    <settings:SettingsCard.HeaderIcon>
+                                        <FontIcon Glyph="&#xE701;" />
+                                    </settings:SettingsCard.HeaderIcon>
                                     <ToggleSwitch
                                         x:Name="MeteredBox"
                                         Style="{StaticResource CloudBayToggleStyle}"
@@ -863,6 +1002,9 @@
                                 <settings:SettingsCard
                                     Header="Battery Saver"
                                     Description="Pause syncing while Battery Saver is on.">
+                                    <settings:SettingsCard.HeaderIcon>
+                                        <FontIcon Glyph="&#xE945;" />
+                                    </settings:SettingsCard.HeaderIcon>
                                     <ToggleSwitch
                                         x:Name="BatterySaverBox"
                                         Style="{StaticResource CloudBayToggleStyle}"
@@ -918,7 +1060,7 @@
                                 </settings:SettingsExpander>
                             </StackPanel>
                             <StackPanel x:Name="AppearanceSettingsDetail" Spacing="4" Visibility="Collapsed">
-                                <settings:SettingsCard Header="Appearance" Description="Choose how CloudBay looks.">
+                                <settings:SettingsCard Header="App theme" Description="Choose how CloudBay looks.">
                                     <settings:SettingsCard.HeaderIcon>
                                         <FontIcon Glyph="" />
                                     </settings:SettingsCard.HeaderIcon>

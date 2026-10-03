@@ -8,7 +8,7 @@ The previous mounted-drive migration helper is preserved on the **`legacy` branc
 
 - Notification area icon and activity flyout with upload/download history, pause/resume, quick settings, and full settings.
 - Files On-Demand, native Explorer status, download progress, always-available files, and freeing local space.
-- Windows Storage Sense integration for eligible clean, unpinned cloud content. Windows owns cache retention; configure it through **Settings → Files on demand → Windows Storage Sense**.
+- Windows Storage Sense integration for eligible clean, unpinned cloud content. Windows owns cache retention; configure it through **Settings → Sync → Windows Storage Sense**.
 - Backup for Desktop, Documents, Pictures, Music, Videos, Downloads, Favorites, Contacts, Saved Games, Links, Searches, and 3D Objects where Windows makes them available. Turning on a personal folder backup changes its actual Windows default location after a verified copy. Apps using that Windows folder then save to CloudBay automatically.
 - Custom personal folder backup in its existing location, with its own native sync root. No symlinks or mounted drives.
 - Persistent B2 connections and reusable exclusive upload sessions for small files, streaming multipart uploads, concurrency controls, and shared upload/download speed caps.
@@ -36,7 +36,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1
 ## Connect B2
 
 1. Create or select a private B2 bucket. Use a bucket-scoped application key with `listFiles`, `readFiles`, and `writeFiles` access and **Allow List All Bucket Names** enabled. Previous-version server-side restore also needs access to the version being restored.
-2. Open **Settings**, enter the bucket name, key ID, and application key, then choose a dedicated local CloudBay folder and a cloud prefix such as `CloudBay/`.
+2. Open **Settings → Account**, enter the bucket name, key ID, and application key. Advanced connection options let you choose a dedicated local CloudBay folder and a cloud prefix such as `CloudBay/`.
 3. Connect. CloudBay discovers the account and bucket, registers its native Explorer folder, and starts syncing. Keep keys out of screenshots and diagnostic attachments.
 4. Open **Folder backup** to choose Windows personal folders or add custom folders. If OneDrive or Windows policy already controls a folder, stop that provider's backup or resolve the policy first. CloudBay does not silently take over those mappings.
 5. In Explorer, use availability commands for offline access. The **Files** page can pin/free files and folders, browse B2 versions, and restore a selected version. Its folder selector includes custom backup roots.
@@ -59,7 +59,7 @@ dotnet test CloudBay.Tests\CloudBay.Tests.csproj -c Release --no-build -v:minima
 .\scripts\build-release.ps1
 ```
 
-The release script creates `artifacts\release\CloudBay-2.0.0-win-x64.zip`, an extracted package, and its SHA256 checksum. `CloudBay.exe --ui-smoke` captures the UI into `artifacts\ui-smoke` using isolated storage and presentation fixtures for disconnected, syncing, paused, offline, and attention states. These fixtures do not connect to a provider or modify the controller's account. The [live validation CLI](tools/CloudBay.Validation/README.md) uses a separately provisioned bucket-restricted key and a generated test prefix; it never redirects real Windows personal folders.
+The release script creates `artifacts\release\CloudBay-2.0.0-win-x64.zip`, an extracted package, and its SHA256 checksum. `CloudBay.exe --ui-smoke` captures the UI into `artifacts\ui-smoke` using fresh processes for both themes, isolated storage, and presentation fixtures for all seven client states. It checks focused Settings routes, retained drafts, keyboard focus, activity scrolling, provider discovery, and tray action reachability. These fixtures do not connect to a provider or modify the controller's account. The [live validation CLI](tools/CloudBay.Validation/README.md) uses a separately provisioned bucket-restricted key and a generated test prefix; it never redirects real Windows personal folders.
 
 See [architecture and primary documentation](docs/ARCHITECTURE.md), [Windows 11 interface design](docs/UI-DESIGN.md), and [verified release scope](docs/VALIDATION.md). Public distribution needs the publisher's code-signing certificate; this local release is unsigned.
 
@@ -67,7 +67,7 @@ The Settings catalog also shows [planned providers and modes](docs/ROADMAP.md). 
 
 ## Live development window
 
-`scripts/run-dev-live.ps1 -Watch` keeps an isolated development copy open. While the watcher is enabled, every successful app build automatically writes `artifacts/live/build-ready.json` and refreshes the window. It copies completed binaries away from the build folder, so the open app does not lock the next build. A refresh gracefully restarts the window and restores its selected page. Failed builds leave the current copy open; the last working build is retained for rollback.
+`scripts/run-dev-live.ps1 -Watch` keeps an isolated development copy open. While the watcher is enabled, every successful app build automatically writes `artifacts/live/build-ready.json` and refreshes the window. It copies completed binaries away from the build folder, so the open app does not lock the next build. A refresh gracefully restarts the window and restores its selected page, including a focused Settings detail page. Failed builds leave the current copy open; the last working build is retained for rollback.
 
 Start the watcher in one PowerShell session, then build normally in another:
 
