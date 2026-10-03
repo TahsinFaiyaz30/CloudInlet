@@ -12,8 +12,8 @@
                  strokes, high contrast states, focus and reduced motion. -->
             <Thickness
                 x:Key="CloudBayPageInset">24,28,24,40</Thickness>
-            <!-- Native card surfaces group tasks inside the rounded body.
-                 The shell header and sidebar expose the Mica foundation.
+            <!-- Native card surfaces group tasks inside the continuous body.
+                 The sidebar exposes the commanding layer over Mica Alt.
                  In-page cards retain the Windows ControlCornerRadius. -->
             <Style x:Key="CloudBaySurfaceStyle" TargetType="Border">
                 <Setter Property="CornerRadius" Value="{ThemeResource ControlCornerRadius}" />

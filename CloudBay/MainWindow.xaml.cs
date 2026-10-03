@@ -280,7 +280,7 @@ public sealed partial class MainWindow : Window
             throw new InvalidOperationException("Restored navigation must select the requested native item and display its actual page and header.");
         if (route == "settings/account" && (AccountSettingsDetail.Visibility != Visibility.Visible ||
             SettingsHub.Visibility != Visibility.Collapsed || SettingsDetail.Visibility != Visibility.Visible || PageTitle.Text != "Account"))
-            throw new InvalidOperationException("Restoring Account must display the Account editor and its Mica header.");
+            throw new InvalidOperationException("Restoring Account must display the Account editor and its page header.");
     }
 
     private void Controller_Changed(object? sender, EventArgs e)
@@ -453,13 +453,14 @@ public sealed partial class MainWindow : Window
         // current viewport width explicitly so cards never slide offscreen.
         foreach (var (viewer, content) in new[] { (OverviewPage, OverviewContent), (BackupPage, BackupContent), (FilesPage, FilesContent), (SettingsPage, SettingsContent) })
             if (viewer.ActualWidth > 0) content.Width = Math.Min(PageColumnWidth, viewer.ActualWidth);
-        if (ContentLayoutGrid.ActualWidth > 0) PageHeader.Width = Math.Min(PageColumnWidth, ContentLayoutGrid.ActualWidth);
+        var headerWidth = ContentLayoutGrid.ActualWidth - PageHeader.Margin.Left - PageHeader.Margin.Right;
+        if (headerWidth > 0) PageHeader.Width = Math.Min(PageColumnWidth, headerWidth);
         if (ForegroundLayout.ActualWidth > 0) ActivityPage.Width = Math.Min(PageColumnWidth, ForegroundLayout.ActualWidth);
         var settingsWidth = SettingsContent.Width - SettingsContent.Padding.Left - SettingsContent.Padding.Right;
         ArrangeTiles(SettingsCategories, settingsWidth >= 660 * _uiSettings.TextScaleFactor ? 2 : 1);
         if (settingsWidth > 0)
         {
-            ConnectionPanel.Width = Math.Min(720, settingsWidth);
+            ConnectionPanel.Width = Math.Min(900, settingsWidth);
             // Keep the secret full width. The shorter account identifiers share
             // a row only when their labels and inputs have comfortable space.
             var paired = ConnectionPanel.Width - ConnectionPanel.Padding.Left - ConnectionPanel.Padding.Right >= 560 * _uiSettings.TextScaleFactor;
@@ -1457,6 +1458,9 @@ public sealed partial class MainWindow : Window
                 await CapturePageAsync("settings", $"settings-connect-{width}{suffix}", "account");
                 await CapturePageAsync("settings", $"settings-home-disconnected-{width}{suffix}");
             }
+            AppWindow.Resize(new SizeInt32(1600, 840));
+            SetPresentation(ClientPreview.Connected(), theme);
+            await CapturePageAsync("settings", $"settings-home-1600{suffix}");
             AppWindow.Resize(new SizeInt32(800, 840));
             var externalPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Another provider", "Desktop");
             SetPresentation(ClientPreview.Connected() with { WindowsFolderPaths = new Dictionary<string, string>
@@ -1555,9 +1559,9 @@ public sealed partial class MainWindow : Window
             if (page == "settings") OpenSettingsRoute(settingsRoute);
             await Task.Delay(500);
             RootGrid.UpdateLayout();
-            // Verify the documented NavigationView card pattern at runtime.
-            // Its public resource overrides must leave the Mica header exposed;
-            // the foreground body is a separate, rounded surface below it.
+            // Verify the native NavigationView content layer at runtime. Its
+            // rounded surface contains both the fixed header and task content;
+            // there must not be another painted shell around the account form.
             DependencyObject? surface = VisualTreeHelper.GetParent(ContentLayoutGrid);
             while (surface is not null && surface is not Grid { Name: "ContentGrid" })
                 surface = VisualTreeHelper.GetParent(surface);
@@ -1565,11 +1569,20 @@ public sealed partial class MainWindow : Window
             {
                 var fill = measuredContent.Background is SolidColorBrush solid ? solid.Color.ToString() : measuredContent.Background?.GetType().Name ?? "none";
                 await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"),
-                    $"{fileName}: native card surface fill={fill}, border={measuredContent.BorderThickness}, mode={Navigation.DisplayMode}{Environment.NewLine}");
+                    $"{fileName}: native content surface fill={fill}, border={measuredContent.BorderThickness}, mode={Navigation.DisplayMode}{Environment.NewLine}");
             }
-            if (surface is not Grid nativeContent || nativeContent.Background is not SolidColorBrush { Color.A: 0 } ||
-                !nativeContent.BorderThickness.Equals(new Thickness(0)))
-                throw new InvalidOperationException("The navigation host must expose the Mica header above the foreground body.");
+            if (surface is not Grid nativeContent || nativeContent.Background is not SolidColorBrush { Color.A: > 0 } ||
+                !nativeContent.BorderThickness.Equals(new Thickness(0)) ||
+                !nativeContent.CornerRadius.Equals(new CornerRadius(8, 0, 0, 0)))
+                throw new InvalidOperationException("The native content layer must paint a single foreground surface with its rounded upper-left corner.");
+            // These values belong to the pinned WinUI runtime's normal theme
+            // dictionaries. Comparing every channel catches an alias frozen
+            // to the prior theme even though its opacity remains nonzero.
+            var lightTheme = RootGrid.ActualTheme == ElementTheme.Light;
+            var expectedSurfaceColor = lightTheme ? global::Windows.UI.Color.FromArgb(0x80, 0xFF, 0xFF, 0xFF)
+                : global::Windows.UI.Color.FromArgb(0x4C, 0x3A, 0x3A, 0x3A);
+            if (!((SolidColorBrush)nativeContent.Background).Color.Equals(expectedSurfaceColor))
+                throw new InvalidOperationException("The native content brush must follow the current window theme after a theme change.");
             await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"),
                 $"{fileName}: native surface background={nativeContent.Background?.GetType().Name ?? "none"}, margin={nativeContent.Margin}, corners={nativeContent.CornerRadius}, mode={Navigation.DisplayMode}{Environment.NewLine}");
             var foregroundPosition = nativeContent.TransformToVisual(RootGrid).TransformPoint(new global::Windows.Foundation.Point());
@@ -1584,19 +1597,20 @@ public sealed partial class MainWindow : Window
                 "files" => FilesPage, "settings" => SettingsPage, _ => OverviewPage
             };
             var pagePosition = selectedPage.TransformToVisual(RootGrid).TransformPoint(new global::Windows.Foundation.Point());
-            var contentPosition = ContentSurface.TransformToVisual(RootGrid).TransformPoint(new global::Windows.Foundation.Point());
+            var contentPosition = ForegroundLayout.TransformToVisual(RootGrid).TransformPoint(new global::Windows.Foundation.Point());
             if (headerPosition.Y < AppTitleBar.ActualHeight - 1 ||
                 contentPosition.Y + 1 < headerPosition.Y + PageHeader.ActualHeight + 12 ||
                 pagePosition.Y + 1 < contentPosition.Y || !IsWithin(PageTitle, PageHeader) ||
-                IsWithin(PageTitle, ContentSurface) || !IsWithin(selectedPage, ContentSurface) ||
+                !IsWithin(PageHeader, nativeContent) || !IsWithin(selectedPage, nativeContent) ||
+                IsWithin(PageTitle, selectedPage) || !IsWithin(selectedPage, ForegroundLayout) ||
                 PageHeader.ActualWidth > ContentLayoutGrid.ActualWidth + 1 ||
-                !ContentSurface.CornerRadius.Equals(new CornerRadius(8)) ||
-                ContentSurface.Background is null || ForegroundLayout.Background is null)
-                throw new InvalidOperationException("The page title must occupy Mica above a separately painted, rounded foreground body.");
+                ForegroundLayout.Background is SolidColorBrush { Color.A: > 0 } ||
+                ConnectionPanel.Background is not null || !ConnectionPanel.BorderThickness.Equals(new Thickness(0)))
+                throw new InvalidOperationException("The fixed header and scrolling pages must share the native foreground layer without a second shell around the content or account form.");
             if ((SettingsBackButton.Visibility == Visibility.Visible) != (page == "settings" && _settingsRoute != "home"))
                 throw new InvalidOperationException("Only a settings detail may expose the shared header's Back action.");
             await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"),
-                $"{fileName}: Mica header y={headerPosition.Y}, height={PageHeader.ActualHeight}, foreground y={contentPosition.Y}, task content y={pagePosition.Y}, title={PageTitle.Text}{Environment.NewLine}");
+                $"{fileName}: page header y={headerPosition.Y}, height={PageHeader.ActualHeight}, content host y={contentPosition.Y}, task content y={pagePosition.Y}, title={PageTitle.Text}{Environment.NewLine}");
             if (page != "activity")
             {
                 var viewer = page switch { "backup" => BackupPage, "files" => FilesPage, "settings" => SettingsPage, _ => OverviewPage };
@@ -1607,6 +1621,17 @@ public sealed partial class MainWindow : Window
                     $"{fileName}: root={RootGrid.ActualWidth}, viewport={viewer.ActualWidth}, content={content.ActualWidth}, x={position.X}{Environment.NewLine}");
                 if (position.X < viewportPosition.X - 1 || position.X + content.ActualWidth > viewportPosition.X + viewer.ActualWidth + 1)
                     throw new InvalidOperationException($"The {page} page extends beyond its visible area.");
+                if (page == "settings" && _settingsRoute == "home")
+                {
+                    var headerLeft = headerPosition.X + PageHeader.Padding.Left;
+                    var headerRight = headerPosition.X + PageHeader.ActualWidth - PageHeader.Padding.Right;
+                    var contentLeft = position.X + SettingsContent.Padding.Left;
+                    var contentRight = position.X + SettingsContent.ActualWidth - SettingsContent.Padding.Right;
+                    if (Math.Abs(headerLeft - contentLeft) > 1 || Math.Abs(headerRight - contentRight) > 1)
+                        throw new InvalidOperationException("The page header and Settings home must share their inner gutters, including at the maximum content width.");
+                    await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"),
+                        $"{fileName}: aligned header/content gutters left={headerLeft:0.##}/{contentLeft:0.##}, right={headerRight:0.##}/{contentRight:0.##}, content width={SettingsContent.ActualWidth:0.##}, theme={RootGrid.ActualTheme}{Environment.NewLine}");
+                }
                 if (page == "backup" && _uiSettings.TextScaleFactor <= 1.01)
                 {
                     foreach (var name in CommonBackups)
