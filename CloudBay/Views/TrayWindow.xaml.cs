@@ -28,6 +28,17 @@ public sealed partial class TrayWindow : Window
     private bool _anchorToTop;
     private bool _footerStacked;
     private bool _suppressAutoResize;
+    private bool _keepOpenForInspection;
+    private int _appliedBorderColor;
+    private int _borderApplyResult;
+    private readonly NativeFrameProc _nativeFrameProc;
+    private readonly nint _frameWindow;
+    private readonly bool _frameHookInstalled;
+    private const int DwmUseImmersiveDarkMode = 20;
+    private const int DwmCornerPreference = 33;
+    private const int DwmBorderColor = 34;
+    private const int DwmColorNone = unchecked((int)0xFFFFFFFE);
+    private const int DwmColorDefault = unchecked((int)0xFFFFFFFF);
     private AppSettings DisplaySettings => _viewModel.Preview?.Settings ?? _controller.Settings;
     private SyncSnapshot DisplaySnapshot => _viewModel.Preview?.Snapshot ?? _controller.Snapshot;
 
@@ -37,6 +48,7 @@ public sealed partial class TrayWindow : Window
         _openSettings = openSettings;
         _quit = quit;
         InitializeComponent();
+        TrayRoot.ActualThemeChanged += TrayRoot_ActualThemeChanged;
         _settingsPressedHandler = QuickSettings_PointerPressed;
         _settingsReleasedHandler = QuickSettings_PointerReleased;
         QuickSettingsButton.AddHandler(UIElement.PointerPressedEvent, _settingsPressedHandler, handledEventsToo: true);
@@ -53,27 +65,39 @@ public sealed partial class TrayWindow : Window
         };
         AppWindow.Title = "CloudBay activity";
         AppWindow.IsShownInSwitchers = false;
+        // The tray owns all of its chrome. Make WinUI host the XAML surface
+        // across the full window before removing the presenter title bar.
+        ExtendsContentIntoTitleBar = true;
         if (AppWindow.Presenter is OverlappedPresenter presenter)
         {
-            presenter.SetBorderAndTitleBar(false, false);
             presenter.IsResizable = false;
             presenter.IsMinimizable = false;
             presenter.IsMaximizable = false;
             presenter.IsAlwaysOnTop = true;
+            presenter.SetBorderAndTitleBar(false, false);
         }
         var icon = Path.Combine(AppContext.BaseDirectory, "Assets", "CloudBay.ico");
         if (File.Exists(icon)) AppWindow.SetIcon(icon);
-        var preference = 2;
-        DwmSetWindowAttribute(WinRT.Interop.WindowNative.GetWindowHandle(this), 33, ref preference, sizeof(int));
+        _frameWindow = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        _nativeFrameProc = NativeFrameWindowProc;
+        _frameHookInstalled = SetWindowSubclass(_frameWindow, _nativeFrameProc, 0xCB03, 0);
+        // Recalculate the native client rectangle after installing its handler.
+        // A borderless presenter can otherwise retain a classic non-client
+        // strip, which DWMWA_BORDER_COLOR cannot suppress.
+        if (_frameHookInstalled)
+            SetWindowPos(_frameWindow, 0, 0, 0, 0, 0, 0x0037);
         Activated += (_, args) =>
         {
+            ApplyNativeFrame();
             _active = args.WindowActivationState != WindowActivationState.Deactivated;
-            if (args.WindowActivationState == WindowActivationState.Deactivated && !_menuOpen) AppWindow.Hide();
+            if (args.WindowActivationState == WindowActivationState.Deactivated && !_menuOpen && !_keepOpenForInspection) AppWindow.Hide();
         };
         Closed += (_, _) =>
         {
             _closed = true;
             _controller.Changed -= Controller_Changed;
+            TrayRoot.ActualThemeChanged -= TrayRoot_ActualThemeChanged;
+            if (_frameHookInstalled) RemoveWindowSubclass(_frameWindow, _nativeFrameProc, 0xCB03);
             QuickSettingsButton.RemoveHandler(UIElement.PointerPressedEvent, _settingsPressedHandler);
             QuickSettingsButton.RemoveHandler(UIElement.PointerReleasedEvent, _settingsReleasedHandler);
         };
@@ -81,9 +105,10 @@ public sealed partial class TrayWindow : Window
         Refresh();
     }
 
-    public void ShowAtTray()
+    public void ShowAtTray(bool keepOpenForInspection = false)
     {
         if (_closed) return;
+        _keepOpenForInspection = keepOpenForInspection;
         Refresh();
         GetCursorPos(out var cursor);
         var area = DisplayArea.GetFromPoint(new PointInt32(cursor.X, cursor.Y), DisplayAreaFallback.Nearest);
@@ -164,6 +189,7 @@ public sealed partial class TrayWindow : Window
             "Dark" => ElementTheme.Dark,
             _ => ElementTheme.Default
         };
+        ApplyNativeFrame();
         var statusStyle = snapshot.State switch
         {
             ClientState.UpToDate => "TraySuccessIconStyle",
@@ -174,6 +200,46 @@ public sealed partial class TrayWindow : Window
         TrayStatusGlyph.Style = (Style)TrayRoot.Resources[statusStyle];
         UpdateFooterLayout();
         if (AppWindow.IsVisible && !_menuOpen) ResizeToContent();
+    }
+
+    private void TrayRoot_ActualThemeChanged(FrameworkElement sender, object args) => ApplyNativeFrame();
+
+    private nint NativeFrameWindowProc(nint window, uint message, nuint wParam, nint lParam, nuint id, nuint data)
+    {
+        // Leave the proposed rectangle intact: the entire outer window is
+        // the client area. Windows retains the compositor backdrop, rounded
+        // corners and shadow; only the standard non-client frame is removed.
+        // https://learn.microsoft.com/windows/win32/winmsg/wm-nccalcsize
+        if (!_closed && message == 0x0083) return 0;
+        // Desktop accessibility changes arrive through WM_SETTINGCHANGE.
+        // The UWP HighContrastChanged event can fail to register in an
+        // unpackaged desktop app, preventing notification-icon startup.
+        if (message is 0x001A or 0x031A)
+            DispatcherQueue.TryEnqueue(() => ApplyNativeFrame());
+        return DefSubclassProc(window, message, wParam, lParam);
+    }
+
+    private static bool UseContrastFrame()
+    {
+        var contrast = new HighContrast { Size = (uint)Marshal.SizeOf<HighContrast>() };
+        return !SystemParametersInfo(0x0042, contrast.Size, ref contrast, 0) || (contrast.Flags & 1) != 0;
+    }
+
+    private void ApplyNativeFrame()
+    {
+        if (_closed || !OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000)) return;
+        var window = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        var dark = TrayRoot.ActualTheme == ElementTheme.Dark ? 1 : 0;
+        var rounded = 2;
+        // XAML's theme does not opt the native frame into dark mode. Keep its
+        // theme in step, and suppress the flyout stroke through DWM so Windows
+        // still owns the rounded corners and shadow. Contrast themes retain
+        // the system frame for a visible boundary.
+        var border = UseContrastFrame() ? DwmColorDefault : DwmColorNone;
+        DwmSetWindowAttribute(window, DwmUseImmersiveDarkMode, ref dark, sizeof(int));
+        DwmSetWindowAttribute(window, DwmCornerPreference, ref rounded, sizeof(int));
+        _borderApplyResult = DwmSetWindowAttribute(window, DwmBorderColor, ref border, sizeof(int));
+        _appliedBorderColor = border;
     }
 
     private void UpdateFooterLayout()
@@ -350,7 +416,7 @@ public sealed partial class TrayWindow : Window
                 await Task.Delay(220);
                 ResizeToContent();
                 TrayRoot.UpdateLayout();
-                AssertTrayLayout(state);
+                AssertTrayLayout(state, outputDirectory);
                 await File.AppendAllTextAsync(Path.Combine(outputDirectory, "tray-assertions.txt"),
                     $"PASS: {state}{suffix} has the correct contextual content, native gear dimensions, and reachable footer actions.{Environment.NewLine}");
                 await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"), $"tray-{state}{suffix}: width={AppWindow.Size.Width}, height={AppWindow.Size.Height}{Environment.NewLine}");
@@ -428,8 +494,41 @@ public sealed partial class TrayWindow : Window
         Refresh();
     }
 
-    private void AssertTrayLayout(ClientState state)
+    private void AssertTrayLayout(ClientState state, string outputDirectory)
     {
+        var clientOrigin = new Point();
+        if (!GetWindowRect(_frameWindow, out var windowBounds) ||
+            !GetClientRect(_frameWindow, out var clientBounds) || !ClientToScreen(_frameWindow, ref clientOrigin))
+            throw new InvalidOperationException("The native tray window geometry could not be inspected.");
+        var width = windowBounds.Right - windowBounds.Left;
+        var height = windowBounds.Bottom - windowBounds.Top;
+        var clientWidth = clientBounds.Right - clientBounds.Left;
+        var clientHeight = clientBounds.Bottom - clientBounds.Top;
+        File.AppendAllText(Path.Combine(outputDirectory, "tray-native-frame.txt"),
+            $"{state}: theme={TrayRoot.ActualTheme}; style={unchecked((uint)GetWindowLongPtr(_frameWindow, -16).ToInt64()):X8}; exStyle={unchecked((uint)GetWindowLongPtr(_frameWindow, -20).ToInt64()):X8}; outer={width}x{height}; client={clientWidth}x{clientHeight}; clientOrigin={clientOrigin.X - windowBounds.Left},{clientOrigin.Y - windowBounds.Top}; subclass={_frameHookInstalled}; border={_appliedBorderColor:X8}/{_borderApplyResult:X8}{Environment.NewLine}");
+        if (!_frameHookInstalled || width != clientWidth || height != clientHeight ||
+            clientOrigin.X != windowBounds.Left || clientOrigin.Y != windowBounds.Top)
+            throw new InvalidOperationException("The tray's XAML client surface must cover its entire native window without a classic frame strip.");
+        if (AppWindow.Presenter is not OverlappedPresenter { HasBorder: false, HasTitleBar: false })
+            throw new InvalidOperationException("The tray must retain its borderless native presenter.");
+        if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000))
+        {
+            var window = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            // DWMWA_BORDER_COLOR is a setter-only attribute. DWM rejects
+            // reading it with E_INVALIDARG, even after successfully applying it.
+            var borderResult = _borderApplyResult;
+            var border = _appliedBorderColor;
+            var darkResult = DwmGetWindowAttribute(window, DwmUseImmersiveDarkMode, out var dark, sizeof(int));
+            var cornerResult = DwmGetWindowAttribute(window, DwmCornerPreference, out var corners, sizeof(int));
+            if (borderResult < 0 || border != (UseContrastFrame() ? DwmColorDefault : DwmColorNone) ||
+                darkResult < 0 || dark != (TrayRoot.ActualTheme == ElementTheme.Dark ? 1 : 0) ||
+                cornerResult < 0 || corners != 2)
+            {
+                File.AppendAllText(Path.Combine(outputDirectory, "tray-assertions.txt"),
+                    $"FAIL native frame: theme={TrayRoot.ActualTheme}; contrast={UseContrastFrame()}; border={border:X8}/{borderResult:X8}; dark={dark}/{darkResult:X8}; corners={corners}/{cornerResult:X8}{Environment.NewLine}");
+                throw new InvalidOperationException("The native tray frame must match its theme and suppress its stroke while retaining rounded corners.");
+            }
+        }
         var hasHistory = _viewModel.HasActivity;
         var hasProgress = state is ClientState.Syncing or ClientState.Connecting;
         if ((TrayActivitySection.Visibility == Visibility.Visible) != hasHistory ||
@@ -467,9 +566,22 @@ public sealed partial class TrayWindow : Window
     }
 
     [StructLayout(LayoutKind.Sequential)] private struct Point { public int X; public int Y; }
+    [StructLayout(LayoutKind.Sequential)] private struct Rectangle { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)] private struct HighContrast { public uint Size, Flags; public nint DefaultScheme; }
+    private delegate nint NativeFrameProc(nint window, uint message, nuint wParam, nint lParam, nuint id, nuint data);
+    [DllImport("comctl32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetWindowSubclass(nint window, NativeFrameProc callback, nuint id, nuint data);
+    [DllImport("comctl32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool RemoveWindowSubclass(nint window, NativeFrameProc callback, nuint id);
+    [DllImport("comctl32.dll")] private static extern nint DefSubclassProc(nint window, uint message, nuint wParam, nint lParam);
+    [DllImport("user32.dll", EntryPoint = "SystemParametersInfoW")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SystemParametersInfo(uint action, uint parameter, ref HighContrast value, uint flags);
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern nint GetWindowLongPtr(nint window, int index);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetWindowPos(nint window, nint insertAfter, int x, int y, int width, int height, uint flags);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetWindowRect(nint window, out Rectangle rectangle);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetClientRect(nint window, out Rectangle rectangle);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool ClientToScreen(nint window, ref Point point);
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetCursorPos(out Point point);
     [DllImport("user32.dll")] private static extern uint GetDpiForWindow(nint window);
     [DllImport("user32.dll")] private static extern nint MonitorFromPoint(Point point, uint flags);
     [DllImport("shcore.dll")] private static extern int GetDpiForMonitor(nint monitor, int type, out uint dpiX, out uint dpiY);
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(nint window, int attribute, ref int value, int size);
+    [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(nint window, int attribute, out int value, int size);
 }

@@ -46,6 +46,12 @@ The GitHub Windows build workflow builds the complete solution, runs transport/r
 
 After that correction, the stalled-header check passed in five fresh test processes and the exact hosted CI filter passed **124/124 locally**, with zero skips. Reports are `artifacts/validation/tests/ci-stalled-headers-<1-5>.trx` and `windows-ci-local.trx`; local results do not substitute for a completed hosted workflow.
 
+The hosted [Windows workflow at `bf9e928`](https://github.com/TahsinFaiyaz30/CloudBay/actions/runs/37129943346) subsequently completed successfully, including tests, self-contained publication, runtime notices, and artifact upload.
+
+The tray frame correction passed fresh isolated Dark and Light tray captures. Native diagnostics confirm the client rectangle covers the full window, the documented DWM border setter succeeds, and rounded corners remain enabled. A real desktop-window capture confirmed the reported white outline is gone; XAML bitmap captures alone cannot prove native frame appearance. The unpackaged app reads contrast settings through desktop APIs and handles `WM_SETTINGCHANGE`, avoiding the failing UWP accessibility-event subscription. Evidence is in `artifacts/ui-smoke-tray/tray-native-frame.txt`.
+
+Live refresh now waits for a matching process/UTC readiness marker after successful tray registration and controller initialization. Network authorization may continue after shell readiness. An actual copied-output fault with the notification icon unavailable failed at icon registration, exited with sanitized diagnostics, and restored the prior ready preview with its selected page intact. This also exercised the race where a failing child exits during native process lookup. Evidence is in `artifacts/validation/live-startup-rollback.json`. Tray-only diagnostics use a separate output directory and cannot substitute for full UI acceptance.
+
 ## Verified scope and remaining release requirements
 
 - All 12 supported Windows personal folders were queried through their real Known Folder IDs, default/current paths, and redirection policy capabilities. Their actual default locations were not changed during acceptance. Initial copy, collision preservation, source-change checks, and journal recovery are covered independently; real personal-folder enable/restore should be verified in a disposable Windows user profile before public distribution.

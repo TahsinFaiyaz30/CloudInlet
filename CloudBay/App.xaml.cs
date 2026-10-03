@@ -6,6 +6,8 @@ using System.IO.Pipes;
 using System.Security.Principal;
 using System.Text;
 using System.Diagnostics;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace CloudBay;
 
@@ -20,6 +22,13 @@ public partial class App : Microsoft.UI.Xaml.Application
     private string _pipeName = "";
     private bool _exiting;
     private int _trayUpdatePending;
+    private int _isolatedFailurePending;
+    private bool _isUiSmoke;
+    private bool _isUiLive;
+    private bool _startupCompleted;
+    private string? _smokeTheme;
+    private string _startupStage = "Initialize application";
+    private readonly DateTimeOffset _startupUtc = DateTimeOffset.UtcNow;
 
     public App()
     {
@@ -27,6 +36,11 @@ public partial class App : Microsoft.UI.Xaml.Application
         UnhandledException += (_, args) =>
         {
             args.Handled = true;
+            if (_isUiSmoke || _isUiLive)
+            {
+                _ = FailIsolatedStartupAsync(args.Exception, _startupCompleted ? "Unhandled UI exception" : _startupStage);
+                return;
+            }
             _controller?.Pause();
             MainWindow?.ShowWindow();
             if (MainWindow?.Content is FrameworkElement content)
@@ -45,6 +59,9 @@ public partial class App : Microsoft.UI.Xaml.Application
         var isSmoke = commandLine.Contains("--ui-smoke");
         var isLive = commandLine.Contains("--ui-live");
         var smokeTheme = commandLine.FirstOrDefault(arg => arg.StartsWith("--ui-smoke-theme=", StringComparison.Ordinal))?[17..];
+        _isUiSmoke = isSmoke;
+        _isUiLive = isLive;
+        _smokeTheme = smokeTheme;
         if (isSmoke && smokeTheme is not (null or "Dark" or "Light"))
         {
             Environment.ExitCode = 64;
@@ -53,7 +70,7 @@ public partial class App : Microsoft.UI.Xaml.Application
         }
         if (isSmoke && smokeTheme is null)
         {
-            await RunUiSmokeSuiteAsync();
+            await RunUiSmokeSuiteAsync(commandLine.Contains("--ui-smoke-tray"));
             Exit();
             return;
         }
@@ -67,27 +84,50 @@ public partial class App : Microsoft.UI.Xaml.Application
             {
                 await using var client = new NamedPipeClientStream(".", _pipeName, PipeDirection.Out);
                 await client.ConnectAsync(3000);
-                await client.WriteAsync(Encoding.UTF8.GetBytes(Environment.GetCommandLineArgs().Contains("--shutdown") ? "quit" : "show"));
+                var activation = commandLine.Contains("--shutdown") ? "quit"
+                    : isLive && commandLine.Contains("--show-tray") ? "tray" : "show";
+                await client.WriteAsync(Encoding.UTF8.GetBytes(activation));
             }
             catch (IOException) { }
             catch (TimeoutException) { }
             Exit(); return;
         }
         if (Environment.GetCommandLineArgs().Contains("--shutdown")) { _singleInstance.Dispose(); Exit(); return; }
-        var isolatedStorage = isSmoke || isLive ? new ClientStorage(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "CloudBay", isSmoke ? "UiValidation" : "UiLive", isSmoke ? Guid.NewGuid().ToString("N") : "Client")) : null;
-        _controller = new ClientController(isolatedStorage, manageStartup: !(isSmoke || isLive));
-        MainWindow = new MainWindow(_controller);
-        _trayWindow = new TrayWindow(_controller, () => { MainWindow.ShowSettings(); MainWindow.ShowWindow(); }, () => _ = QuitAsync());
-        _trayIcon = new TrayIcon(WinRT.Interop.WindowNative.GetWindowHandle(MainWindow),
-            Path.Combine(AppContext.BaseDirectory, "Assets", "CloudBay.ico"), () => _trayWindow.ShowAtTray(), MainWindow.ShowWindow);
-        _controller.Changed += Controller_Changed;
-        _ = ListenForActivationAsync();
-        if (!Environment.GetCommandLineArgs().Contains("--background") || !_controller.Settings.IsConfigured) MainWindow.ShowWindow();
-        await _controller.StartAsync();
+        try
+        {
+            _startupStage = "Initialize client state";
+            var isolatedStorage = isSmoke || isLive ? new ClientStorage(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "CloudBay", isSmoke ? "UiValidation" : "UiLive", isSmoke ? Guid.NewGuid().ToString("N") : "Client")) : null;
+            _controller = new ClientController(isolatedStorage, manageStartup: !(isSmoke || isLive));
+            _startupStage = "Create main window";
+            MainWindow = new MainWindow(_controller);
+            _startupStage = "Create tray window";
+            _trayWindow = new TrayWindow(_controller, () => { MainWindow.ShowSettings(); MainWindow.ShowWindow(); }, () => _ = QuitAsync());
+            _startupStage = "Register notification icon";
+            _trayIcon = new TrayIcon(WinRT.Interop.WindowNative.GetWindowHandle(MainWindow),
+                Path.Combine(AppContext.BaseDirectory, "Assets", "CloudBay.ico"), () => _trayWindow.ShowAtTray(), MainWindow.ShowWindow);
+            _controller.Changed += Controller_Changed;
+            _ = ListenForActivationAsync();
+            if (!commandLine.Contains("--background") || !_controller.Settings.IsConfigured) MainWindow.ShowWindow();
+            _startupStage = "Start client controller";
+            var clientStartup = _controller.StartAsync();
+            if (isLive)
+            {
+                _startupStage = "Publish live preview readiness";
+                await WriteLiveReadinessAsync();
+            }
+            _startupStage = "Start client controller";
+            await clientStartup;
+            _startupCompleted = true;
+        }
+        catch (Exception error) when (isSmoke || isLive)
+        {
+            await FailIsolatedStartupAsync(error, _startupStage);
+            return;
+        }
         if (commandLine.Contains("--ui-smoke"))
         {
-            var output = Path.Combine(Environment.CurrentDirectory, "artifacts", "ui-smoke");
+            var output = UiSmokeOutput;
             Directory.CreateDirectory(output);
             // These markers belong only to this isolated capture run. Retain
             // previous images for comparison, but never reuse their success.
@@ -97,22 +137,84 @@ public partial class App : Microsoft.UI.Xaml.Application
             File.Delete(failurePath);
             try
             {
-                await MainWindow.RunUiSmokeAsync(output);
+                if (!commandLine.Contains("--ui-smoke-tray")) await MainWindow.RunUiSmokeAsync(output);
                 await _trayWindow.RunUiSmokeAsync(output);
-                await File.WriteAllTextAsync(completionPath, $"{smokeTheme} UI capture completed");
+                await File.WriteAllTextAsync(completionPath, $"{smokeTheme} {(commandLine.Contains("--ui-smoke-tray") ? "tray" : "UI")} capture completed");
             }
             catch (Exception error)
             {
                 Environment.ExitCode = 1;
-                await File.WriteAllTextAsync(failurePath, error.ToString());
+                await File.WriteAllTextAsync(failurePath, DescribeIsolatedFailure(error, "Capture UI"));
             }
             finally { await QuitAsync(); }
         }
     }
 
-    private static async Task RunUiSmokeSuiteAsync()
+    private static string LiveStateDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "CloudBay", "UiLive", "Client");
+    private static string UiSmokeOutput => Path.Combine(Environment.CurrentDirectory, "artifacts",
+        Environment.GetCommandLineArgs().Contains("--ui-smoke-tray") ? "ui-smoke-tray" : "ui-smoke");
+
+    private async Task WriteLiveReadinessAsync()
     {
-        var output = Path.Combine(Environment.CurrentDirectory, "artifacts", "ui-smoke");
+        Directory.CreateDirectory(LiveStateDirectory);
+        var temporary = Path.Combine(LiveStateDirectory, $"ui-ready-{Environment.ProcessId}.tmp");
+        await File.WriteAllTextAsync(temporary, JsonSerializer.Serialize(new
+        {
+            processId = Environment.ProcessId,
+            startupUtc = _startupUtc,
+            trayReady = _trayIcon is not null,
+            controllerReady = true
+        }));
+        File.Move(temporary, Path.Combine(LiveStateDirectory, "ui-ready.json"), overwrite: true);
+    }
+
+    private async Task FailIsolatedStartupAsync(Exception error, string stage)
+    {
+        if (Interlocked.Exchange(ref _isolatedFailurePending, 1) != 0) return;
+        Environment.ExitCode = 1;
+        try
+        {
+            var diagnostic = DescribeIsolatedFailure(error, stage);
+            if (_isUiSmoke)
+            {
+                var output = UiSmokeOutput;
+                Directory.CreateDirectory(output);
+                await File.WriteAllTextAsync(Path.Combine(output, _smokeTheme is null ? "failure.txt" : $"failure-{_smokeTheme}.txt"), diagnostic);
+            }
+            if (_isUiLive)
+            {
+                Directory.CreateDirectory(LiveStateDirectory);
+                await File.WriteAllTextAsync(Path.Combine(LiveStateDirectory, $"ui-startup-failure-{Environment.ProcessId}.txt"), diagnostic);
+            }
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+        try { await QuitAsync(); }
+        catch { Exit(); }
+    }
+
+    private static string DescribeIsolatedFailure(Exception error, string stage)
+    {
+        // Exception messages and source paths can contain account credentials
+        // or personal file names. Keep useful type/HRESULT/stack diagnostics
+        // without persisting those values in preview or capture output.
+        var diagnostic = new StringBuilder().AppendLine($"Stage: {stage}")
+            .AppendLine($"Process: {Environment.ProcessId}")
+            .AppendLine($"UTC: {DateTimeOffset.UtcNow:O}");
+        for (Exception? current = error; current is not null; current = current.InnerException)
+        {
+            diagnostic.AppendLine($"Exception: {current.GetType().FullName}")
+                .AppendLine($"HRESULT: 0x{current.HResult:X8}");
+            if (current.StackTrace is { } stack)
+                diagnostic.AppendLine(Regex.Replace(stack, @" in [^\r\n]+:line \d+", ""));
+        }
+        return diagnostic.ToString();
+    }
+
+    private static async Task RunUiSmokeSuiteAsync(bool trayOnly)
+    {
+        var output = UiSmokeOutput;
         Directory.CreateDirectory(output);
         var sid = WindowsIdentity.GetCurrent().User?.Value ?? Environment.UserName;
         using var suiteGate = new Semaphore(1, 1, @"Local\CloudBay.UIValidation.Suite." + sid);
@@ -135,7 +237,7 @@ public partial class App : Microsoft.UI.Xaml.Application
                 File.Delete(Path.Combine(output, $"failure-{theme}.txt"));
                 using var process = Process.Start(new ProcessStartInfo(Environment.ProcessPath!)
                 {
-                    Arguments = $"--ui-smoke --ui-smoke-theme={theme}",
+                    Arguments = $"--ui-smoke --ui-smoke-theme={theme}{(trayOnly ? " --ui-smoke-tray" : "")}",
                     WorkingDirectory = Environment.CurrentDirectory,
                     UseShellExecute = true,
                     WindowStyle = ProcessWindowStyle.Hidden
@@ -161,12 +263,12 @@ public partial class App : Microsoft.UI.Xaml.Application
                 if (process.ExitCode != 0 || !File.Exists(Path.Combine(output, $"complete-{theme}.txt")))
                     throw new InvalidOperationException($"The fresh {theme} UI capture failed. See failure-{theme}.txt.");
             }
-            await File.WriteAllTextAsync(Path.Combine(output, "complete.txt"), "Fresh Dark and Light UI captures completed");
+            await File.WriteAllTextAsync(Path.Combine(output, "complete.txt"), $"Fresh Dark and Light {(trayOnly ? "tray" : "UI")} captures completed");
         }
         catch (Exception error)
         {
             Environment.ExitCode = 1;
-            await File.WriteAllTextAsync(Path.Combine(output, "failure.txt"), error.ToString());
+            await File.WriteAllTextAsync(Path.Combine(output, "failure.txt"), DescribeIsolatedFailure(error, "Run isolated theme suite"));
         }
         finally { suiteGate.Release(); }
     }
@@ -186,6 +288,8 @@ public partial class App : Microsoft.UI.Xaml.Application
                     MainWindow?.DispatcherQueue.TryEnqueue(() => MainWindow.ShowWindow());
                 else if (Encoding.UTF8.GetString(bytes, 0, length) == "quit")
                     MainWindow?.DispatcherQueue.TryEnqueue(() => _ = QuitAsync());
+                else if (_isUiLive && Encoding.UTF8.GetString(bytes, 0, length) == "tray")
+                    MainWindow?.DispatcherQueue.TryEnqueue(() => _trayWindow?.ShowAtTray(keepOpenForInspection: true));
             }
         }
         catch (OperationCanceledException) { }
