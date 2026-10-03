@@ -28,7 +28,18 @@
             IsSettingsVisible="True"
             AlwaysShowHeader="False"
             SelectionChanged="Navigation_SelectionChanged"
-            Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}">
+            Background="Transparent">
+            <NavigationView.Resources>
+                <!-- Microsoft's Mica card pattern: the navigation host leaves the backdrop visible; task cards provide the content layer. -->
+                <SolidColorBrush x:Key="NavigationViewContentBackground" Color="Transparent" />
+                <SolidColorBrush x:Key="NavigationViewContentGridBorderBrush" Color="Transparent" />
+                <Thickness x:Key="NavigationViewContentGridBorderThickness">0</Thickness>
+                <Thickness x:Key="NavigationViewMinimalContentGridBorderThickness">0</Thickness>
+                <CornerRadius x:Key="NavigationViewContentGridCornerRadius">0</CornerRadius>
+                <StaticResource
+                    x:Key="NavigationViewExpandedPaneBackground"
+                    ResourceKey="LayerOnMicaBaseAltFillColorDefaultBrush" />
+            </NavigationView.Resources>
             <NavigationView.MenuItems>
                 <NavigationViewItem Content="Overview" Icon="Home" Tag="overview" />
                 <NavigationViewItem Content="Activity" Icon="Clock" Tag="activity" />
@@ -38,19 +49,69 @@
             <Grid x:Name="ContentLayoutGrid">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
-                <InfoBar x:Name="StatusInfoBar" Margin="32,16,32,0" IsOpen="False" IsClosable="True" />
+                <Grid x:Name="PageHeader" MaxWidth="1120" HorizontalAlignment="Center" Padding="32,24,32,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Button
+                        x:Name="SettingsBackButton"
+                        Width="40"
+                        Height="40"
+                        Margin="0,0,12,0"
+                        VerticalAlignment="Bottom"
+                        Style="{StaticResource SubtleButtonStyle}"
+                        Click="SettingsBack_Click"
+                        Visibility="Collapsed"
+                        AutomationProperties.Name="Back to settings">
+                        <FontIcon Glyph="" FontSize="18" />
+                    </Button>
+                    <StackPanel Grid.Column="1" Spacing="4">
+                        <TextBlock
+                            x:Name="SettingsContextLabel"
+                            Text="Settings"
+                            Style="{StaticResource CloudBaySecondaryTextStyle}"
+                            Visibility="Collapsed" />
+                        <TextBlock
+                            x:Name="PageTitle"
+                            Text="Overview"
+                            Style="{StaticResource TitleTextBlockStyle}"
+                            TextWrapping="Wrap"
+                            AutomationProperties.HeadingLevel="Level1" />
+                        <TextBlock
+                            x:Name="PageDescription"
+                            Style="{StaticResource CloudBayBodySecondaryTextStyle}"
+                            Visibility="Collapsed" />
+                        <TextBlock
+                            x:Name="ActivityPending"
+                            Text="{Binding PendingLabel}"
+                            Style="{StaticResource CloudBaySecondaryTextStyle}"
+                            Visibility="Collapsed" />
+                        <TextBlock
+                            x:Name="StorageSummary"
+                            Text="{Binding StorageSummary}"
+                            Style="{StaticResource CloudBaySecondaryTextStyle}"
+                            Visibility="Collapsed" />
+                    </StackPanel>
+                </Grid>
+                <InfoBar
+                    x:Name="StatusInfoBar"
+                    Grid.Row="1"
+                    Margin="32,16,32,0"
+                    IsOpen="False"
+                    IsClosable="True" />
                 <ScrollViewer
                     x:Name="OverviewPage"
-                    Grid.Row="1"
+                    Grid.Row="2"
                     HorizontalScrollBarVisibility="Disabled"
                     HorizontalContentAlignment="Stretch">
                     <StackPanel x:Name="OverviewContent" Style="{StaticResource CloudBayPageContentStyle}">
-                        <TextBlock Text="Overview" Style="{StaticResource TitleTextBlockStyle}" />
                         <Border
-                            CornerRadius="8"
+                            CornerRadius="{ThemeResource ControlCornerRadius}"
                             Padding="24"
                             Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
@@ -82,7 +143,7 @@
                         </Border>
                         <StackPanel x:Name="ConnectedOverview" Spacing="24" Visibility="Collapsed">
                             <Border
-                                CornerRadius="8"
+                                CornerRadius="{ThemeResource ControlCornerRadius}"
                                 Padding="24"
                                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
@@ -186,24 +247,28 @@
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
                                 <StackPanel x:Name="ProtectedFoldersSection" Spacing="12" Visibility="Collapsed">
-                                    <Grid>
-                                        <TextBlock
-                                            Text="Backed-up folders"
-                                            Style="{StaticResource BodyStrongTextBlockStyle}" />
-                                        <HyperlinkButton
-                                            Content="Manage"
-                                            HorizontalAlignment="Right"
-                                            Padding="0"
-                                            Click="ManageBackup_Click" />
-                                    </Grid>
                                     <Border
-                                        CornerRadius="8"
-                                        Padding="24"
-                                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                        BorderThickness="1"
+                                        Style="{StaticResource CloudBaySurfaceStyle}"
                                         x:Name="ProtectedFolderSurface">
-                                        <Grid x:Name="ProtectedFolderRows" ColumnSpacing="8" RowSpacing="8" />
+                                        <StackPanel Spacing="16">
+                                            <Grid ColumnSpacing="12">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock
+                                                    Text="Backed-up folders"
+                                                    VerticalAlignment="Center"
+                                                    Style="{StaticResource CloudBaySectionHeadingStyle}" />
+                                                <HyperlinkButton
+                                                    Grid.Column="1"
+                                                    Content="Manage"
+                                                    VerticalAlignment="Center"
+                                                    Padding="0"
+                                                    Click="ManageBackup_Click" />
+                                            </Grid>
+                                            <Grid x:Name="ProtectedFolderRows" ColumnSpacing="8" RowSpacing="8" />
+                                        </StackPanel>
                                     </Border>
                                 </StackPanel>
                                 <StackPanel
@@ -211,25 +276,28 @@
                                     Spacing="12"
                                     Visibility="Collapsed"
                                     Grid.Column="1">
-                                    <Grid>
-                                        <TextBlock
-                                            Text="Recent activity"
-                                            Style="{StaticResource BodyStrongTextBlockStyle}" />
-                                        <HyperlinkButton
-                                            Content="View all"
-                                            HorizontalAlignment="Right"
-                                            Padding="0"
-                                            Click="ViewActivity_Click" />
-                                    </Grid>
-                                    <Border
-                                        CornerRadius="8"
-                                        Padding="24"
-                                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                        BorderThickness="1">
-                                        <ItemsControl
-                                            ItemsSource="{Binding RecentActivity}"
-                                            ItemTemplate="{StaticResource ActivityTemplate}" />
+                                    <Border Style="{StaticResource CloudBaySurfaceStyle}">
+                                        <StackPanel Spacing="12">
+                                            <Grid ColumnSpacing="12">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock
+                                                    Text="Recent activity"
+                                                    VerticalAlignment="Center"
+                                                    Style="{StaticResource CloudBaySectionHeadingStyle}" />
+                                                <HyperlinkButton
+                                                    Grid.Column="1"
+                                                    Content="View all"
+                                                    VerticalAlignment="Center"
+                                                    Padding="0"
+                                                    Click="ViewActivity_Click" />
+                                            </Grid>
+                                            <ItemsControl
+                                                ItemsSource="{Binding RecentActivity}"
+                                                ItemTemplate="{StaticResource ActivityTemplate}" />
+                                        </StackPanel>
                                     </Border>
                                 </StackPanel>
                             </Grid>
@@ -238,24 +306,12 @@
                 </ScrollViewer>
                 <Grid
                     x:Name="ActivityPage"
-                    Grid.Row="1"
+                    Grid.Row="2"
                     Visibility="Collapsed"
                     MaxWidth="1120"
                     HorizontalAlignment="Center"
                     Padding="{StaticResource CloudBayPageInset}">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-                    <StackPanel Spacing="8" Margin="0,0,0,24">
-                        <TextBlock Text="Activity" Style="{StaticResource TitleTextBlockStyle}" />
-                        <TextBlock
-                            x:Name="ActivityPending"
-                            Text="{Binding PendingLabel}"
-                            Style="{StaticResource CloudBaySecondaryTextStyle}"
-                            Visibility="Collapsed" />
-                    </StackPanel>
-                    <Grid Grid.Row="1">
+                    <Grid>
                         <ListView
                             x:Name="ActivityList"
                             ItemsSource="{Binding Activity}"
@@ -272,23 +328,19 @@
                                 Glyph=""
                                 FontSize="28"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                            <TextBlock Text="No transfers yet" Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                            <TextBlock
+                                Text="No transfers yet"
+                                Style="{StaticResource CloudBaySecondaryTextStyle}" />
                         </StackPanel>
                     </Grid>
                 </Grid>
                 <ScrollViewer
                     x:Name="BackupPage"
-                    Grid.Row="1"
+                    Grid.Row="2"
                     Visibility="Collapsed"
                     HorizontalScrollBarVisibility="Disabled"
                     HorizontalContentAlignment="Stretch">
                     <StackPanel x:Name="BackupContent" Style="{StaticResource CloudBayPageContentStyle}">
-                        <StackPanel Spacing="8">
-                            <TextBlock Text="Folder backup" Style="{StaticResource TitleTextBlockStyle}" />
-                            <TextBlock
-                                Text="Keep your Windows folders backed up and available in File Explorer."
-                                Style="{StaticResource CloudBaySecondaryTextStyle}" />
-                        </StackPanel>
                         <InfoBar
                             x:Name="BackupConnectInfo"
                             IsOpen="True"
@@ -394,21 +446,13 @@
                 </ScrollViewer>
                 <ScrollViewer
                     x:Name="FilesPage"
-                    Grid.Row="1"
+                    Grid.Row="2"
                     Visibility="Collapsed"
                     HorizontalScrollBarVisibility="Disabled"
                     HorizontalContentAlignment="Stretch">
                     <StackPanel x:Name="FilesContent" Style="{StaticResource CloudBayPageContentStyle}">
-                        <StackPanel Spacing="8">
-                            <TextBlock Text="Files" Style="{StaticResource TitleTextBlockStyle}" />
-                            <TextBlock
-                                x:Name="StorageSummary"
-                                Text="{Binding StorageSummary}"
-                                Style="{StaticResource CloudBaySecondaryTextStyle}"
-                                Visibility="Collapsed" />
-                        </StackPanel>
                         <Border
-                            CornerRadius="8"
+                            CornerRadius="{ThemeResource ControlCornerRadius}"
                             Padding="24"
                             Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
@@ -444,7 +488,7 @@
                                 <settings:SettingsCard
                                     x:Name="FileLocationCard"
                                     MinHeight="128"
-                                    CornerRadius="8"
+                                    CornerRadius="{ThemeResource ControlCornerRadius}"
                                     Padding="24">
                                     <settings:SettingsCard.Header>
                                         <TextBlock
@@ -565,7 +609,7 @@
                                                         Click="RestoreVersion_Click"
                                                         IsEnabled="False" />
                                                     <TextBlock
-                                                        Text="Available versions depend on your B2 bucket's retention rules."
+                                                        Text="Available versions depend on your B2 bucket&apos;s retention rules."
                                                         Style="{StaticResource CloudBaySecondaryTextStyle}" />
                                                 </StackPanel>
                                             </StackPanel>
@@ -578,19 +622,18 @@
                 </ScrollViewer>
                 <ScrollViewer
                     x:Name="SettingsPage"
-                    Grid.Row="1"
+                    Grid.Row="2"
                     Visibility="Collapsed"
                     HorizontalScrollBarVisibility="Disabled"
                     HorizontalContentAlignment="Stretch">
                     <StackPanel x:Name="SettingsContent" Style="{StaticResource CloudBayPageContentStyle}">
                         <StackPanel x:Name="SettingsHub" Spacing="24">
-                            <TextBlock Text="Settings" Style="{StaticResource TitleTextBlockStyle}" />
                             <settings:SettingsCard
                                 x:Name="SettingsAccountCard"
                                 Description="Connect a private bucket to start protecting your files."
                                 MinHeight="76"
                                 Padding="0"
-                                CornerRadius="8"
+                                CornerRadius="{ThemeResource ControlCornerRadius}"
                                 IsClickEnabled="False"
                                 Background="Transparent"
                                 BorderThickness="0">
@@ -615,17 +658,12 @@
                                     MinHeight="40" />
                             </settings:SettingsCard>
                             <Grid x:Name="SettingsCategories" ColumnSpacing="24" RowSpacing="24">
-                                <Border
-                                    CornerRadius="8"
-                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                    BorderThickness="1">
+                                <Border Style="{StaticResource CloudBaySurfaceStyle}" Padding="0">
                                     <StackPanel Spacing="0">
                                         <TextBlock
-                                            Text="Files and backup"
-                                            FontSize="16"
-                                            FontWeight="SemiBold"
-                                            Margin="20,20,20,12" />
+                                            Text="Backup and sync"
+                                            Margin="20,20,20,12"
+                                            Style="{StaticResource CloudBaySectionHeadingStyle}" />
                                         <settings:SettingsCard
                                             x:Name="SyncCategory"
                                             Description="Files on demand and downloaded file storage."
@@ -639,7 +677,7 @@
                                             BorderThickness="0">
                                             <settings:SettingsCard.Header>
                                                 <TextBlock
-                                                    Text="Sync"
+                                                    Text="Files and storage"
                                                     Style="{StaticResource BodyTextBlockStyle}"
                                                     TextWrapping="Wrap" />
                                             </settings:SettingsCard.Header>
@@ -667,7 +705,7 @@
                                             BorderThickness="0">
                                             <settings:SettingsCard.Header>
                                                 <TextBlock
-                                                    Text="Network and power"
+                                                    Text="Transfers and power"
                                                     Style="{StaticResource BodyTextBlockStyle}"
                                                     TextWrapping="Wrap" />
                                             </settings:SettingsCard.Header>
@@ -678,19 +716,42 @@
                                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                             </settings:SettingsCard.HeaderIcon>
                                         </settings:SettingsCard>
+                                        <Border
+                                            Height="1"
+                                            Background="{ThemeResource DividerStrokeColorDefaultBrush}"
+                                            Margin="20,0" />
+                                        <settings:SettingsCard
+                                            x:Name="CatalogCategory"
+                                            Description="See available and planned connections."
+                                            MinHeight="68"
+                                            Padding="20,14"
+                                            IsClickEnabled="True"
+                                            Tag="catalog"
+                                            Click="SettingsCategory_Click"
+                                            CornerRadius="4"
+                                            Background="Transparent"
+                                            BorderThickness="0">
+                                            <settings:SettingsCard.Header>
+                                                <TextBlock
+                                                    Text="Providers and modes"
+                                                    Style="{StaticResource BodyTextBlockStyle}"
+                                                    TextWrapping="Wrap" />
+                                            </settings:SettingsCard.Header>
+                                            <settings:SettingsCard.HeaderIcon>
+                                                <FontIcon
+                                                    Glyph=""
+                                                    FontSize="20"
+                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                            </settings:SettingsCard.HeaderIcon>
+                                        </settings:SettingsCard>
                                     </StackPanel>
                                 </Border>
-                                <Border
-                                    CornerRadius="8"
-                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                    BorderThickness="1">
+                                <Border Style="{StaticResource CloudBaySurfaceStyle}" Padding="0">
                                     <StackPanel Spacing="0">
                                         <TextBlock
-                                            Text="App preferences"
-                                            FontSize="16"
-                                            FontWeight="SemiBold"
-                                            Margin="20,20,20,12" />
+                                            Text="This app"
+                                            Margin="20,20,20,12"
+                                            Style="{StaticResource CloudBaySectionHeadingStyle}" />
                                         <settings:SettingsCard
                                             x:Name="AppearanceCategory"
                                             Description="Choose your app theme."
@@ -721,7 +782,7 @@
                                             Margin="20,0" />
                                         <settings:SettingsCard
                                             x:Name="GeneralCategory"
-                                            Description="Background startup and Windows integration."
+                                            Description="Run in the background after sign-in."
                                             MinHeight="68"
                                             Padding="20,14"
                                             IsClickEnabled="True"
@@ -732,50 +793,13 @@
                                             BorderThickness="0">
                                             <settings:SettingsCard.Header>
                                                 <TextBlock
-                                                    Text="General"
+                                                    Text="Startup"
                                                     Style="{StaticResource BodyTextBlockStyle}"
                                                     TextWrapping="Wrap" />
                                             </settings:SettingsCard.Header>
                                             <settings:SettingsCard.HeaderIcon>
                                                 <FontIcon
                                                     Glyph=""
-                                                    FontSize="20"
-                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                            </settings:SettingsCard.HeaderIcon>
-                                        </settings:SettingsCard>
-                                    </StackPanel>
-                                </Border>
-                                <Border
-                                    CornerRadius="8"
-                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                    BorderThickness="1">
-                                    <StackPanel Spacing="0">
-                                        <TextBlock
-                                            Text="Connections and support"
-                                            FontSize="16"
-                                            FontWeight="SemiBold"
-                                            Margin="20,20,20,12" />
-                                        <settings:SettingsCard
-                                            x:Name="CatalogCategory"
-                                            Description="See available and planned connections."
-                                            MinHeight="68"
-                                            Padding="20,14"
-                                            IsClickEnabled="True"
-                                            Tag="catalog"
-                                            Click="SettingsCategory_Click"
-                                            CornerRadius="4"
-                                            Background="Transparent"
-                                            BorderThickness="0">
-                                            <settings:SettingsCard.Header>
-                                                <TextBlock
-                                                    Text="Providers and modes"
-                                                    Style="{StaticResource BodyTextBlockStyle}"
-                                                    TextWrapping="Wrap" />
-                                            </settings:SettingsCard.Header>
-                                            <settings:SettingsCard.HeaderIcon>
-                                                <FontIcon
-                                                    Glyph=""
                                                     FontSize="20"
                                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                             </settings:SettingsCard.HeaderIcon>
@@ -813,36 +837,10 @@
                             </Grid>
                         </StackPanel>
                         <StackPanel x:Name="SettingsDetail" Spacing="24" Visibility="Collapsed">
-                            <Grid ColumnSpacing="12">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <Button
-                                    x:Name="SettingsBackButton"
-                                    Width="40"
-                                    Height="40"
-                                    Style="{StaticResource SubtleButtonStyle}"
-                                    Click="SettingsBack_Click"
-                                    AutomationProperties.Name="Back to settings">
-                                    <FontIcon Glyph="" FontSize="18" />
-                                </Button>
-                                <TextBlock
-                                    Grid.Column="1"
-                                    x:Name="SettingsDetailTitle"
-                                    Text="Account"
-                                    Style="{StaticResource TitleTextBlockStyle}"
-                                    VerticalAlignment="Center"
-                                    TextWrapping="Wrap" />
-                            </Grid>
                             <StackPanel x:Name="AccountSettingsDetail" Spacing="4" Visibility="Collapsed">
                                 <Border
-                                    CornerRadius="8"
-                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    Style="{StaticResource CloudBaySurfaceStyle}"
                                     x:Name="ConnectionPanel"
-                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                                    BorderThickness="1"
-                                    Padding="24"
                                     MaxWidth="720"
                                     HorizontalAlignment="Left">
                                     <StackPanel Spacing="16">
@@ -867,19 +865,32 @@
                                                     Style="{StaticResource CloudBaySecondaryTextStyle}" />
                                             </StackPanel>
                                         </Grid>
-                                        <TextBox
-                                            x:Name="BucketNameBox"
-                                            Header="Bucket name"
-                                            PlaceholderText="Your private B2 bucket" />
-                                        <TextBox
-                                            x:Name="KeyIdBox"
-                                            Header="Application key ID"
-                                            PlaceholderText="Key ID" />
-                                        <PasswordBox
-                                            x:Name="ApplicationKeyBox"
-                                            Header="Application key"
-                                            PlaceholderText="Application key"
-                                            PasswordRevealMode="Peek" />
+                                        <Grid x:Name="AccountCredentialFields" ColumnSpacing="16" RowSpacing="16">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+                                            <TextBox
+                                                x:Name="BucketNameBox"
+                                                Header="Bucket name"
+                                                PlaceholderText="Your private B2 bucket" />
+                                            <TextBox
+                                                x:Name="KeyIdBox"
+                                                Grid.Column="1"
+                                                Header="Application key ID"
+                                                PlaceholderText="Key ID" />
+                                            <PasswordBox
+                                                x:Name="ApplicationKeyBox"
+                                                Grid.Row="1"
+                                                Grid.ColumnSpan="2"
+                                                Header="Application key"
+                                                PlaceholderText="Application key"
+                                                PasswordRevealMode="Peek" />
+                                        </Grid>
                                         <settings:SettingsExpander
                                             x:Name="ConnectionOptions"
                                             Header="Advanced connection">
@@ -976,7 +987,7 @@
                                                     AcceptsReturn="True"
                                                     MinHeight="120"
                                                     TextWrapping="Wrap"
-                                                    PlaceholderText="node_modules&#10;*.tmp" />
+                                                    PlaceholderText="node_modules&#xA;*.tmp" />
                                                 <Button
                                                     Content="Apply exclusions"
                                                     Click="ApplyExclusions_Click"
@@ -991,7 +1002,7 @@
                                     Header="Metered connections"
                                     Description="Pause syncing to limit mobile data use.">
                                     <settings:SettingsCard.HeaderIcon>
-                                        <FontIcon Glyph="&#xE701;" />
+                                        <FontIcon Glyph="" />
                                     </settings:SettingsCard.HeaderIcon>
                                     <ToggleSwitch
                                         x:Name="MeteredBox"
@@ -1003,7 +1014,7 @@
                                     Header="Battery Saver"
                                     Description="Pause syncing while Battery Saver is on.">
                                     <settings:SettingsCard.HeaderIcon>
-                                        <FontIcon Glyph="&#xE945;" />
+                                        <FontIcon Glyph="" />
                                     </settings:SettingsCard.HeaderIcon>
                                     <ToggleSwitch
                                         x:Name="BatterySaverBox"
@@ -1090,15 +1101,6 @@
                                 </settings:SettingsCard>
                             </StackPanel>
                             <StackPanel x:Name="AboutSettingsDetail" Spacing="4" Visibility="Collapsed">
-                                <settings:SettingsCard
-                                    Header="Providers and modes"
-                                    Description="Backblaze B2 and Native backup are available now."
-                                    IsClickEnabled="True"
-                                    Click="Catalog_Click">
-                                    <settings:SettingsCard.HeaderIcon>
-                                        <FontIcon Glyph="" />
-                                    </settings:SettingsCard.HeaderIcon>
-                                </settings:SettingsCard>
                                 <settings:SettingsExpander Header="CloudBay" Description="Version 2.0.0">
                                     <settings:SettingsExpander.HeaderIcon>
                                         <FontIcon Glyph="" />
@@ -1115,7 +1117,7 @@
                         </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
-                <Grid x:Name="BusyFooter" Grid.Row="2" Padding="32,12" ColumnSpacing="12" Visibility="Collapsed">
+                <Grid x:Name="BusyFooter" Grid.Row="3" Padding="32,12" ColumnSpacing="12" Visibility="Collapsed">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />

@@ -4,14 +4,16 @@ CloudBay uses native WinUI controls and Windows Community Toolkit SettingsCard a
 
 ## Structure
 
-- Mica Alt is the window base. Navigation uses the commanding layer; NavigationView supplies the content layer once.
-- Foreground rows and groups have a distinct soft fill through native `CardBackgroundFillColorDefaultBrush`, with restrained `CardStrokeColorDefaultBrush` contours. This separates their content from the wallpaper-tinted window foundation. NavigationView retains its native geometry; the page is not wrapped in another painted frame.
-- Page titles and section headings provide hierarchy above purposeful content surfaces. Generous spacing and comfortable controls take priority over compactness.
-- Settings opens a home page with functional categories. Focused detail pages expose the account form, sync preferences, network options, appearance, and support when selected. Native back navigation connects the two levels; breadcrumbs are reserved for deeper hierarchies.
+- Mica Alt is the window base. Navigation uses the commanding layer. The page follows Microsoft's card pattern: NavigationView's universal content background is transparent, and each useful group supplies its own foreground surface.
+- The page title occupies a separate, fixed header above the scrollable content. Its background remains transparent so the title sits on the Mica layer, rather than inside a large foreground rectangle. Detail-page back navigation and the title share this same header; scrolling never loses the page identity.
+- Foreground rows and groups have a distinct soft fill through native `CardBackgroundFillColorDefaultBrush`, with restrained `CardStrokeColorDefaultBrush` contours. Their native `ControlCornerRadius` is 4 epx; the tray, dialogs, and other overlays retain the Windows 8 epx treatment. No second full-page frame obscures the material behind the cards.
+- Section headings describe one useful group, and controls are placed inside that group's surface. Generous spacing and comfortable controls take priority over compactness.
+- Settings opens a home page with two balanced category groups: Backup and sync, and This app. The current cloud account remains a separate identity and action. Focused detail pages expose the account form, file availability, transfers and power, appearance, startup, and support when selected. Planned providers and modes have one discoverable entry rather than repeated advertisements. Native back navigation connects the two levels; breadcrumbs are reserved for deeper hierarchies.
 - Backup uses recognizable Windows folder tiles, accessible switches, and paths in tooltips. Less common folders remain discoverable on demand.
 - Pages share consistent outer gutters and adapt to the available window width. Activity remains a bounded, scrollable list.
 - The tray uses a compact layout: current state, relevant progress, recent activity when present, and quick actions. Its height follows the visible content.
 - The tray body scrolls when the work area limits its height. Footer actions stay reachable and stack when scaled text no longer fits beside each other. Connect opens Account directly; attention opens Overview's review action.
+- The tray synchronizes its native frame with the actual XAML theme. Windows 11 DWM suppresses the flyout's outer stroke while retaining native rounded corners and shadow; contrast themes keep the system boundary. The frame updates after theme, activation, and contrast-setting changes.
 
 ## Interaction
 
@@ -33,15 +35,15 @@ The owner's Windows Settings Apps page, Store Library, Files Home, and PowerToys
 
 | Element | Placement and treatment |
 | --- | --- |
-| Page title | Outside the content surfaces; native Title style, 28 epx semibold. |
+| Page title | Fixed header on exposed Mica above the scrollable foreground cards; native Title style, 28 epx semibold. |
 | Settings entry | Regular 14 epx label, 12 epx secondary description, neutral 20 epx action icon, and a comfortable row rather than an oversized tile. |
 | Entry geometry | Native 4 epx control corners; theme fill distinguishes entries, with subordinate contours. |
-| Shared content group | 8 epx outer corners and one group heading; internal rows do not repeat outlined containers. |
+| Shared content group | Native 4 epx in-page corners and one group heading; internal rows do not repeat outlined containers. |
 | Detail section | BodyStrong heading above related native SettingsCard/SettingsExpander rows, with close spacing within the group and larger spacing between groups. |
 | File or folder identity | Windows' colored object icon; a larger icon is reserved for recognizable content, rather than applied to every setting. |
 | Account setup | A clear account identity and next action; connection fields appear only on the Account detail page. |
 
-These proportions follow the [Windows type ramp](https://learn.microsoft.com/en-us/windows/apps/design/signature-experiences/typography), [content spacing](https://learn.microsoft.com/en-us/windows/apps/design/basics/content-basics), and [control geometry](https://learn.microsoft.com/en-us/windows/apps/design/signature-experiences/geometry). The [WinUI Gallery Settings source](https://github.com/microsoft/WinUI-Gallery/blob/main/WinUIGallery/Pages/SettingsPage.xaml) provides the grouped detail-row pattern; [PowerToys' dashboard source](https://github.com/microsoft/PowerToys/blob/main/src/settings-ui/Settings.UI/SettingsXAML/Views/DashboardPage.xaml) provides a reference for purposeful shared home surfaces.
+These proportions follow the [Windows type ramp](https://learn.microsoft.com/en-us/windows/apps/design/signature-experiences/typography), [content spacing](https://learn.microsoft.com/en-us/windows/apps/design/basics/content-basics), and [control geometry](https://learn.microsoft.com/en-us/windows/apps/design/signature-experiences/geometry). The [WinUI Gallery Settings source](https://github.com/microsoft/WinUI-Gallery/blob/main/WinUIGallery/Pages/SettingsPage.xaml) places the page title in an Auto grid row and the scrolling settings in a separate star row, with close spacing inside sections. [PowerToys' General source](https://github.com/microsoft/PowerToys/blob/main/src/settings-ui/Settings.UI/SettingsXAML/Views/GeneralPage.xaml) demonstrates focused SettingsGroup sections and progressively disclosed SettingsExpander controls; [its dashboard source](https://github.com/microsoft/PowerToys/blob/main/src/settings-ui/Settings.UI/SettingsXAML/Views/DashboardPage.xaml) provides a reference for purposeful shared home surfaces. Microsoft's [Mica card-pattern guidance](https://learn.microsoft.com/en-us/windows/apps/design/style/mica#card-pattern-in-left-navigationview) explicitly removes NavigationView's default content background before placing individual cards over the backdrop.
 
 ## Microsoft references
 

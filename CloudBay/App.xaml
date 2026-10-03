@@ -11,7 +11,21 @@
             <!-- Native controls own their Windows 11 geometry, typography,
                  strokes, high contrast states, focus and reduced motion. -->
             <Thickness
-                x:Key="CloudBayPageInset">32,32,32,40</Thickness>
+                x:Key="CloudBayPageInset">32,24,32,40</Thickness>
+            <!-- The shell header stays on the window's Mica layer. Only
+                 meaningful groups use a foreground backplate. Windows keeps
+                 in-page corners at its native ControlCornerRadius. -->
+            <Style x:Key="CloudBaySurfaceStyle" TargetType="Border">
+                <Setter Property="CornerRadius" Value="{ThemeResource ControlCornerRadius}" />
+                <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="Padding" Value="24" />
+            </Style>
+            <Style x:Key="CloudBaySectionHeadingStyle" TargetType="TextBlock" BasedOn="{StaticResource BodyStrongTextBlockStyle}">
+                <Setter Property="FontSize" Value="16" />
+                <Setter Property="TextWrapping" Value="Wrap" />
+            </Style>
             <Style
                 x:Key="CloudBayPageContentStyle"
                 TargetType="StackPanel">
@@ -110,7 +124,7 @@
                 </Grid>
             </DataTemplate>
             <DataTemplate x:Key="ActivityRowTemplate">
-                <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="4" Padding="16,0">
+                <Border Style="{StaticResource CloudBaySurfaceStyle}" Padding="16,0">
                     <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource ActivityTemplate}" />
                 </Border>
             </DataTemplate>

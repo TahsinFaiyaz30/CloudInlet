@@ -52,6 +52,7 @@ public sealed partial class MainWindow : Window
     private AppSettings? _loadedSettings;
     private string _versionPath = "";
     private bool? _compactLayout;
+    private string _currentPage = "overview";
     private string _settingsRoute = "home";
     private int _folderIconPixels;
     private Control? _settingsOrigin;
@@ -211,8 +212,7 @@ public sealed partial class MainWindow : Window
         ActivityEmpty.Visibility = _viewModel.HasActivity ? Visibility.Collapsed : Visibility.Visible;
         OverviewStatusDetail.Visibility = _viewModel.HasStatusDetail ? Visibility.Visible : Visibility.Collapsed;
         OverviewLastSync.Visibility = _viewModel.HasLastSync ? Visibility.Visible : Visibility.Collapsed;
-        ActivityPending.Visibility = _viewModel.HasPending ? Visibility.Visible : Visibility.Collapsed;
-        StorageSummary.Visibility = _viewModel.HasStorageSummary ? Visibility.Visible : Visibility.Collapsed;
+        UpdatePageHeader();
         BackupSuggestion.Visibility = settings.IsConfigured && settings.Backups.Count + settings.CustomBackups.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         BackupConnectInfo.IsOpen = !settings.IsConfigured;
         CancelConnectionButton.Visibility = settings.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
@@ -252,6 +252,7 @@ public sealed partial class MainWindow : Window
 
     private void ShowPage(string page)
     {
+        _currentPage = page;
         FrameworkElement[] pages = [OverviewPage, ActivityPage, BackupPage, FilesPage, SettingsPage];
         foreach (var item in pages) item.Visibility = Visibility.Collapsed;
         var selected = page switch
@@ -263,6 +264,7 @@ public sealed partial class MainWindow : Window
             _ => OverviewPage
         };
         selected.Visibility = Visibility.Visible;
+        UpdatePageHeader();
         if (page == "backup") RefreshBackups(refreshMetadata: true);
         if (selected is ScrollViewer viewer) viewer.ChangeView(null, 0, null, true);
         if (_livePagePath is not null)
@@ -275,6 +277,33 @@ public sealed partial class MainWindow : Window
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
         }
+    }
+
+    private void UpdatePageHeader()
+    {
+        var settingsDetail = _currentPage == "settings" && _settingsRoute != "home";
+        PageTitle.Text = _currentPage switch
+        {
+            "activity" => "Activity",
+            "backup" => "Folder backup",
+            "files" => "Files",
+            "settings" => _settingsRoute switch
+            {
+                "account" => "Account",
+                "sync" => "Files and storage",
+                "network" => "Transfers and power",
+                "appearance" => "Appearance",
+                "general" => "Startup",
+                "about" => "About CloudBay",
+                _ => "Settings"
+            },
+            _ => "Overview"
+        };
+        SettingsBackButton.Visibility = SettingsContextLabel.Visibility = settingsDetail ? Visibility.Visible : Visibility.Collapsed;
+        PageDescription.Text = _currentPage == "backup" ? "Keep your Windows folders backed up and available in File Explorer." : "";
+        PageDescription.Visibility = PageDescription.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        ActivityPending.Visibility = _currentPage == "activity" && _viewModel.HasPending ? Visibility.Visible : Visibility.Collapsed;
+        StorageSummary.Visibility = _currentPage == "files" && _viewModel.HasStorageSummary ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void ApplyTheme(string theme) => RootGrid.RequestedTheme = theme switch
@@ -327,9 +356,24 @@ public sealed partial class MainWindow : Window
         // current viewport width explicitly so cards never slide offscreen.
         foreach (var (viewer, content) in new[] { (OverviewPage, OverviewContent), (BackupPage, BackupContent), (FilesPage, FilesContent), (SettingsPage, SettingsContent) })
             if (viewer.ActualWidth > 0) content.Width = Math.Min(PageColumnWidth, viewer.ActualWidth);
+        if (ContentLayoutGrid.ActualWidth > 0) PageHeader.Width = Math.Min(PageColumnWidth, ContentLayoutGrid.ActualWidth);
         if (ContentLayoutGrid.ActualWidth > 0) ActivityPage.Width = Math.Min(PageColumnWidth, ContentLayoutGrid.ActualWidth);
         ArrangeTiles(SettingsCategories, SettingsContent.Width - 64 >= 660 * _uiSettings.TextScaleFactor ? 2 : 1);
-        if (SettingsContent.Width > 64) ConnectionPanel.Width = Math.Min(720, SettingsContent.Width - 64);
+        if (SettingsContent.Width > 64)
+        {
+            ConnectionPanel.Width = Math.Min(720, SettingsContent.Width - 64);
+            // Keep the secret full width. The shorter account identifiers share
+            // a row only when their labels and inputs have comfortable space.
+            var paired = ConnectionPanel.Width - 48 >= 560 * _uiSettings.TextScaleFactor;
+            AccountCredentialFields.ColumnSpacing = paired ? 16 : 0;
+            AccountCredentialFields.ColumnDefinitions[1].Width = paired ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
+            Grid.SetColumn(KeyIdBox, paired ? 1 : 0);
+            Grid.SetRow(KeyIdBox, paired ? 0 : 1);
+            Grid.SetRow(ApplicationKeyBox, paired ? 1 : 2);
+            Grid.SetColumnSpan(ApplicationKeyBox, paired ? 2 : 1);
+            while (AccountCredentialFields.RowDefinitions.Count < (paired ? 2 : 3)) AccountCredentialFields.RowDefinitions.Add(new() { Height = GridLength.Auto });
+            while (AccountCredentialFields.RowDefinitions.Count > (paired ? 2 : 3)) AccountCredentialFields.RowDefinitions.RemoveAt(AccountCredentialFields.RowDefinitions.Count - 1);
+        }
         var pane = Navigation.DisplayMode == NavigationViewDisplayMode.Expanded ? Navigation.OpenPaneLength :
             Navigation.DisplayMode == NavigationViewDisplayMode.Compact ? Navigation.CompactPaneLength : 0;
         var compact = Navigation.ActualWidth - pane < 670;
@@ -892,20 +936,19 @@ public sealed partial class MainWindow : Window
 
     private void OpenSettingsRoute(string route)
     {
-        var routes = new Dictionary<string, (FrameworkElement Panel, string Title)>(StringComparer.Ordinal)
+        var routes = new Dictionary<string, FrameworkElement>(StringComparer.Ordinal)
         {
-            ["account"] = (AccountSettingsDetail, "Account"), ["sync"] = (SyncSettingsDetail, "Sync"),
-            ["network"] = (NetworkSettingsDetail, "Network and power"), ["appearance"] = (AppearanceSettingsDetail, "Appearance"),
-            ["general"] = (GeneralSettingsDetail, "General"), ["about"] = (AboutSettingsDetail, "About CloudBay")
+            ["account"] = AccountSettingsDetail, ["sync"] = SyncSettingsDetail,
+            ["network"] = NetworkSettingsDetail, ["appearance"] = AppearanceSettingsDetail,
+            ["general"] = GeneralSettingsDetail, ["about"] = AboutSettingsDetail
         };
         _settingsRoute = routes.ContainsKey(route) ? route : "home";
-        foreach (var item in routes.Values) item.Panel.Visibility = Visibility.Collapsed;
+        foreach (var panel in routes.Values) panel.Visibility = Visibility.Collapsed;
         SettingsHub.Visibility = _settingsRoute == "home" ? Visibility.Visible : Visibility.Collapsed;
         SettingsDetail.Visibility = _settingsRoute == "home" ? Visibility.Collapsed : Visibility.Visible;
         if (routes.TryGetValue(_settingsRoute, out var detail))
         {
-            detail.Panel.Visibility = Visibility.Visible;
-            SettingsDetailTitle.Text = detail.Title;
+            detail.Visibility = Visibility.Visible;
         }
         if (SettingsPage.Visibility == Visibility.Visible) ShowPage("settings");
     }
@@ -1087,7 +1130,6 @@ public sealed partial class MainWindow : Window
         RefreshCustomBackups();
     }
 
-    private async void Catalog_Click(object sender, RoutedEventArgs args) => await OpenCatalogAsync();
 
     private async Task OpenCatalogAsync()
     {
@@ -1393,13 +1435,21 @@ public sealed partial class MainWindow : Window
             if (page == "settings") OpenSettingsRoute(settingsRoute);
             await Task.Delay(500);
             RootGrid.UpdateLayout();
-            // Navigation items also have a ContentGrid. Only the ancestor of
-            // our page host is the native foreground content surface.
+            // Verify the documented NavigationView card pattern at runtime.
+            // Its public resource overrides must leave the Mica header exposed;
+            // individual task cards, rather than a full-height backplate, own fill.
             DependencyObject? surface = VisualTreeHelper.GetParent(ContentLayoutGrid);
             while (surface is not null && surface is not Grid { Name: "ContentGrid" })
                 surface = VisualTreeHelper.GetParent(surface);
-            if (surface is not Grid nativeContent || nativeContent.Background is null)
-                throw new InvalidOperationException("The native NavigationView content surface was not found.");
+            if (surface is Grid measuredContent)
+            {
+                var fill = measuredContent.Background is SolidColorBrush solid ? solid.Color.ToString() : measuredContent.Background?.GetType().Name ?? "none";
+                await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"),
+                    $"{fileName}: native card surface fill={fill}, border={measuredContent.BorderThickness}, mode={Navigation.DisplayMode}{Environment.NewLine}");
+            }
+            if (surface is not Grid nativeContent || nativeContent.Background is not SolidColorBrush { Color.A: 0 } ||
+                !nativeContent.BorderThickness.Equals(new Thickness(0)))
+                throw new InvalidOperationException("The NavigationView card pattern must expose the Mica foundation without a full-height content backplate.");
             await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"),
                 $"{fileName}: native surface background={nativeContent.Background?.GetType().Name ?? "none"}, margin={nativeContent.Margin}, corners={nativeContent.CornerRadius}, mode={Navigation.DisplayMode}{Environment.NewLine}");
             var foregroundPosition = nativeContent.TransformToVisual(RootGrid).TransformPoint(new global::Windows.Foundation.Point());
@@ -1407,6 +1457,22 @@ public sealed partial class MainWindow : Window
                 foregroundPosition.X + nativeContent.ActualWidth > RootGrid.ActualWidth + 1 ||
                 foregroundPosition.Y + nativeContent.ActualHeight > RootGrid.ActualHeight + 1)
                 throw new InvalidOperationException("The native content layer must remain within the Mica window.");
+            var headerPosition = PageHeader.TransformToVisual(RootGrid).TransformPoint(new global::Windows.Foundation.Point());
+            var selectedPage = page switch
+            {
+                "activity" => (FrameworkElement)ActivityPage, "backup" => BackupPage,
+                "files" => FilesPage, "settings" => SettingsPage, _ => OverviewPage
+            };
+            var pagePosition = selectedPage.TransformToVisual(RootGrid).TransformPoint(new global::Windows.Foundation.Point());
+            if (headerPosition.Y < AppTitleBar.ActualHeight - 1 ||
+                pagePosition.Y + 1 < headerPosition.Y + PageHeader.ActualHeight ||
+                !IsWithin(PageTitle, PageHeader) || IsWithin(PageTitle, selectedPage) ||
+                PageHeader.ActualWidth > ContentLayoutGrid.ActualWidth + 1)
+                throw new InvalidOperationException("The page title must occupy the Mica header above the scrolling foreground content.");
+            if ((SettingsBackButton.Visibility == Visibility.Visible) != (page == "settings" && _settingsRoute != "home"))
+                throw new InvalidOperationException("Only a settings detail may expose the shared header's Back action.");
+            await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"),
+                $"{fileName}: Mica header y={headerPosition.Y}, height={PageHeader.ActualHeight}, task content y={pagePosition.Y}, title={PageTitle.Text}{Environment.NewLine}");
             if (page != "activity")
             {
                 var viewer = page switch { "backup" => BackupPage, "files" => FilesPage, "settings" => SettingsPage, _ => OverviewPage };
