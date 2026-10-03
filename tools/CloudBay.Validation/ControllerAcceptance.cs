@@ -84,6 +84,50 @@ internal static class ControllerAcceptance
                 Require((await controller.GetVersionsAsync("main.txt")).Count(f => f.Action == "upload") >= 2, "A main-root edit did not retain version history.");
                 Require((await controller.GetVersionsAsync("custom.txt", "CustomA")).Count(f => f.Action == "upload") >= 2, "A custom-root edit did not retain version history.");
             });
+            await check("controller_atomic_preferences_keep_native_roots_account_and_global_pause", async () =>
+            {
+                controller.Pause();
+                await controller.SyncNowAsync().WaitAsync(TimeSpan.FromMinutes(2), ct);
+                var previous = controller.Settings;
+                var ownedBefore = CurrentOwnedRoots(parent).Select(root => root.Id).Order(StringComparer.Ordinal).ToArray();
+                var connectingEvents = 0;
+                EventHandler changed = (_, _) =>
+                {
+                    if (controller.Snapshot.State == ClientState.Connecting) Interlocked.Increment(ref connectingEvents);
+                };
+                controller.Changed += changed;
+                try
+                {
+                    await Task.WhenAll(
+                        controller.UpdatePreferencesAsync(new() { Theme = "Dark" }, ct),
+                        controller.UpdatePreferencesAsync(new() { UploadConcurrency = 2, UploadBytesPerSecond = 1_000_000, DownloadBytesPerSecond = 2_000_000 }, ct),
+                        controller.UpdatePreferencesAsync(new() { FilesOnDemand = false, PollSeconds = 30, Exclusions = ["~$*", "*.ignore"] }, ct));
+                    var saved = storage.LoadSettings();
+                    Require(saved.Theme == "Dark" && saved.UploadConcurrency == 2 && saved.UploadBytesPerSecond == 1_000_000 &&
+                        saved.DownloadBytesPerSecond == 2_000_000 && !saved.FilesOnDemand && saved.PollSeconds == 30 &&
+                        saved.Exclusions.SequenceEqual(new[] { "~$*", "*.ignore" }), "Concurrent preference patches lost a saved value.");
+                    Require(saved.AccountId == previous.AccountId && saved.KeyId == previous.KeyId && saved.BucketId == previous.BucketId &&
+                        saved.BucketName == previous.BucketName && saved.RootPath == previous.RootPath && saved.Prefix == previous.Prefix &&
+                        saved.Backups.SequenceEqual(previous.Backups) && saved.CustomBackups.SequenceEqual(previous.CustomBackups),
+                        "Updating preferences changed account identity or backup ownership.");
+                    Require(CurrentOwnedRoots(parent).Select(root => root.Id).Order(StringComparer.Ordinal).SequenceEqual(ownedBefore) &&
+                        connectingEvents == 0, "Updating preferences reconnected or replaced a registered native root.");
+                    await controller.SyncNowAsync().WaitAsync(TimeSpan.FromMinutes(2), ct);
+                    Require(controller.Snapshot.State == ClientState.Paused, "Updating preferences cleared the global pause.");
+                }
+                finally
+                {
+                    controller.Changed -= changed;
+                    await controller.UpdatePreferencesAsync(new()
+                    {
+                        Theme = previous.Theme, UploadConcurrency = previous.UploadConcurrency,
+                        UploadBytesPerSecond = previous.UploadBytesPerSecond, DownloadBytesPerSecond = previous.DownloadBytesPerSecond,
+                        FilesOnDemand = previous.FilesOnDemand, PollSeconds = previous.PollSeconds, Exclusions = previous.Exclusions
+                    }, ct);
+                    controller.Resume();
+                }
+                await Sync(controller, ct);
+            });
             await check("controller_same_size_preserved_timestamp_edit_is_uploaded", async () =>
             {
                 var versions = await controller.GetVersionsAsync("custom.txt", "CustomA");

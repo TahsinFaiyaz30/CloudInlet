@@ -6,14 +6,31 @@ using CloudBay.Core.B2;
 using CloudBay.Core.Sync;
 using CloudBay.Windows;
 using CloudBay.Windows.CloudFiles;
+using Microsoft.Win32;
 
 namespace CloudBay.Application;
+
+/// <summary>Only supplied fields change. Account identity and backup ownership are managed by their lifecycle operations.</summary>
+public sealed record PreferenceUpdate
+{
+    public bool? StartAtSignIn { get; init; }
+    public bool? FilesOnDemand { get; init; }
+    public bool? PauseOnMetered { get; init; }
+    public bool? PauseOnBatterySaver { get; init; }
+    public int? UploadConcurrency { get; init; }
+    public long? UploadBytesPerSecond { get; init; }
+    public long? DownloadBytesPerSecond { get; init; }
+    public int? PollSeconds { get; init; }
+    public string? Theme { get; init; }
+    public IReadOnlyList<string>? Exclusions { get; init; }
+}
 
 public sealed class ClientController : IAsyncDisposable
 {
     private readonly ClientStorage _storage;
     private readonly SemaphoreSlim _operations = new(1, 1);
     private readonly Action<string> _unregisterSyncRoot;
+    private readonly bool _manageStartup;
     private readonly CancellationTokenSource _lifetime = new();
     private B2CloudStore? _cloud;
     private WindowsPlaceholderService? _placeholders;
@@ -35,10 +52,11 @@ public sealed class ClientController : IAsyncDisposable
     public string DiagnosticsPath => _storage.DiagnosticsPath;
     public event EventHandler? Changed;
 
-    public ClientController(ClientStorage? storage = null, Action<string>? unregisterSyncRoot = null)
+    public ClientController(ClientStorage? storage = null, Action<string>? unregisterSyncRoot = null, bool manageStartup = true)
     {
         _storage = storage ?? new();
         _unregisterSyncRoot = unregisterSyncRoot ?? global::Windows.Storage.Provider.StorageProviderSyncRootManager.Unregister;
+        _manageStartup = manageStartup;
         try { Settings = _storage.LoadSettings(); PathRules.ValidateSettings(Settings); RecoverBackupIntent(); }
         catch (Exception error)
         {
@@ -69,7 +87,7 @@ public sealed class ClientController : IAsyncDisposable
             var credentials = _storage.LoadCredentials();
             if (credentials is null) throw new InvalidDataException("Enter your B2 application key to reconnect this account.");
             await OpenConnectionAsync(credentials, Settings, _lifetime.Token);
-            SystemIntegration.ConfigureStartup(Settings.StartAtSignIn);
+            ConfigureStartup(Settings.StartAtSignIn);
         }
         catch (Exception error) { await CloseConnectionAsync(); SetStatus(new(ClientState.Attention, error.Message)); }
         finally { _operations.Release(); }
@@ -126,7 +144,7 @@ public sealed class ClientController : IAsyncDisposable
             await OpenConnectionAsync(credentials, settings, cancellationToken);
             _storage.SaveCredentials(credentials);
             _storage.SaveSettings(Settings);
-            SystemIntegration.ConfigureStartup(Settings.StartAtSignIn);
+            ConfigureStartup(Settings.StartAtSignIn);
             AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Information, "", "Connected to Backblaze B2"));
         }
         catch (Exception error)
@@ -209,22 +227,108 @@ public sealed class ClientController : IAsyncDisposable
         await _operations.WaitAsync(cancellationToken);
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (Settings.RootPath != settings.RootPath || Settings.Prefix != settings.Prefix ||
                 Settings.BucketId != settings.BucketId || Settings.KeyId != settings.KeyId ||
                 Settings.BucketName != settings.BucketName || Settings.AccountId != settings.AccountId)
                 throw new IOException("Use account setup to change the connection or sync folder.");
             if (!Settings.Backups.SequenceEqual(settings.Backups) || !Settings.CustomBackups.SequenceEqual(settings.CustomBackups))
                 throw new IOException("Folder backup changed while these settings were open. Reload settings and use folder backup controls to change those folders.");
-            SystemIntegration.ConfigureStartup(settings.StartAtSignIn);
-            _storage.SaveSettings(settings);
-            Settings = settings;
-            _cloud?.Configure(settings.UploadBytesPerSecond, settings.DownloadBytesPerSecond, settings.UploadConcurrency);
-            _engine?.Configure(settings);
-            foreach (var runtime in _customRoots.Values)
-                runtime.Engine.Configure(CustomSettings(runtime.Folder));
-            Changed?.Invoke(this, EventArgs.Empty);
+            SavePreferenceUpdate(new()
+            {
+                StartAtSignIn = settings.StartAtSignIn, FilesOnDemand = settings.FilesOnDemand,
+                PauseOnMetered = settings.PauseOnMetered, PauseOnBatterySaver = settings.PauseOnBatterySaver,
+                UploadConcurrency = settings.UploadConcurrency, UploadBytesPerSecond = settings.UploadBytesPerSecond,
+                DownloadBytesPerSecond = settings.DownloadBytesPerSecond, PollSeconds = settings.PollSeconds,
+                Theme = settings.Theme, Exclusions = settings.Exclusions.ToArray()
+            });
         }
         finally { _operations.Release(); }
+    }
+
+    /// <summary>Atomically merges preference changes with the latest lifecycle state, without reconnecting native roots.</summary>
+    public async Task<AppSettings> UpdatePreferencesAsync(PreferenceUpdate update, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+        EnsureSettingsHealthy();
+        // The caller may edit its UI collection while this update waits behind a backup operation.
+        update = update with { Exclusions = update.Exclusions?.ToArray() };
+        using var operation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+        await _operations.WaitAsync(operation.Token);
+        try
+        {
+            operation.Token.ThrowIfCancellationRequested();
+            return SavePreferenceUpdate(update);
+        }
+        finally { _operations.Release(); }
+    }
+
+    private AppSettings SavePreferenceUpdate(PreferenceUpdate update)
+    {
+        var previous = Settings;
+        var settings = previous with
+        {
+            StartAtSignIn = update.StartAtSignIn ?? previous.StartAtSignIn,
+            FilesOnDemand = update.FilesOnDemand ?? previous.FilesOnDemand,
+            PauseOnMetered = update.PauseOnMetered ?? previous.PauseOnMetered,
+            PauseOnBatterySaver = update.PauseOnBatterySaver ?? previous.PauseOnBatterySaver,
+            UploadConcurrency = update.UploadConcurrency ?? previous.UploadConcurrency,
+            UploadBytesPerSecond = update.UploadBytesPerSecond ?? previous.UploadBytesPerSecond,
+            DownloadBytesPerSecond = update.DownloadBytesPerSecond ?? previous.DownloadBytesPerSecond,
+            PollSeconds = update.PollSeconds ?? previous.PollSeconds,
+            Theme = update.Theme ?? previous.Theme,
+            Exclusions = update.Exclusions?.ToList() ?? previous.Exclusions
+        };
+        PathRules.ValidateSettings(settings);
+        var transferChanged = previous.UploadConcurrency != settings.UploadConcurrency ||
+            previous.UploadBytesPerSecond != settings.UploadBytesPerSecond || previous.DownloadBytesPerSecond != settings.DownloadBytesPerSecond;
+        // Bandwidth is applied by the shared transport; changing it should not schedule another file scan.
+        // Concurrency also changes the engine's parallel work scheduling.
+        var syncChanged = previous.UploadConcurrency != settings.UploadConcurrency || previous.FilesOnDemand != settings.FilesOnDemand ||
+            previous.PauseOnMetered != settings.PauseOnMetered || previous.PauseOnBatterySaver != settings.PauseOnBatterySaver ||
+            previous.PollSeconds != settings.PollSeconds || !previous.Exclusions.SequenceEqual(settings.Exclusions);
+        var startupChanged = previous.StartAtSignIn != settings.StartAtSignIn;
+        if (!transferChanged && !syncChanged && !startupChanged && previous.Theme == settings.Theme) return previous;
+
+        if (startupChanged && _manageStartup)
+        {
+            // Restore the actual registry value, including its type, if the durable settings write fails.
+            // Recreating it from the old preference could overwrite a startup entry changed outside the app.
+            using var key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
+            var existed = key.GetValueNames().Contains("CloudBay", StringComparer.OrdinalIgnoreCase);
+            var value = existed ? key.GetValue("CloudBay", null, RegistryValueOptions.DoNotExpandEnvironmentNames) : null;
+            var kind = existed ? key.GetValueKind("CloudBay") : RegistryValueKind.String;
+            try
+            {
+                ConfigureStartup(settings.StartAtSignIn);
+                _storage.SaveSettings(settings);
+            }
+            catch (Exception error)
+            {
+                try
+                {
+                    if (existed) key.SetValue("CloudBay", value!, kind);
+                    else key.DeleteValue("CloudBay", throwOnMissingValue: false);
+                }
+                catch (Exception rollback)
+                {
+                    throw new IOException("Preferences could not be saved, and Windows startup could not be restored. Check the Windows startup setting.",
+                        new AggregateException(error, rollback));
+                }
+                throw;
+            }
+        }
+        else _storage.SaveSettings(settings);
+
+        Settings = settings;
+        if (transferChanged) _cloud?.Configure(settings.UploadBytesPerSecond, settings.DownloadBytesPerSecond, settings.UploadConcurrency);
+        if (syncChanged)
+        {
+            _engine?.Configure(settings);
+            foreach (var runtime in _customRoots.Values) runtime.Engine.Configure(CustomSettings(runtime.Folder));
+        }
+        Changed?.Invoke(this, EventArgs.Empty);
+        return settings;
     }
 
     public async Task SetBackupAsync(string name, bool enabled, CancellationToken cancellationToken = default)
@@ -411,7 +515,7 @@ public sealed class ClientController : IAsyncDisposable
             _storage.ClearCredentials();
             Settings = Settings with { KeyId = "", AccountId = "", BucketId = "", BucketName = "", Backups = [], CustomBackups = [] };
             _storage.SaveSettings(Settings);
-            SystemIntegration.ConfigureStartup(false);
+            ConfigureStartup(false);
             SetStatus(new(ClientState.NotConnected, "Account disconnected. Local and B2 files were retained."));
             AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Information, "", "Disconnected the account after downloading cloud files and restoring system folders."));
         }
@@ -481,6 +585,11 @@ public sealed class ClientController : IAsyncDisposable
     }
     private void EnsureConnected()
     { if (_cloud is null || _placeholders is null) throw new IOException("Connect your B2 account first."); }
+    private void ConfigureStartup(bool enabled)
+    {
+        if (_manageStartup) SystemIntegration.ConfigureStartup(enabled);
+    }
+
     private void EnsureSettingsHealthy()
     {
         if (_settingsRecoveryError is not null)
