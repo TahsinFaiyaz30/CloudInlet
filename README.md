@@ -1,56 +1,64 @@
-# CloudBay
+# CloudBay 2
 
-CloudBay is an unpackaged WinUI 3 app for connecting Windows personal folders to an existing mounted cloud drive or sync folder. Its Windows 11 interface uses Mica Alt, a navigation shell, and system light or dark theme. It uses Windows Known Folder APIs for Desktop, Documents, Pictures, Music, Videos, and optional Downloads redirection. CloudBay keeps the original data when it copies files or changes a folder mapping.
+CloudBay is a native Windows backup and sync client for **Backblaze B2**. It runs in the background, uses **WinUI 3 Mica Alt**, and integrates with File Explorer through the Windows Cloud Files API. Mountain Duck is not required.
 
-## Requirements
+The previous mounted-drive migration helper is preserved on the **`legacy` branch** at `03656fb`. This branch contains the new client.
 
-- Windows 11 (build 22000 or later) recommended; Windows 10 build 19041 or later is the project minimum.
-- .NET 8 SDK and the Windows SDK for building. Visual Studio 2022 with Windows App SDK C# support is recommended for XAML editing and debugging.
-- An existing, writable mounted drive, network share, or local sync root. CloudBay does not create or authenticate a cloud mount.
-- For project links, the local source must be on NTFS or ReFS. Creating a directory symbolic link requires Windows Developer Mode or an account with the symbolic link privilege. CloudBay reports a permission error if Windows denies creation.
+## Features
 
-## Build and run
+- Notification area icon and activity flyout with upload/download history, pause/resume, quick settings, and full settings.
+- Files On-Demand, native Explorer status, download progress, always-available files, and freeing local space.
+- Windows Storage Sense integration for eligible clean, unpinned cloud content. Windows owns cache retention; configure it through **Settings → Files on demand → Windows Storage Sense**.
+- Backup for Desktop, Documents, Pictures, Music, Videos, Downloads, Favorites, Contacts, Saved Games, Links, Searches, and 3D Objects where Windows makes them available. Turning on a personal folder backup changes its actual Windows default location after a verified copy. Apps using that Windows folder then save to CloudBay automatically.
+- Custom personal folder backup in its existing location, with its own native sync root. No symlinks or mounted drives.
+- Persistent B2 connections and reusable exclusive upload sessions for small files, streaming multipart uploads, concurrency controls, and shared upload/download speed caps.
+- Durable sync state, conflict copies, exact-set review of large deletion batches, version-preserving B2 deletion, empty-folder sync, and previous-version restore.
+- Optional pause on metered connections or Battery Saver, sign-in startup, exclusions, and Windows light/dark/system themes.
+- Application keys encrypted with current-user Windows DPAPI. Account disconnect downloads and converts cloud files into normal local files before removing provider registrations.
 
-From the repository root:
+## Run
+
+Use the complete self-contained x64 release folder, or build from source:
 
 ```powershell
-dotnet restore CloudBay.sln
 dotnet build CloudBay.sln -c Release
 & '.\CloudBay\bin\x64\Release\net8.0-windows10.0.19041.0\win-x64\CloudBay.exe'
 ```
 
-Open `CloudBay.sln` in Visual Studio to run and debug the x64 unpackaged profile. The project sets `WindowsPackageType=None` and `WindowsAppSDKSelfContained=true`; it runs with the current user's desktop permissions.
+Windows 11 on x64 is recommended for Mica Alt. The project minimum is Windows 10 build 19041; Files On-Demand requires a **local fixed NTFS drive**. The release includes its .NET and Windows App SDK runtime files. Keep all files in the release's `App` folder together.
 
-To create a self-contained x64 folder for distribution, run:
+For a per-user installation, run **`Install.ps1` from the extracted release folder**. It adds a Start menu shortcut and a Windows Installed apps entry, without elevation. Before uninstalling, disconnect the account in CloudBay Settings so all local data becomes independent of the provider.
 
 ```powershell
-dotnet publish CloudBay\CloudBay.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:PublishTrimmed=false
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1
 ```
 
-The output is in `CloudBay\bin\Release\net8.0-windows10.0.19041.0\win-x64\publish`. Keep the whole published folder together when copying it to another Windows PC.
+## Connect B2
 
-## Using CloudBay
+1. Create or select a private B2 bucket. Use a bucket-scoped application key with `listFiles`, `readFiles`, and `writeFiles` access and **Allow List All Bucket Names** enabled. Previous-version server-side restore also needs access to the version being restored.
+2. Open **Settings**, enter the bucket name, key ID, and application key, then choose a dedicated local CloudBay folder and a cloud prefix such as `CloudBay/`.
+3. Connect. CloudBay discovers the account and bucket, registers its native Explorer folder, and starts syncing. Keep keys out of screenshots and diagnostic attachments.
+4. Open **Folder backup** to choose Windows personal folders or add custom folders. If OneDrive or Windows policy already controls a folder, stop that provider's backup or resolve the policy first. CloudBay does not silently take over those mappings.
+5. In Explorer, use availability commands for offline access. The **Files** page can pin/free files and folders, browse B2 versions, and restore a selected version. Its folder selector includes custom backup roots.
 
-1. On **Dashboard**, choose an existing mounted folder or drive. CloudBay checks that it can read and write a probe file and shows available capacity when the provider reports it.
-2. On **System Folders**, review each live Windows path and redirect the folders you want. Downloads stays local until you enable it in Settings. CloudBay scans for collisions, copies and verifies files, writes a journal, changes the shell path through `SHSetKnownFolderPath`, and tells Explorer to refresh. Original files remain in place.
-3. On **Custom Links**, choose a local project directory and a cloud folder name. CloudBay copies and verifies the tree, retains a local backup beside the original, and makes the original path a directory symbolic link to the cloud copy. Unlinking reconciles cloud changes into the local backup with conflict copies, removes only the link, and restores the local folder. The cloud copy remains.
-4. On **Developer Filters**, select preset or custom exclusion names and apply the provider rules. Git reads `.gitignore` within a repository. Rclone requires `--filter-from` pointing to the generated rule file. Mountain Duck and Cyberduck use their shared `%APPDATA%\Cyberduck\default.properties` preferences and must be restarted. A generated `.cyberduckignore` is an export only; Cyberduck does not automatically read it.
-5. On **Settings**, choose System, Light, or Dark theme and review recent operation journals. Rollbacks change mappings or restore prior rule content only when their recorded state is still safe to restore. Copied user files are never purged by rollback.
+Closing the main window keeps CloudBay running. Use the tray menu's **Quit CloudBay** to exit. A second launch opens the running app.
 
-On **System Folders**, use **Scan folders** to look for files left in inactive OneDrive locations. CloudBay keeps this potentially lengthy scan off the startup path. Review the recovery preview before copying those files to a local profile folder or the configured cloud root.
+## Data and recovery
 
-Operation journals are stored in `%LOCALAPPDATA%\CloudBay\Journals`; rule backups and app settings live under `%LOCALAPPDATA%\CloudBay`. Keep these files if you may need to investigate or roll back an operation.
+State lives in `%LOCALAPPDATA%\CloudBay\Client`: settings and prior copies, DPAPI-protected credentials, root-specific SQLite sync baselines, backup intent, activity history, and Recovery. Some atomic recovery copies live under the sync root's excluded `.cloudbay\Recovery`. These copies are retained for review; CloudBay does not delete them automatically.
 
-## Safety and limitations
+Deleting a synced file hides the current B2 name while retaining older versions. The bucket owner's B2 lifecycle policies determine how long those versions remain. Changes made on multiple computers are reconciled periodically; conflicting edits are preserved as separate files. CloudBay is a personal-folder backup/sync client, not a Windows disk image or a consistent snapshot of locked application/registry state.
 
-- CloudBay stops on file collisions, inaccessible paths, links inside migrated trees, and unsupported storage operations. It leaves copies in place for review after a partial failure.
-- Windows may report space for a mount or its local cache rather than the cloud account quota. CloudBay hides capacity when a provider mount cannot expose a trustworthy volume value. A copy may still run with an explicit unknown-capacity warning; the original data is retained and each copied file is verified. Check the provider's own quota and sync status before removing any external backup.
-- Rule files are provider specific. CloudBay does not start Rclone commands or force Mountain Duck/Cyberduck to reload their settings.
-- Windows policy or another sync client may control a known folder. CloudBay detects external and OneDrive redirects and requires a separate recovery action before changing them.
-- CloudBay does not delete local or cloud data to clean up after redirects, restores, or unlinks. You decide when retained copies can be archived or removed.
+Microsoft's **Windows Backup** app remains tied to Microsoft accounts and OneDrive. CloudBay uses the documented Windows folder defaults and Cloud Files integration; it does not replace Microsoft's Windows Backup service. Files On-Demand supports eligible NTFS folders, not a virtual-drive or read-only mode.
 
-## Development
+## Build and verify
 
-`CloudBay/Application` contains the application facade and per-user settings. `CloudBay/Core/Folders` contains Windows shell integration and data transfer; `CloudBay/Core/Links` contains local directory links; `CloudBay/Core/Filters` contains provider rules; `CloudBay/Core/Safety` contains durable journals. `CloudBay/ViewModels` and `CloudBay/Views` provide the MVVM interface.
+```powershell
+dotnet build CloudBay.sln -c Release -v:minimal
+dotnet test CloudBay.Tests\CloudBay.Tests.csproj -c Release --no-build -v:minimal
+.\scripts\build-release.ps1
+```
 
-Run `dotnet build CloudBay.sln` for the build gate and `dotnet test CloudBay.sln` for the test suite.
+The release script creates `artifacts\release\CloudBay-2.0.0-win-x64.zip`, an extracted package, and its SHA256 checksum. `CloudBay.exe --ui-smoke` captures the UI into `artifacts\ui-smoke` using isolated empty settings. The [live validation CLI](tools/CloudBay.Validation/README.md) uses a separately provisioned bucket-restricted key and a generated test prefix; it never redirects real Windows personal folders.
+
+See [architecture and primary documentation](docs/ARCHITECTURE.md) and [verified release scope](docs/VALIDATION.md). Public distribution needs the publisher's code-signing certificate; this local release is unsigned.

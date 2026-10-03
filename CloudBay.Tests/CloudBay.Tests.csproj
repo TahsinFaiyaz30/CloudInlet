@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <Nullable>enable</Nullable>
@@ -11,14 +11,15 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
     <PackageReference Include="MSTest.TestAdapter" Version="3.1.1" />
     <PackageReference Include="MSTest.TestFramework" Version="3.1.1" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="../CloudBay/Core/Filters/DeveloperFilterService.cs" Link="Core/DeveloperFilterService.cs" />
-    <Compile Include="../CloudBay/Core/Folders/KnownFolderDecision.cs" Link="Core/KnownFolderDecision.cs" />
-    <Compile Include="../CloudBay/Core/Folders/KnownFolderState.cs" Link="Core/KnownFolderState.cs" />
-    <Compile Include="../CloudBay/Core/Links/FolderLinkService.cs" Link="Core/FolderLinkService.cs" />
-    <Compile Include="../CloudBay/Core/Safety/IOperationJournal.cs" Link="Core/IOperationJournal.cs" />
-    <Compile Include="../CloudBay/Core/Safety/DirectoryCapacityProbe.cs" Link="Core/DirectoryCapacityProbe.cs" />
-    <Compile Include="../CloudBay/Core/Safety/OperationJournal.cs" Link="Core/OperationJournal.cs" />
+    <ProjectReference Include="..\CloudBay.Core\CloudBay.Core.csproj" />
+    <Compile Include="../CloudBay/Windows/CloudFiles/*.cs" Link="Native/%(Filename)%(Extension)" />
+    <Compile Include="../CloudBay/Application/ClientController.cs" Link="Application/ClientController.cs" />
+    <Compile Include="../CloudBay/Application/ClientStorage.cs" Link="Application/ClientStorage.cs" />
+    <Compile Include="../CloudBay/Windows/SystemIntegration.cs" Link="Native/SystemIntegration.cs" />
+    <Compile Include="../CloudBay/Windows/KnownFolderBackup.cs" Link="Native/KnownFolderBackup.cs" />
+    <Compile Include="../CloudBay/Windows/KnownFolderPolicy.cs" Link="Native/KnownFolderPolicy.cs" />
   </ItemGroup>
 </Project>

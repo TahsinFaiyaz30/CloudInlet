@@ -16,6 +16,10 @@
                 <Setter Property="CornerRadius" Value="10" />
                 <Setter Property="Padding" Value="16" />
             </Style>
+            <Style x:Key="CloudBayFolderIconStyle" TargetType="FontIcon">
+                <Setter Property="Foreground" Value="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                <Setter Property="FontSize" Value="24" />
+            </Style>
             <Style x:Key="CloudBayPanelStyle" TargetType="Border">
                 <Setter Property="Background" Value="{ThemeResource LayerFillColorDefaultBrush}" />
                 <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
@@ -38,15 +42,18 @@
                 <Setter Property="Padding" Value="8,3" />
             </Style>
             <Style x:Key="CloudBayEyebrowStyle" TargetType="TextBlock">
+                <Setter Property="TextWrapping" Value="Wrap" />
                 <Setter Property="FontSize" Value="12" />
                 <Setter Property="FontWeight" Value="SemiBold" />
                 <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
             </Style>
             <Style x:Key="CloudBaySectionTitleStyle" TargetType="TextBlock">
+                <Setter Property="TextWrapping" Value="Wrap" />
                 <Setter Property="FontSize" Value="18" />
                 <Setter Property="FontWeight" Value="SemiBold" />
             </Style>
             <Style x:Key="CloudBayPageTitleStyle" TargetType="TextBlock">
+                <Setter Property="TextWrapping" Value="Wrap" />
                 <Setter Property="FontSize" Value="28" />
                 <Setter Property="FontWeight" Value="SemiBold" />
             </Style>
@@ -55,6 +62,34 @@
                 <Setter Property="TextWrapping" Value="Wrap" />
                 <Setter Property="FontSize" Value="13" />
             </Style>
+            <DataTemplate x:Key="ActivityTemplate">
+                <Grid Padding="12,14" ColumnSpacing="14">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Border Width="36" Height="36" CornerRadius="10" VerticalAlignment="Top" Background="{ThemeResource ControlFillColorDefaultBrush}">
+                        <FontIcon Glyph="{Binding Glyph}" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                    </Border>
+                    <StackPanel Grid.Column="1" Spacing="4">
+                        <TextBlock Text="{Binding FileName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Path}" />
+                        <TextBlock Text="{Binding Detail}" Style="{StaticResource CloudBaySecondaryTextStyle}" FontSize="12" />
+                        <TextBlock Text="{Binding TimeText}" Style="{StaticResource CloudBaySecondaryTextStyle}" FontSize="11" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Spacing="4" HorizontalAlignment="Right">
+                        <TextBlock Text="{Binding Title}" FontSize="12" />
+                        <TextBlock Text="{Binding SizeText}" Style="{StaticResource CloudBaySecondaryTextStyle}" FontSize="11" HorizontalAlignment="Right" />
+                    </StackPanel>
+                </Grid>
+            </DataTemplate>
+            <DataTemplate x:Key="TrayActivityTemplate">
+                <Grid Padding="10,12" ColumnSpacing="12">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <Border Width="32" Height="32" CornerRadius="8" Background="{ThemeResource ControlFillColorDefaultBrush}" VerticalAlignment="Top"><FontIcon Glyph="{Binding Glyph}" FontSize="14" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/></Border>
+                    <StackPanel Grid.Column="1" Spacing="4"><TextBlock Text="{Binding FileName}" FontWeight="SemiBold" FontSize="12" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Path}"/><TextBlock Text="{Binding Title}" Style="{StaticResource CloudBaySecondaryTextStyle}" FontSize="11"/><TextBlock Text="{Binding TimeText}" Style="{StaticResource CloudBaySecondaryTextStyle}" FontSize="10"/></StackPanel>
+                </Grid>
+            </DataTemplate>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

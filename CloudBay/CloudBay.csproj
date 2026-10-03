@@ -16,12 +16,15 @@
     <LangVersion>latest</LangVersion>
     <PublishTrimmed>false</PublishTrimmed>
     <ApplicationIcon>Assets\CloudBay.ico</ApplicationIcon>
+    <Version>2.0.0</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <Description>Native Windows backup and Files On-Demand for Backblaze B2.</Description>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\CloudBay.Core\CloudBay.Core.csproj" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260921001" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
-    <PackageReference Include="CommunityToolkit.WinUI.Controls.SettingsControls" Version="8.2.251219" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="Assets\CloudBay.ico;Assets\CloudBay-32.png">

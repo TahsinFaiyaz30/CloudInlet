@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CloudBay", "CloudBay\CloudB
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CloudBay.Tests", "CloudBay.Tests\CloudBay.Tests.csproj", "{83470750-2D5A-438F-9287-210E59D9017E}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CloudBay.Core", "CloudBay.Core\CloudBay.Core.csproj", "{BFCCF1A0-CBBF-4FBC-8EE0-EDF6B275328F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -24,5 +26,9 @@ Global
 		{83470750-2D5A-438F-9287-210E59D9017E}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{83470750-2D5A-438F-9287-210E59D9017E}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{83470750-2D5A-438F-9287-210E59D9017E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BFCCF1A0-CBBF-4FBC-8EE0-EDF6B275328F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BFCCF1A0-CBBF-4FBC-8EE0-EDF6B275328F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BFCCF1A0-CBBF-4FBC-8EE0-EDF6B275328F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BFCCF1A0-CBBF-4FBC-8EE0-EDF6B275328F}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

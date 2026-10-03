@@ -1,0 +1,30 @@
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Build complete solution
+        run: dotnet build CloudBay.sln -c Release -v:minimal
+      - name: Test transport and reconciliation
+        # Hosted Server runners are not a desktop Cloud Files acceptance environment.
+        run: dotnet test CloudBay.Tests/CloudBay.Tests.csproj -c Release --no-build --filter "FullyQualifiedName!~Native" -v:minimal
+      - name: Publish self-contained desktop app
+        run: dotnet publish CloudBay/CloudBay.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:PublishTrimmed=false -o artifacts/ci/App -v:minimal
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CloudBay-win-x64-unsigned
+          path: artifacts/ci/App
