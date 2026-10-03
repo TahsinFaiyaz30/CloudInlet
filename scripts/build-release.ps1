@@ -2,18 +2,53 @@ param([string]$Version = '2.0.0')
 $ErrorActionPreference = 'Stop'
 $repository = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if ($Version -notmatch '^\d+\.\d+\.\d+([-.][a-zA-Z0-9.]+)?$') { throw 'Invalid release version.' }
-$releaseRoot = Join-Path $repository 'artifacts\release'
+$releaseRoot = [IO.Path]::GetFullPath((Join-Path $repository 'artifacts\release'))
+
+function Assert-ReleasePath([string]$Path) {
+    $absolute = [IO.Path]::GetFullPath($Path)
+    if (!$absolute.StartsWith($releaseRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Release output escaped its directory.' }
+    $ancestor = $absolute
+    while ($ancestor) {
+        if (Test-Path -LiteralPath $ancestor) {
+            if ((Get-Item -LiteralPath $ancestor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw 'Release output contains a linked path.'
+            }
+        }
+        $ancestor = [IO.Path]::GetDirectoryName($ancestor)
+    }
+    return $absolute
+}
+
+function Assert-ReleaseTree([string]$Path) {
+    $absolute = Assert-ReleasePath $Path
+    if ((Test-Path -LiteralPath $absolute) -and (Get-Item -LiteralPath $absolute).PSIsContainer) {
+        if (Get-ChildItem -LiteralPath $absolute -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) {
+            throw 'Release output contains a linked item.'
+        }
+    }
+    return $absolute
+}
 $stagingRoot = Join-Path $releaseRoot ('.staging-' + [Guid]::NewGuid().ToString('N'))
 $package = Join-Path $stagingRoot "CloudBay-$Version-win-x64"
-$finalPackage = [IO.Path]::GetFullPath((Join-Path $releaseRoot "CloudBay-$Version-win-x64"))
-if (!$finalPackage.StartsWith([IO.Path]::GetFullPath($releaseRoot) + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid release package destination.' }
+$finalPackage = Assert-ReleasePath (Join-Path $releaseRoot "CloudBay-$Version-win-x64")
+$archive = Assert-ReleasePath (Join-Path $releaseRoot "CloudBay-$Version-win-x64.zip")
+$checksum = Assert-ReleasePath "$archive.sha256"
+$stagingRoot = Assert-ReleasePath $stagingRoot
 $appFolder = Join-Path $package 'App'
-New-Item -ItemType Directory -Path $appFolder -Force | Out-Null
+$lockHashProvider = [Security.Cryptography.SHA256]::Create()
+try { $lockHash = [BitConverter]::ToString($lockHashProvider.ComputeHash([Text.Encoding]::UTF8.GetBytes($repository.ToUpperInvariant()))).Replace('-', '') }
+finally { $lockHashProvider.Dispose() }
+$releaseLock = [Threading.Mutex]::new($false, ('Local\CloudBay.Release.' + $lockHash))
+$ownsReleaseLock = $false
 Push-Location $repository
 try {
+    try { $ownsReleaseLock = $releaseLock.WaitOne(0) }
+    catch [Threading.AbandonedMutexException] { $ownsReleaseLock = $true }
+    if (!$ownsReleaseLock) { throw 'Another CloudBay release build is running for this repository.' }
+    New-Item -ItemType Directory -Path $appFolder -Force | Out-Null
     dotnet build CloudBay.sln -c Release -v:minimal
     if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
-    dotnet test CloudBay.Tests\CloudBay.Tests.csproj -c Release --no-build -v:minimal
+    dotnet test CloudBay.Tests\CloudBay.Tests.csproj -c Release --no-build -v:minimal --logger 'trx;LogFileName=release-package.trx' --results-directory artifacts\validation\tests
     if ($LASTEXITCODE -ne 0) { throw 'Release tests failed.' }
     dotnet publish CloudBay\CloudBay.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:PublishTrimmed=false -p:Version=$Version -o $appFolder -v:minimal
     if ($LASTEXITCODE -ne 0) { throw 'Self-contained publish failed.' }
@@ -23,16 +58,55 @@ try {
     Copy-Item -LiteralPath (Join-Path $repository 'LICENSE') -Destination $package -Force
     Copy-Item -LiteralPath (Join-Path $repository 'THIRD-PARTY-NOTICES.md') -Destination $package -Force
     Copy-Item -LiteralPath (Join-Path $repository 'docs') -Destination $package -Recurse -Force
-    if (Test-Path -LiteralPath $finalPackage) {
-        $previousPackage = [IO.Path]::GetFullPath($finalPackage + '.previous-' + [Guid]::NewGuid().ToString('N'))
-        if (!$previousPackage.StartsWith([IO.Path]::GetFullPath($releaseRoot) + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid previous package destination.' }
-        Move-Item -LiteralPath $finalPackage -Destination $previousPackage
+
+    # Finish and hash the archive before replacing any prior successful output.
+    $checkedPackage = Assert-ReleaseTree $package
+    $stagedArchive = Assert-ReleasePath (Join-Path $stagingRoot "CloudBay-$Version-win-x64.zip")
+    Compress-Archive -LiteralPath $checkedPackage -DestinationPath $stagedArchive
+    $hash = Get-FileHash -LiteralPath $stagedArchive -Algorithm SHA256
+    $stagedChecksum = Assert-ReleasePath "$stagedArchive.sha256"
+    "$($hash.Hash)  $([IO.Path]::GetFileName($archive))" | Set-Content -LiteralPath $stagedChecksum -Encoding ascii
+
+    $generation = [Guid]::NewGuid().ToString('N')
+    $destinations = @($finalPackage, $archive, $checksum)
+    foreach ($destination in $destinations) { Assert-ReleaseTree $destination | Out-Null }
+    $preserved = [Collections.Generic.List[object]]::new()
+    $promoted = [Collections.Generic.List[string]]::new()
+    try {
+        foreach ($destination in $destinations) {
+            if (Test-Path -LiteralPath $destination) {
+                $previous = Assert-ReleasePath ($destination + '.previous-' + $generation)
+                Move-Item -LiteralPath $destination -Destination $previous
+                $preserved.Add(@{ Original = $destination; Previous = $previous })
+            }
+        }
+        Move-Item -LiteralPath $checkedPackage -Destination $finalPackage
+        $promoted.Add($finalPackage)
+        Move-Item -LiteralPath $stagedArchive -Destination $archive
+        $promoted.Add($archive)
+        Move-Item -LiteralPath $stagedChecksum -Destination $checksum
+        $promoted.Add($checksum)
     }
-    Move-Item -LiteralPath $package -Destination $finalPackage
-    Remove-Item -LiteralPath $stagingRoot
-    $archive = Join-Path $releaseRoot "CloudBay-$Version-win-x64.zip"
-    Compress-Archive -LiteralPath $finalPackage -DestinationPath $archive -Force
-    $hash = Get-FileHash -LiteralPath $archive -Algorithm SHA256
-    "$($hash.Hash)  $([IO.Path]::GetFileName($archive))" | Set-Content -LiteralPath "$archive.sha256" -Encoding ascii
+    catch {
+        $promotionError = $_
+        try {
+            for ($index = $promoted.Count - 1; $index -ge 0; $index--) {
+                $failed = Assert-ReleasePath ($promoted[$index] + '.failed-' + $generation)
+                Move-Item -LiteralPath (Assert-ReleaseTree $promoted[$index]) -Destination $failed
+            }
+            for ($index = $preserved.Count - 1; $index -ge 0; $index--) {
+                Move-Item -LiteralPath (Assert-ReleaseTree $preserved[$index].Previous) -Destination $preserved[$index].Original
+            }
+        }
+        catch { throw "Release promotion failed and automatic rollback could not finish. Prior outputs remain with suffix .previous-$generation. $($_.Exception.Message)" }
+        throw $promotionError
+    }
+    $checkedStaging = Assert-ReleasePath $stagingRoot
+    try { Remove-Item -LiteralPath $checkedStaging }
+    catch { Write-Warning 'The completed release is ready, but its empty staging directory could not be removed.' }
     Write-Output "Release: $archive"
-} finally { Pop-Location }
+} finally {
+    if ($ownsReleaseLock) { $releaseLock.ReleaseMutex() }
+    $releaseLock.Dispose()
+    Pop-Location
+}
