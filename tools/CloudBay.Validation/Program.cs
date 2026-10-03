@@ -95,6 +95,22 @@ internal static class Validation
                 Require(transport.Count("b2_list_file_versions") - before >= 4, "Live listing did not cross page boundaries.");
                 store.ListPageSize = 1_000;
             });
+            await CheckAsync("current_name_listing_paginates_without_history", async () =>
+            {
+                var pageSize = store.ListPageSize;
+                try
+                {
+                    store.ListPageSize = 3;
+                    var before = transport.Count("b2_list_file_names");
+                    var files = new List<CloudObject>();
+                    await foreach (var file in store.ListCurrentAsync(bucket.Id, Prefix, ct)) files.Add(file);
+                    Require(files.Count == 12 && files.All(f => f.Action == "upload"), "The current snapshot lost or duplicated uploaded test objects.");
+                    Require(files.Select(f => f.Key).Distinct(StringComparer.Ordinal).Count() == 12, "The current snapshot repeated a name.");
+                    Require(files.All(f => f.Key.StartsWith(Prefix, StringComparison.Ordinal)), "Current listing crossed the isolated prefix.");
+                    Require(transport.Count("b2_list_file_names") - before >= 4, "Live current-name listing did not cross page boundaries.");
+                }
+                finally { store.ListPageSize = pageSize; }
+            });
             await CheckAsync("edit_version_restore_and_hide", async () =>
             {
                 var first = await UploadBytes(store, bucket.Id, keys, "versions/edit.txt", "original version"u8.ToArray(), ct);
@@ -108,6 +124,8 @@ internal static class Validation
                 await store.HideAsync(bucket.Id, first.Key, ct);
                 versions = await store.VersionsAsync(bucket.Id, first.Key, ct);
                 Require(versions[0].Action == "hide" && versions.Count(v => v.Action == "upload") == 3, "Hide did not preserve restorable history.");
+                await foreach (var file in store.ListCurrentAsync(bucket.Id, Prefix, ct))
+                    Require(file.Key != first.Key, "A hidden file still appeared in the current-name snapshot.");
             });
             await CheckAsync("empty_directory_marker_upload_list_and_hide", async () =>
             {

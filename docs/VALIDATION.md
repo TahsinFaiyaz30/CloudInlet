@@ -4,11 +4,11 @@ Acceptance was performed on 2026-10-03 using Windows 11 Pro Insider Preview buil
 
 ## Automated and native checks
 
-The final Release suite passed **101/101 tests, with zero skips**. The release script gates packaging on a complete Release solution build and the full MSTest suite, including actual Windows Cloud Files tests. Transport tests use deterministic HTTP responses to exercise reusable exclusive upload sessions, retries, authorization renewal, shared transfer caps, stalled sockets/responses, multipart ordering and cancellation, and acknowledgment recovery. Sync tests exercise persistent baselines, conflicts, deletion review, incomplete snapshots, concurrent saves, directory markers, path collisions, exclusions, and pause/quiescence.
+The Release suite passed **127/127 tests, with zero skips** after current-file listing was introduced. The release script gates packaging on a complete Release solution build and the full MSTest suite, including actual Windows Cloud Files tests. Transport tests use deterministic HTTP responses to exercise reusable exclusive upload sessions, retries, authorization renewal, shared transfer caps, stalled sockets/responses, multipart ordering and cancellation, and acknowledgment recovery. Current-name pagination adds 26 cases covering malformed metadata, repeated or out-of-prefix cursors, duplicate names, restricted prefixes, nested directory markers, and interrupted snapshots preventing both local and remote deletion. Sync tests exercise persistent baselines, conflicts, deletion review, incomplete snapshots, concurrent saves, directory markers, path collisions, exclusions, and pause/quiescence.
 
 Native tests register GUID-isolated roots in the current user's profile. They verify ordinary Windows file reads hydrate the selected immutable B2 version, clean files can be evicted and rehydrated, scans do not hydrate online-only files, dirty bytes are protected, same-size edits with preserved timestamps are uploaded, recovery survives removal, and explicit placeholder reversion retains ordinary local files after unregistering. Registration and restart tests also passed five consecutive repetitions. Verified folder-copy tests include real destination junctions at the root, ancestor, and nested levels; rejected copies leave source and outside data unchanged.
 
-The final local build and test output is available under `artifacts/validation/`; the final suite report is `artifacts/validation/tests/backend-release-final.trx`. Generated outputs and credentials are excluded from Git.
+The local build and test output is available under `artifacts/validation/` and `artifacts/tests/`; the current-listing suite report is `artifacts/tests/current-listing/current-listing-full-final.trx`. Generated outputs and credentials are excluded from Git.
 
 ## Live Backblaze B2 acceptance
 
@@ -18,7 +18,7 @@ Full transport acceptance passed **11/11 checks**: it streams a 205 MiB multipar
 
 Use the [validation CLI](../tools/CloudBay.Validation/README.md) for reproducible commands. Fresh acceptance reports remain in `artifacts/validation/b2-<GUID>.json`.
 
-After the final native checksum and settings validation changes, the controller run passed **14/14 checks**, and the smaller native/B2 run passed **9/9 checks**. `artifacts/validation/backend-release-summary.json` links the successful final reports, separating them from retained reports of earlier failures.
+After the current-name listing change, the controller run passed **14/14 checks**, and the smaller native/B2 run passed **10/10 checks**. The latter includes real current-name pagination at three objects per page and verifies hidden names disappear from the current snapshot while their versions remain available. `artifacts/validation/backend-release-summary.json` links the successful reports, separating them from retained reports of earlier failures.
 
 ## UI and distribution
 

@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using CloudBay.Core;
 using CloudBay.Core.B2;
+using CloudBay.Core.Sync;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace CloudBay.Tests;
@@ -352,7 +353,7 @@ public sealed class B2TransportTests
     }
 
     [TestMethod]
-    public async Task PaginatedCurrentListingKeepsDeletionMarkerAndSkipsOlderVersions()
+    public async Task PaginatedHistoricalListingKeepsDeletionMarkerAndSkipsOlderVersions()
     {
         var page = 0;
         using var store = new B2CloudStore(new FakeHandler(async (r, ct) =>
@@ -381,6 +382,227 @@ public sealed class B2TransportTests
         Assert.AreEqual("hide", files[0].Action);
         Assert.AreEqual("complete", files[1].FileId);
         Assert.AreEqual(Modified, files[1].ModifiedUtc);
+    }
+
+    [TestMethod]
+    public async Task CurrentListingUsesNamesEndpointAndPaginatesNestedUploadsWithoutHistory()
+    {
+        var pages = 0;
+        using var store = new B2CloudStore(new FakeHandler(async (request, ct) =>
+        {
+            if (Operation(request) == "b2_authorize_account") return Authorization();
+            Assert.AreEqual("b2_list_file_names", Operation(request), "Current sync must not walk retained versions.");
+            using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
+            var root = body.RootElement;
+            Assert.AreEqual("bucket", root.GetProperty("bucketId").GetString());
+            Assert.AreEqual("CloudBay/", root.GetProperty("prefix").GetString());
+            Assert.AreEqual(2, root.GetProperty("maxFileCount").GetInt32());
+            Assert.IsFalse(root.TryGetProperty("delimiter", out _), "Nested files must be included in the same complete snapshot.");
+            Assert.IsFalse(root.TryGetProperty("startFileId", out _));
+            if (++pages == 1)
+            {
+                Assert.AreEqual(JsonValueKind.Null, root.GetProperty("startFileName").ValueKind);
+                return Json(new { files = new[] { Object("CloudBay/a.txt", id: "a"), Object("CloudBay/folder/α.txt", id: "unicode") }, nextFileName = "CloudBay/next" });
+            }
+            Assert.AreEqual("CloudBay/next", root.GetProperty("startFileName").GetString());
+            return Json(new { files = new[] { new { fileId = "folder", fileName = "CloudBay/next-empty/", contentLength = 0, contentSha1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709", action = "upload", uploadTimestamp = 0 } }, nextFileName = (string?)null });
+        }));
+        store.ListPageSize = 2;
+        await store.ConnectAsync(new("id", "private"));
+        var files = await CurrentFiles(store);
+        CollectionAssert.AreEqual(new[] { "a", "unicode", "folder" }, files.Select(f => f.FileId).ToArray());
+        Assert.AreEqual(0L, files[2].Size);
+        Assert.AreEqual(2, pages);
+    }
+
+    [TestMethod]
+    public async Task CurrentListingOmitsHiddenNameWhileHistoricalListingStillReturnsItsMarker()
+    {
+        using var store = new B2CloudStore(new FakeHandler((request, _) => Task.FromResult(Operation(request) switch
+        {
+            "b2_authorize_account" => Authorization(),
+            "b2_list_file_names" => Json(new { files = new[] { Object("CloudBay/visible.txt") }, nextFileName = (string?)null }),
+            "b2_list_file_versions" => Json(new { files = new[] { Object("CloudBay/hidden.txt", "hide", "hidden"), Object("CloudBay/hidden.txt", id: "older"), Object("CloudBay/visible.txt") }, nextFileName = (string?)null, nextFileId = (string?)null }),
+            _ => throw new AssertFailedException("Unexpected operation.")
+        })));
+        await store.ConnectAsync(new("id", "private"));
+        Assert.AreEqual("CloudBay/visible.txt", (await CurrentFiles(store)).Single().Key);
+        var history = new List<CloudObject>();
+        await foreach (var file in store.ListAsync("bucket", "CloudBay/")) history.Add(file);
+        Assert.AreEqual(2, history.Count);
+        Assert.AreEqual("hide", history[0].Action);
+        Assert.AreEqual("hidden", history[0].FileId);
+    }
+
+    [DataTestMethod]
+    [DataRow("missing_files")]
+    [DataRow("invalid_files")]
+    [DataRow("missing_cursor")]
+    [DataRow("invalid_cursor")]
+    [DataRow("empty_cursor")]
+    [DataRow("outside_prefix_cursor")]
+    [DataRow("empty_continuation")]
+    [DataRow("unexpected_action")]
+    [DataRow("missing_length")]
+    [DataRow("negative_length")]
+    [DataRow("invalid_length")]
+    [DataRow("missing_timestamp")]
+    [DataRow("outside_prefix")]
+    [DataRow("missing_identity")]
+    [DataRow("too_many_files")]
+    [DataRow("duplicate_name")]
+    public async Task MalformedCurrentSnapshotCannotLookLikeACompleteListing(string scenario)
+    {
+        object response = scenario switch
+        {
+            "missing_files" => new { nextFileName = (string?)null },
+            "invalid_files" => new { files = new { }, nextFileName = (string?)null },
+            "missing_cursor" => new { files = Array.Empty<object>() },
+            "invalid_cursor" => new { files = Array.Empty<object>(), nextFileName = 7 },
+            "empty_cursor" => new { files = new[] { Object(File.Key) }, nextFileName = "" },
+            "outside_prefix_cursor" => new { files = new[] { Object(File.Key) }, nextFileName = "Other/next" },
+            "empty_continuation" => new { files = Array.Empty<object>(), nextFileName = "CloudBay/next" },
+            "unexpected_action" => new { files = new[] { Object(File.Key, "hide") }, nextFileName = (string?)null },
+            "missing_length" => new { files = new[] { new { fileId = "id", fileName = File.Key, action = "upload", uploadTimestamp = 0 } }, nextFileName = (string?)null },
+            "negative_length" => new { files = new[] { new { fileId = "id", fileName = File.Key, action = "upload", uploadTimestamp = 0, contentLength = -1 } }, nextFileName = (string?)null },
+            "invalid_length" => new { files = new[] { new { fileId = "id", fileName = File.Key, action = "upload", uploadTimestamp = 0, contentLength = "invalid" } }, nextFileName = (string?)null },
+            "missing_timestamp" => new { files = new[] { new { fileId = "id", fileName = File.Key, action = "upload", contentLength = 0 } }, nextFileName = (string?)null },
+            "outside_prefix" => new { files = new[] { Object("Other/data.txt") }, nextFileName = (string?)null },
+            "missing_identity" => new { files = new[] { Object(File.Key, id: "") }, nextFileName = (string?)null },
+            "too_many_files" => new { files = new[] { Object("CloudBay/a"), Object("CloudBay/b") }, nextFileName = (string?)null },
+            "duplicate_name" => new { files = new[] { Object(File.Key), Object(File.Key, id: "other") }, nextFileName = (string?)null },
+            _ => throw new AssertFailedException("Unknown malformed response scenario.")
+        };
+        using var store = new B2CloudStore(new FakeHandler((request, _) => Task.FromResult(
+            Operation(request) == "b2_authorize_account" ? Authorization() : Json(response))));
+        if (scenario == "too_many_files") store.ListPageSize = 1;
+        await store.ConnectAsync(new("id", "private"));
+        await Assert.ThrowsExceptionAsync<InvalidDataException>(async () => await CurrentFiles(store));
+    }
+
+    [DataTestMethod]
+    [DataRow("duplicate_name")]
+    [DataRow("repeated_cursor")]
+    [DataRow("cursor_cycle")]
+    public async Task CurrentSnapshotRejectsDuplicatePagesAndCursorCycles(string scenario)
+    {
+        var pages = 0;
+        using var store = new B2CloudStore(new FakeHandler((request, _) =>
+        {
+            if (Operation(request) == "b2_authorize_account") return Task.FromResult(Authorization());
+            pages++;
+            return Task.FromResult(Json(new
+            {
+                files = new[] { Object(scenario == "duplicate_name" ? File.Key : $"CloudBay/{pages}.txt", id: "version" + pages) },
+                nextFileName = scenario == "cursor_cycle" && pages == 2 ? "CloudBay/third" : "CloudBay/second"
+            }));
+        }));
+        await store.ConnectAsync(new("id", "private"));
+        await Assert.ThrowsExceptionAsync<InvalidDataException>(async () => await CurrentFiles(store));
+        Assert.AreEqual(scenario == "cursor_cycle" ? 3 : 2, pages);
+    }
+
+    [TestMethod]
+    public async Task CurrentSnapshotChecksRestrictedBucketAndPrefixBeforeSendingARequest()
+    {
+        var calls = 0;
+        using var store = new B2CloudStore(new FakeHandler((_, _) =>
+        {
+            calls++;
+            return Task.FromResult(Authorization(["listFiles"], [new { id = "bucket", name = "Backup" }], "CloudBay/"));
+        }));
+        await store.ConnectAsync(new("id", "private"));
+        await Assert.ThrowsExceptionAsync<UnauthorizedAccessException>(async () =>
+        { await foreach (var _ in store.ListCurrentAsync("other", "CloudBay/")) { } });
+        await Assert.ThrowsExceptionAsync<UnauthorizedAccessException>(async () =>
+        { await foreach (var _ in store.ListCurrentAsync("bucket", "Other/")) { } });
+        Assert.AreEqual(1, calls);
+    }
+
+    [DataTestMethod]
+    [DataRow("stalled_page")]
+    [DataRow("malformed_terminal_cursor")]
+    [DataRow("repeated_cursor")]
+    [DataRow("outside_prefix_cursor")]
+    [Timeout(5_000)]
+    public async Task InterruptedCurrentSnapshotCannotPropagateLocalOrRemoteDeletions(string scenario)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "CloudBay.CurrentListing.Tests", Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(directory, "Root");
+        Directory.CreateDirectory(root);
+        var retainedPath = Path.Combine(root, "retained.txt");
+        var retained = File with { Key = "CloudBay/retained.txt", FileId = "retained" };
+        var localDeleted = File with { Key = "CloudBay/local-deleted.txt", FileId = "deleted" };
+        var pages = 0;
+        var mutations = 0;
+        using var store = new B2CloudStore(new FakeHandler(async (request, ct) =>
+        {
+            if (Operation(request) == "b2_authorize_account") return Authorization();
+            if (Operation(request) != "b2_list_file_names")
+            { mutations++; throw new AssertFailedException("Incomplete snapshots must not perform any transfers or hide files."); }
+            if (++pages == 1)
+                return Json(new { files = new[] { Object(localDeleted.Key, id: localDeleted.FileId) },
+                    nextFileName = scenario == "outside_prefix_cursor" ? "Other/next" : "CloudBay/second" });
+            if (scenario == "outside_prefix_cursor")
+                return Json(new { files = Array.Empty<object>(), nextFileName = (string?)null });
+            if (scenario == "stalled_page")
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+                throw new AssertFailedException("The stalled request must have been cancelled.");
+            }
+            return scenario == "malformed_terminal_cursor"
+                ? Json(new { files = Array.Empty<object>() })
+                : Json(new { files = new[] { Object(retained.Key, id: retained.FileId) }, nextFileName = "CloudBay/second" });
+        }));
+        SyncEngine? engine = null;
+        try
+        {
+            await System.IO.File.WriteAllBytesAsync(retainedPath, Data);
+            System.IO.File.SetLastWriteTimeUtc(retainedPath, Modified.UtcDateTime);
+            var manifest = new SyncManifest(Path.Combine(directory, "state.sqlite"));
+            manifest.Put(new("retained.txt", retained, Data.Length, Modified));
+            manifest.Put(new("local-deleted.txt", localDeleted, Data.Length, Modified));
+            await store.ConnectAsync(new("id", "private"));
+            var snapshot = new SyncSnapshot(ClientState.NotConnected, "");
+            engine = new(store, new ListingPlaceholders(), manifest,
+                new AppSettings { RootPath = root, BucketId = "bucket", KeyId = "key", FilesOnDemand = false },
+                Path.Combine(directory, "Recovery"), _ => { }, value => snapshot = value);
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(400));
+            await engine.SyncNowAsync(cancellation.Token);
+            Assert.AreEqual(scenario == "outside_prefix_cursor" ? 1 : 2, pages,
+                "An invalid cursor must be rejected before requesting a misleading empty terminal page.");
+            Assert.AreEqual(0, mutations);
+            CollectionAssert.AreEqual(Data, await System.IO.File.ReadAllBytesAsync(retainedPath));
+            Assert.IsFalse(System.IO.File.Exists(Path.Combine(root, "local-deleted.txt")));
+            Assert.AreEqual(2, manifest.ReadAll().Count, "Neither baseline may be removed until the current snapshot completes.");
+            Assert.AreNotEqual(ClientState.UpToDate, snapshot.State);
+        }
+        finally
+        {
+            if (engine is not null) await engine.DisposeAsync();
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            Directory.Delete(directory, true);
+        }
+    }
+
+    private static async Task<List<CloudObject>> CurrentFiles(B2CloudStore store)
+    {
+        var files = new List<CloudObject>();
+        await foreach (var file in store.ListCurrentAsync("bucket", "CloudBay/")) files.Add(file);
+        return files;
+    }
+
+    private sealed class ListingPlaceholders : IPlaceholderService
+    {
+        public bool IsPlaceholder(string path) => false;
+        public bool IsHydrated(string path) => true;
+        public Task ConnectAsync(string root, string identity, HydrationHandler hydrate, CancellationToken ct = default) => Task.CompletedTask;
+        public Task CreateOrUpdateAsync(string path, CloudObject file, bool inSync, CancellationToken ct = default) => throw new AssertFailedException("Snapshot was incomplete.");
+        public Task MarkInSyncAsync(string path, CloudObject file, CancellationToken ct = default) => throw new AssertFailedException("Snapshot was incomplete.");
+        public Task SetPinAsync(string path, PinMode mode, CancellationToken ct = default) => throw new AssertFailedException("Snapshot was incomplete.");
+        public Task FreeSpaceAsync(string path, CancellationToken ct = default) => throw new AssertFailedException("Snapshot was incomplete.");
+        public Task DisconnectAsync() => Task.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     [TestMethod]

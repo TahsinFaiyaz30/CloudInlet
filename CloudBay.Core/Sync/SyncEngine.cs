@@ -134,7 +134,7 @@ public sealed class SyncEngine : IAsyncDisposable
         var remote = new Dictionary<string, CloudObject>(StringComparer.OrdinalIgnoreCase);
         var remoteDirectories = new Dictionary<string, CloudObject>(StringComparer.OrdinalIgnoreCase);
         var invalid = 0;
-        await foreach (var file in _cloud.ListAsync(settings.BucketId, settings.Prefix, ct))
+        await foreach (var file in _cloud.ListCurrentAsync(settings.BucketId, settings.Prefix, ct))
         {
             if (file.Action != "upload" || file.Key == settings.Prefix) continue;
             var directory = file.Key.EndsWith('/');

@@ -12,6 +12,7 @@ CloudBay is a Windows desktop sync provider for Backblaze B2. The `legacy` branc
 - Windows personal folder backup copies and verifies the initial data, preserves conflicts and originals, then changes the current user's real Windows folder mapping. The app checks the live path, permissions, policy, and other provider ownership before redirection. Interrupted mapping operations are recovered from an atomic intent journal.
 - B2 transport keeps one HTTP pool alive. Reusable upload URLs are leased exclusively to workers and retained after successful uploads. Multipart files use streaming bounded memory and ordered, verified SHA1 parts. Aggregate concurrency and speed limits include multipart work.
 - The sync engine obtains complete cloud and local snapshots before inferring deletions. It compares them to a durable SQLite baseline, preserves conflicts with atomic renames, retries failures, and leaves unsynced edits dirty. Large deletion batches require review of the exact pending set.
+- Routine B2 reconciliation pages through current file names rather than retained version history. Every page and continuation cursor is validated, and an incomplete listing prevents reconciliation. A hidden name is absent from the complete current snapshot; explicit version browsing still uses the historical endpoint.
 - Deletion uses B2 hide markers, preserving versions subject to the bucket owner's lifecycle policies. Locally removed cloud content is retained in Recovery. Empty directories have versioned zero-byte trailing-slash markers.
 - Credentials are protected by current-user Windows DPAPI outside the repository. Diagnostics never contain application keys or authorization tokens.
 - Account disconnect first hydrates and explicitly reverts cloud placeholders, restores backed-up Windows folder paths, and removes only the provider registrations. Local files and B2 versions remain.
@@ -56,5 +57,6 @@ No finite test run proves correctness for every Windows installation, network in
 - [Microsoft: Storage Sense and cloud providers](https://support.microsoft.com/en-us/windows/experience/storage-filemanagement/manage-drive-space-with-storage-sense)
 - [Microsoft: Windows Backup](https://support.microsoft.com/en-us/windows/experience/backup-recovery/back-up-and-restore-with-windows-backup)
 - [Backblaze: reusable upload URLs](https://www.backblaze.com/apidocs/b2-get-upload-url)
+- [Backblaze: current file names and pagination](https://www.backblaze.com/apidocs/b2-list-file-names)
 - [Backblaze: uploading large files](https://www.backblaze.com/docs/cloud-storage-create-large-files-with-the-native-api)
 - [Microsoft: unregistering a Cloud Files root](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfunregistersyncroot)

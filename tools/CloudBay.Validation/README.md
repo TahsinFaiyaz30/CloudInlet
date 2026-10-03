@@ -8,7 +8,7 @@ dotnet run --project tools/CloudBay.Validation/CloudBay.Validation.csproj -c Rel
 dotnet run --project tools/CloudBay.Validation/CloudBay.Validation.csproj -c Release -- --b2 --controller
 ```
 
-`--list` only checks authorization and prints accessible bucket names. Live writes require a key restricted to exactly one private or empty bucket. Every run uses an isolated `CloudBayValidation/<GUID>/` cloud prefix, appending it to any key prefix restriction. It checks reusable small-file sessions, concurrent session exclusivity, paginated listing, version history, restore/hide behavior, a streamed 205 MiB multipart upload and verified download, precise byte ranges, and canceled multipart cleanup. It hides the run's objects afterward while retaining their B2 versions.
+`--list` only checks authorization and prints accessible bucket names. Live writes require a key restricted to exactly one private or empty bucket. Every run uses an isolated `CloudBayValidation/<GUID>/` cloud prefix, appending it to any key prefix restriction. It checks reusable small-file sessions, concurrent session exclusivity, pagination of both current names and historical versions, version history, restore/hide behavior, a streamed 205 MiB multipart upload and verified download, precise byte ranges, and canceled multipart cleanup. It hides the run's objects afterward while retaining their B2 versions.
 
 `--native` adds a unique `CloudBayValidation-<GUID>` folder directly in the user profile. It verifies native Cloud Files/Explorer registration, on-demand B2 hydration, and SyncEngine upload/edit/delete behavior with a durable SQLite manifest and activity history. The console disconnects and unregisters only that run's root and removes only its own local test folder.
 

@@ -127,7 +127,7 @@ public sealed class B2CloudStore : ICloudStore
             .Where(b => auth.AllowedBuckets is null || auth.AllowedBuckets.Any(a => a.Id == b.Id)).ToArray();
     }
 
-    // Version listing includes hide markers; names listing would lose remote deletions.
+    // Historical callers retain hide markers; reconciliation uses the complete current snapshot below.
     public async IAsyncEnumerable<CloudObject> ListAsync(string bucketId, string prefix,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
@@ -140,6 +140,65 @@ public sealed class B2CloudStore : ICloudStore
             lastKey = item.Key;
             yield return item;
         }
+    }
+
+    /// <summary>Lists current uploads without scanning every retained version. Hidden names are absent from the complete snapshot.</summary>
+    public async IAsyncEnumerable<CloudObject> ListCurrentAsync(string bucketId, string prefix,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ValidateAccess(bucketId, prefix, "listFiles");
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        var cursors = new HashSet<string>(StringComparer.Ordinal);
+        string? nextName = null;
+        do
+        {
+            var pageSize = ListPageSize;
+            // No delimiter: include nested objects and our zero-byte, trailing-slash directory markers.
+            using var json = await ApiAsync("b2_list_file_names", new
+            { bucketId, prefix, startFileName = nextName, maxFileCount = pageSize }, cancellationToken).ConfigureAwait(false);
+            var root = json.RootElement;
+            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("files", out var items) ||
+                items.ValueKind != JsonValueKind.Array || items.GetArrayLength() > pageSize ||
+                !root.TryGetProperty("nextFileName", out var cursor) ||
+                cursor.ValueKind is not (JsonValueKind.Null or JsonValueKind.String))
+                throw new InvalidDataException("Backblaze returned an incomplete current-file listing.");
+
+            var name = cursor.ValueKind == JsonValueKind.Null ? null : cursor.GetString();
+            if (name is not null && (name.Length == 0 || !name.StartsWith(prefix, StringComparison.Ordinal) ||
+                items.GetArrayLength() == 0 || !cursors.Add(name)))
+                throw new InvalidDataException("Backblaze returned an invalid or repeated current-file listing cursor.");
+
+            // Validate the entire page before exposing it, including the terminal cursor. The sync engine
+            // also waits for every page before performing any reconciliation or inferring absence.
+            var page = new List<CloudObject>(items.GetArrayLength());
+            foreach (var item in items.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object || OptionalString(item, "action") != "upload" ||
+                    !HasNonnegativeInteger(item, "contentLength") || !HasNonnegativeInteger(item, "uploadTimestamp") ||
+                    item.TryGetProperty("fileInfo", out var info) && info.ValueKind != JsonValueKind.Object)
+                    throw new InvalidDataException("Backblaze returned invalid current-file metadata.");
+                var file = ParseObject(item);
+                if (file.FileId.Length == 0 || file.Key.Length == 0 || !file.Key.StartsWith(prefix, StringComparison.Ordinal))
+                    throw new InvalidDataException("Backblaze returned a file outside the requested prefix or without its identity.");
+                if (!names.Add(file.Key))
+                    throw new InvalidDataException("Backblaze returned a duplicate name in the current-file listing.");
+                page.Add(file);
+            }
+            foreach (var file in page) yield return file;
+            nextName = name;
+        } while (nextName is not null);
+    }
+
+    private static bool HasNonnegativeInteger(JsonElement item, string name)
+    {
+        if (!item.TryGetProperty(name, out var value)) return false;
+        return value.ValueKind switch
+        {
+            JsonValueKind.Number => value.TryGetInt64(out var number) && number >= 0,
+            JsonValueKind.String => long.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture,
+                out var number) && number >= 0,
+            _ => false
+        };
     }
 
     public async Task<CloudObject> UploadAsync(string bucketId, string key, Stream source, long length, string sha1,

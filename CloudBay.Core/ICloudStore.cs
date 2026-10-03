@@ -5,6 +5,9 @@ public interface ICloudStore : IDisposable
     Task<CloudAccount> ConnectAsync(B2Credentials credentials, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<CloudBucket>> ListBucketsAsync(CancellationToken cancellationToken = default);
     IAsyncEnumerable<CloudObject> ListAsync(string bucketId, string prefix, CancellationToken cancellationToken = default);
+    /// <summary>Enumerates a complete snapshot of current objects. Failed or cancelled enumeration must not be used to infer deletions.</summary>
+    IAsyncEnumerable<CloudObject> ListCurrentAsync(string bucketId, string prefix, CancellationToken cancellationToken = default) =>
+        ListAsync(bucketId, prefix, cancellationToken);
     Task<CloudObject> UploadAsync(string bucketId, string key, Stream source, long length, string sha1,
         DateTimeOffset modifiedUtc, IProgress<TransferProgress>? progress = null, CancellationToken cancellationToken = default);
     Task DownloadAsync(CloudObject file, Stream destination, long offset = 0, long? length = null,
