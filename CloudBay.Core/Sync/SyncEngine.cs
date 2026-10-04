@@ -154,10 +154,10 @@ public sealed class SyncEngine : IAsyncDisposable
             _nextStagingCleanup = DateTimeOffset.UtcNow.AddDays(1);
         }
         _transfers.Reset();
-        SetStatus(_snapshot with { State = ClientState.Syncing, Message = "Checking for changes" });
+        SetStatus(_snapshot with { State = ClientState.Syncing, Pending = 0, Message = "Checking for changes" });
         var baseline = _manifest.ReadAll();
         var directoryBaseline = _manifest.ReadDirectories();
-        var localSnapshot = await Task.Run(() => ScanLocal(settings, ct), ct);
+        var localSnapshot = await Task.Run(() => ScanLocal(settings, ct, "Checking local files"), ct);
         var scanIssues = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         void ReportScanIssues(LocalSnapshot snapshot)
         {
@@ -169,6 +169,7 @@ public sealed class SyncEngine : IAsyncDisposable
         var remote = new Dictionary<string, CloudObject>(StringComparer.OrdinalIgnoreCase);
         var remoteDirectories = new Dictionary<string, CloudObject>(StringComparer.OrdinalIgnoreCase);
         var invalid = 0;
+        SetStatus(_snapshot with { Message = "Checking Backblaze B2" });
         await foreach (var file in _cloud.ListCurrentAsync(settings.BucketId, settings.Prefix, ct))
         {
             if (file.Action != "upload" || file.Key == settings.Prefix) continue;
@@ -208,6 +209,7 @@ public sealed class SyncEngine : IAsyncDisposable
         var uploads = new List<string>();
         var downloads = new List<(string Relative, CloudObject File)>();
         var errors = invalid + scanIssues.Count;
+        SetStatus(_snapshot with { Message = "Comparing local and cloud files" });
         foreach (var relative in local.Keys.Concat(remote.Keys).Concat(baseline.Keys).Distinct(StringComparer.OrdinalIgnoreCase))
         {
             ct.ThrowIfCancellationRequested();
@@ -302,7 +304,7 @@ public sealed class SyncEngine : IAsyncDisposable
             return !settings.FilesOnDemand || File.Exists(path) && !_placeholders.IsPlaceholder(path);
         }).Select(item => (item.Relative, ActivityKind.Download, item.File.Size)));
         var remaining = uploads.Count + downloads.Count;
-        SetStatus(_snapshot with { Pending = remaining, Message = remaining == 0 ? "Finishing sync" : $"Syncing {remaining} files" });
+        SetStatus(_snapshot with { Pending = remaining, Message = remaining == 0 ? "Checking folder changes" : $"Syncing {remaining} files" });
         var limits = TransferLimits.For(settings);
         void FinishTransfer(string relative, ActivityKind kind, Exception? error = null)
         {
@@ -327,7 +329,7 @@ public sealed class SyncEngine : IAsyncDisposable
                 (item, token) => new ValueTask(TransferAsync(item.Relative, ActivityKind.Download, t => ApplyRemoteAsync(item.Relative, item.File, settings, t), token))));
         errors += await ReconcileDirectoriesAsync(localSnapshot, remoteDirectories, directoryBaseline, settings, ct);
         var final = _manifest.ReadAll();
-        var finalSnapshot = await Task.Run(() => ScanLocal(settings, ct), ct);
+        var finalSnapshot = await Task.Run(() => ScanLocal(settings, ct, "Checking Windows file status"), ct);
         var previousScanIssues = scanIssues.Count;
         ReportScanIssues(finalSnapshot);
         errors += scanIssues.Count - previousScanIssues;
@@ -339,7 +341,7 @@ public sealed class SyncEngine : IAsyncDisposable
             0, final.Count, final.Values.Sum(f => f.Remote.Size), localBytes, LastSync: DateTimeOffset.UtcNow));
     }
 
-    private LocalSnapshot ScanLocal(AppSettings settings, CancellationToken ct)
+    private LocalSnapshot ScanLocal(AppSettings settings, CancellationToken ct, string phase)
     {
         // A linked root or ancestor cannot be treated as a partial scan: it could redirect
         // every later write outside this backup, so stop before consulting cloud deletions.
@@ -347,12 +349,25 @@ public sealed class SyncEngine : IAsyncDisposable
             if (new DirectoryInfo(ancestor).LinkTarget is not null)
                 throw new IOException("The sync folder or a parent folder is linked. Choose its actual location; no deletions were sent to B2.");
         var snapshot = new LocalSnapshot();
+        long inspectedFiles = 0, inspectedFolders = 0, reportedAt = 0;
+        void ReportProgress(bool force = false)
+        {
+            var now = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (!force && System.Diagnostics.Stopwatch.GetElapsedTime(reportedAt, now) < TimeSpan.FromMilliseconds(500)) return;
+            reportedAt = now;
+            SetStatus(_snapshot with { Pending = 0,
+                Message = $"{phase}: {inspectedFiles:N0} {(inspectedFiles == 1 ? "file" : "files")}, " +
+                    $"{inspectedFolders:N0} {(inspectedFolders == 1 ? "folder" : "folders")} checked" });
+        }
+        ReportProgress(force: true);
         var directories = new Stack<string>(); directories.Push(settings.RootPath);
         while (directories.TryPop(out var directory))
         {
             ct.ThrowIfCancellationRequested();
             var directoryRelative = Path.GetRelativePath(settings.RootPath, directory).Replace('\\', '/');
             if (directoryRelative != "." && snapshot.IsUnavailable(directoryRelative)) continue;
+            inspectedFolders++;
+            ReportProgress();
             try
             {
                 // Recheck a queued folder before traversing it; a rename can replace it
@@ -390,6 +405,8 @@ public sealed class SyncEngine : IAsyncDisposable
                                 throw new IOException("Linked files are not followed. Back up the file from its actual location.");
                             PathRules.ValidateRelative(relative);
                             snapshot.Files.Add(relative, ReadLocal(child));
+                            inspectedFiles++;
+                            ReportProgress();
                             continue;
                         }
                     }
@@ -412,6 +429,7 @@ public sealed class SyncEngine : IAsyncDisposable
             }
         }
         snapshot.RemoveUnavailableEntries();
+        ReportProgress(force: true);
         return snapshot;
     }
 
@@ -425,11 +443,28 @@ public sealed class SyncEngine : IAsyncDisposable
         var local = snapshot.Directories;
         // Children first: remote folder removal only removes truly empty directories, never their data.
         var paths = local.Concat(remote.Keys).Concat(baseline.Keys).Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderByDescending(p => p.Count(c => c == '/')).ThenBy(p => p, StringComparer.OrdinalIgnoreCase);
+            .Where(p => !PathRules.IsExcluded(p, settings, isDirectory: true) && !snapshot.IsUnavailable(p))
+            .OrderByDescending(p => p.Count(c => c == '/')).ThenBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray();
+        var checkedFolders = 0;
+        long reportedAt = 0;
+        void ReportProgress(bool force = false)
+        {
+            var now = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (!force && System.Diagnostics.Stopwatch.GetElapsedTime(reportedAt, now) < TimeSpan.FromMilliseconds(500)) return;
+            reportedAt = now;
+            SetStatus(_snapshot with { Pending = 0, Message = $"Checking folder changes: {checkedFolders:N0} of {paths.Length:N0}" });
+        }
+        void ReportFolderOperation(string operation, string relative)
+        {
+            var now = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (checkedFolders != 0 && System.Diagnostics.Stopwatch.GetElapsedTime(reportedAt, now) < TimeSpan.FromMilliseconds(500)) return;
+            reportedAt = now;
+            SetStatus(_snapshot with { Pending = 0, Message = $"{operation} {relative} ({checkedFolders + 1:N0} of {paths.Length:N0})" });
+        }
+        ReportProgress(force: true);
         foreach (var relative in paths)
         {
             ct.ThrowIfCancellationRequested();
-            if (PathRules.IsExcluded(relative, settings, isDirectory: true) || snapshot.IsUnavailable(relative)) continue;
             remote.TryGetValue(relative, out var cloud);
             baseline.TryGetValue(relative, out var last);
             try
@@ -450,6 +485,7 @@ public sealed class SyncEngine : IAsyncDisposable
                     else if (existedInSnapshot && Directory.Exists(path))
                     {
                         // Trailing-slash B2 markers retain otherwise invisible empty folders.
+                        ReportFolderOperation("Backing up folder", relative);
                         await using var empty = new MemoryStream(Array.Empty<byte>(), writable: false);
                         var modified = new DateTimeOffset(Directory.GetLastWriteTimeUtc(path));
                         var marker = await _cloud.UploadAsync(settings.BucketId, settings.Prefix + relative + "/", empty, 0,
@@ -461,18 +497,24 @@ public sealed class SyncEngine : IAsyncDisposable
                 }
                 if (!existedInSnapshot && last is not null && cloud.FileId == last.Remote.FileId && !Directory.Exists(path))
                 {
+                    ReportFolderOperation("Syncing deleted folder", relative);
                     await _cloud.HideAsync(settings.BucketId, cloud.Key, ct);
                     _manifest.RemoveDirectory(relative);
                     Record(ActivityKind.Delete, relative, "Moved the deleted folder marker to B2 version history.");
                     continue;
                 }
                 if (File.Exists(path)) throw new IOException($"The cloud folder '{relative}' conflicts with a local file. The local file was retained.");
-                Directory.CreateDirectory(path);
-                _manifest.PutDirectory(new(relative, cloud));
+                // An unchanged folder is already represented in Windows and in the durable
+                // baseline. Avoid one filesystem mutation and SQLite commit per folder on
+                // every no-op poll, especially for large directory trees.
+                if (!Directory.Exists(path)) Directory.CreateDirectory(path);
+                if (last?.Remote != cloud) _manifest.PutDirectory(new(relative, cloud));
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception error) { errors++; Record(ActivityKind.Error, relative, error.Message); }
+            finally { checkedFolders++; ReportProgress(); }
         }
+        ReportProgress(force: true);
         return errors;
     }
 
@@ -511,8 +553,8 @@ public sealed class SyncEngine : IAsyncDisposable
     private LocalFile ReadLocal(string path)
     {
         var info = new FileInfo(path);
-        return new(info.Length, info.LastWriteTimeUtc, !_placeholders.IsPlaceholder(path) || _placeholders.IsHydrated(path),
-            _placeholders.HasLocalChanges(path));
+        var state = _placeholders.GetFileState(path);
+        return new(info.Length, info.LastWriteTimeUtc, !state.IsPlaceholder || state.IsHydrated, state.HasLocalChanges);
     }
 
     private async Task UploadPipelineAsync(IReadOnlyList<string> uploads, AppSettings settings, int workers,

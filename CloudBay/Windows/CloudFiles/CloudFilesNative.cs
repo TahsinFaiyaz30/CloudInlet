@@ -251,6 +251,11 @@ internal static class CloudFilesNative
         if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
         if (!GetFileInformationByHandleEx(handle, 9, out var tag, 8)) throw new Win32Exception(Marshal.GetLastWin32Error());
         var state = CfGetPlaceholderStateFromAttributeTag(tag.Attributes, tag.Tag);
+        return IsFullyResident(handle, tag, state);
+    }
+
+    internal static bool IsFullyResident(SafeFileHandle handle, AttributeTag tag, uint state)
+    {
         if (state == uint.MaxValue) return false;
         if (!GetFileInformationByHandle(handle.DangerousGetHandle(), out var info)) throw new Win32Exception(Marshal.GetLastWin32Error());
         if (info.Size == 0) return true;

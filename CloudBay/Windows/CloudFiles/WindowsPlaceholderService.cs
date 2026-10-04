@@ -345,6 +345,24 @@ public sealed class WindowsPlaceholderService : IPlaceholderService
         // sufficient for CfGetPlaceholderInfo and leaves online-only content untouched.
         using var handle = CreateFileW(path, 0x80, 7, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
         if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+        return ReadDirtyState(handle);
+    }
+
+    public PlaceholderFileState GetFileState(string fullPath)
+    {
+        var path = ValidateFilePath(fullPath);
+        // Inspect tags, validated resident ranges and dirty bytes on the same attribute-only
+        // reparse handle. This neither recalls data nor opens the contents as a link target.
+        using var handle = CreateFileW(path, 0x80, 7, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
+        if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+        if (!GetFileInformationByHandleEx(handle, 9, out var tag, 8)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        var state = CfGetPlaceholderStateFromAttributeTag(tag.Attributes, tag.Tag);
+        var placeholder = state != uint.MaxValue && (state & Placeholder) != 0;
+        return new(placeholder, IsFullyResident(handle, tag, state), !placeholder || ReadDirtyState(handle));
+    }
+
+    private static bool ReadDirtyState(Microsoft.Win32.SafeHandles.SafeFileHandle handle)
+    {
         var buffer = Marshal.AllocHGlobal(4160);
         try
         {
@@ -1146,16 +1164,24 @@ public sealed class WindowsPlaceholderService : IPlaceholderService
         for (var current = new DirectoryInfo(Path.GetDirectoryName(path)!); current is not null; current = current.Parent)
         {
             if (string.Equals(current.FullName, _root, StringComparison.OrdinalIgnoreCase)) break;
-            if (current.LinkTarget is not null) throw new IOException("CloudBay does not follow directory junctions or symbolic links.");
-            if (current.Exists && (current.Attributes & FileAttributes.ReparsePoint) != 0)
-            {
-                var state = State(current.FullName);
-                if (state == uint.MaxValue || (state & Placeholder) == 0) throw new IOException("CloudBay does not follow directory junctions or symbolic links.");
-            }
+            RejectNonCloudReparsePoint(current.FullName);
         }
-        if (new DirectoryInfo(path).LinkTarget is not null || new FileInfo(path).LinkTarget is not null ||
-            (File.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0 && !IsPlaceholder(path)))
-            throw new IOException("CloudBay does not follow file symbolic links.");
+        RejectNonCloudReparsePoint(path, string.Equals(path, _root, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static void RejectNonCloudReparsePoint(string path, bool allowSyncRoot = false)
+    {
+        FileAttributes attributes;
+        try { attributes = File.GetAttributes(path); }
+        catch (FileNotFoundException) { return; } // A create operation can have missing parents.
+        catch (DirectoryNotFoundException) { return; }
+        if ((attributes & FileAttributes.ReparsePoint) == 0) return;
+        // CFAPI classifies the tag read from an OPEN_REPARSE_POINT metadata handle.
+        // Cloud placeholders are not name-surrogate links. Asking LinkTarget for every
+        // cloud file issues redundant FSCTL_GET_REPARSE_POINT requests during full scans.
+        var state = State(path);
+        if (state == uint.MaxValue || (state & (Placeholder | (allowSyncRoot ? 2u : 0u))) == 0)
+            throw new IOException("CloudBay does not follow directory junctions or file symbolic links.");
     }
 
     private static IEnumerable<string> EnumerateFiles(string path)
