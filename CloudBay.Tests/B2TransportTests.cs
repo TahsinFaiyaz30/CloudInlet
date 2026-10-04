@@ -98,15 +98,27 @@ public sealed class B2TransportTests
     }
 
     [TestMethod]
-    public async Task UploadInactivityRetiresEndpointAndReplaysCompleteSource()
+    public async Task UploadInactivityConfirmsStoredReceiptWithoutReplayingCompleteSource()
     {
         var attempts = 0;
         var targets = 0;
+        object? receipt = null;
         using var store = new B2CloudStore(new FakeHandler(async (request, ct) =>
         {
             if (Operation(request) == "b2_authorize_account") return Authorization();
             if (Operation(request) == "b2_get_upload_url") return UploadTarget("timeout-" + ++targets);
+            if (Operation(request) == "b2_list_file_versions") return Json(new
+                { files = new[] { receipt }, nextFileName = (string?)null, nextFileId = (string?)null });
+            if (Operation(request) == "b2_get_file_info") return Json(receipt!);
             CollectionAssert.AreEqual(Data, await request.Content!.ReadAsByteArrayAsync(ct));
+            receipt = new { accountId = "account", bucketId = "bucket", fileId = File.FileId, fileName = File.Key,
+                contentLength = Data.Length, contentSha1 = DataSha, action = "upload", uploadTimestamp = 0,
+                fileInfo = new Dictionary<string, string>
+                {
+                    ["cloudbay_upload_id"] = request.Headers.GetValues("X-Bz-Info-cloudbay_upload_id").Single(),
+                    ["cloudbay_source_id"] = request.Headers.GetValues("X-Bz-Info-cloudbay_source_id").Single(),
+                    ["src_last_modified_millis"] = Modified.ToUnixTimeMilliseconds().ToString()
+                } };
             if (++attempts == 1) await Task.Delay(Timeout.InfiniteTimeSpan, ct);
             return ObjectResponse(File.Key);
         }), transferInactivityTimeout: TimeSpan.FromMilliseconds(60));
@@ -114,8 +126,8 @@ public sealed class B2TransportTests
         await store.ConnectAsync(new("id", "private"), guard.Token);
         using var source = new MemoryStream(Data);
         await store.UploadAsync("bucket", File.Key, source, Data.Length, DataSha, Modified, cancellationToken: guard.Token);
-        Assert.AreEqual(2, attempts);
-        Assert.AreEqual(2, targets, "A stalled endpoint must not be returned to the reusable pool.");
+        Assert.AreEqual(1, attempts, "A fully sent upload must not be replayed after losing the response.");
+        Assert.AreEqual(1, targets, "A recovered receipt completes this operation without obtaining another upload target.");
         Assert.IsTrue(source.CanRead);
     }
 
@@ -153,7 +165,7 @@ public sealed class B2TransportTests
             if (Operation(request) == "b2_get_upload_url") return UploadTarget("error-" + attempts);
             await request.Content!.CopyToAsync(Stream.Null, ct);
             return ++attempts == 1
-                ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = new StreamContent(stalled) }
+                ? new HttpResponseMessage(HttpStatusCode.Unauthorized) { Content = new StreamContent(stalled) }
                 : ObjectResponse(File.Key);
         }), metadataTimeout: TimeSpan.FromMilliseconds(60));
         using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -334,7 +346,7 @@ public sealed class B2TransportTests
             CollectionAssert.AreEqual(Data, await r.Content!.ReadAsByteArrayAsync(ct));
             if (++uploads == 1)
             {
-                var response = new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = new StreamContent(errorBody) };
+                var response = new HttpResponseMessage(HttpStatusCode.Unauthorized) { Content = new StreamContent(errorBody) };
                 response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromMilliseconds(1));
                 return response;
             }
@@ -1014,7 +1026,7 @@ public sealed class B2TransportTests
             CollectionAssert.AreEqual(Data, await r.Content!.ReadAsByteArrayAsync(ct));
             if (calls++ == 0)
             {
-                var failure = Json(new { code = "service_unavailable" }, HttpStatusCode.ServiceUnavailable);
+                var failure = Json(new { code = "expired_auth_token" }, HttpStatusCode.Unauthorized);
                 failure.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromMilliseconds(1));
                 return failure;
             }

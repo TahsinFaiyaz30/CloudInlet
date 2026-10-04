@@ -72,6 +72,7 @@ public sealed partial class B2CloudStore
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         _uploadJournal = new B2UploadJournal(journalDirectory);
+        _transferIntents = new B2TransferIntentJournal(Path.Combine(journalDirectory, "operations"));
     }
 
     /// <summary>

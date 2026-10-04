@@ -54,4 +54,12 @@ public interface ICloudStore : IDisposable
     Task HideAsync(string bucketId, string key, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<CloudObject>> VersionsAsync(string bucketId, string key, CancellationToken cancellationToken = default);
     Task<CloudObject> RestoreAsync(string bucketId, CloudObject version, CancellationToken cancellationToken = default);
+    /// <summary>Copies an immutable source into a reviewed destination, reconciling a stable operation receipt after interruption.</summary>
+    Task<CloudObject> CopyToAsync(string destinationBucketId, string destinationKey, CloudObject source,
+        string operationId, CancellationToken cancellationToken = default) =>
+        Task.FromException<CloudObject>(new NotSupportedException("Direct cloud import is unavailable for this provider."));
+    /// <summary>Read-only validation of a completed import receipt and its immutable source identity.</summary>
+    Task VerifyCopyAsync(string destinationBucketId, string destinationKey, CloudObject source,
+        string operationId, CloudObject existing, CancellationToken cancellationToken = default) =>
+        Task.FromException(new NotSupportedException("Direct cloud import receipt verification is unavailable for this provider."));
 }

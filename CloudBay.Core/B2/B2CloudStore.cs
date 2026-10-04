@@ -241,6 +241,42 @@ public sealed partial class B2CloudStore : ICloudStore
     private async Task<CloudObject> UploadSmallAsync(string bucketId, string key, Stream source, long start, long length,
         string sha1, DateTimeOffset modifiedUtc, IProgress<TransferProgress>? progress, CancellationToken token)
     {
+        var accountId = Current.Account.AccountId;
+        var sourceId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new[]
+            { bucketId, key, sha1.ToLowerInvariant(), length.ToString(CultureInfo.InvariantCulture),
+              modifiedUtc.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture), start.ToString(CultureInfo.InvariantCulture) })))).ToLowerInvariant();
+        var operationId = sourceId;
+        var memoryId = accountId + "|" + operationId;
+        using var operationLock = await LockOperationAsync(memoryId, token).ConfigureAwait(false);
+        var journal = _transferIntents;
+        var intentPath = journal?.PathFor(accountId, operationId);
+        // Healthy files need no disk lock or intent flush; only a previously uncertain
+        // operation uses its cross-process checkpoint while querying the immutable receipt.
+        await using var intentLock = journal is not null && File.Exists(intentPath)
+            ? await journal.LockAsync(intentPath!, token).ConfigureAwait(false) : null;
+        var expected = new B2TransferIntentJournal.Entry(1, "upload", accountId, bucketId, key, operationId, sourceId,
+            length, sha1.ToLowerInvariant(), modifiedUtc.ToUnixTimeMilliseconds());
+        var intent = journal?.Read(intentPath!) ?? (_volatileIntents.TryGetValue(memoryId, out var memory) ? memory : null) ?? expected;
+        if (!SameIntent(intent, expected)) throw new InvalidDataException("The retained upload intent does not match this source.");
+        void Persist(bool pending, bool durable = false)
+        {
+            intent = intent with { RequestPending = pending };
+            _volatileIntents[memoryId] = intent;
+            if (durable && journal is not null) journal.Write(intentPath!, intent);
+        }
+        void Forget() { _volatileIntents.TryRemove(memoryId, out _); journal?.Remove(intentPath!); }
+        CloudObject Complete(CloudObject file, bool baseline)
+        {
+            source.Position = checked(start + length); Forget();
+            progress?.Report(new(length, length) { IsBaseline = baseline });
+            return file;
+        }
+        if (intent.RequestPending)
+        {
+            var receipt = await FindOperationReceiptAsync(intent, token).ConfigureAwait(false);
+            if (receipt is not null) return Complete(receipt, baseline: true);
+            throw UnknownOutcome("upload");
+        }
         await _uploadRequests.EnterAsync(token).ConfigureAwait(false);
         using var sourceLock = new SemaphoreSlim(1, 1);
         var pool = _uploadSessions.GetOrAdd(bucketId, _ => new());
@@ -260,9 +296,15 @@ public sealed partial class B2CloudStore : ICloudStore
                 long bytes = 0;
                 progress?.Report(new(0, length) { IsBaseline = true });
                 using var request = UploadRequest(session, source, sourceLock, start, length, sha1,
-                    n => progress?.Report(new(Interlocked.Add(ref bytes, n), length)), token);
+                    n => { var sent = Interlocked.Add(ref bytes, n); progress?.Report(new(sent, length)); }, token);
                 request.Headers.TryAddWithoutValidation("X-Bz-File-Name", EncodeName(key));
                 request.Headers.TryAddWithoutValidation("X-Bz-Info-src_last_modified_millis", modifiedUtc.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture));
+                request.Headers.TryAddWithoutValidation("X-Bz-Info-cloudbay_upload_id", operationId);
+                request.Headers.TryAddWithoutValidation("X-Bz-Info-cloudbay_source_id", sourceId);
+                // Healthy files keep a memory-only intent. Persist uncertainty only if an
+                // attempt exits without confirmation; successful pooled uploads need no fsync.
+                Persist(pending: true);
+                var rejected = false;
                 try
                 {
                     using var response = await SendAsync(request, token).ConfigureAwait(false);
@@ -276,20 +318,39 @@ public sealed partial class B2CloudStore : ICloudStore
                             !sha1.Equals(file.Sha1, StringComparison.OrdinalIgnoreCase) ||
                             OptionalString(json.RootElement, "bucketId") is { } returnedBucket && returnedBucket != bucketId)
                             throw new InvalidDataException("Backblaze returned an upload checksum or length that does not match the source.");
-                        source.Position = checked(start + length);
                         reusable = true;
-                        progress?.Report(new(length, length));
-                        return file;
+                        return Complete(file, baseline: false);
                     }
+                    // An explicit authorization/input rejection proves the body was not
+                    // committed. A fully sent 5xx/408 response can still be ambiguous.
+                    rejected = !IsTransient(response.StatusCode) || response.StatusCode == HttpStatusCode.TooManyRequests;
                     var error = await ReadErrorAsync(response, token).ConfigureAwait(false);
                     // A failing upload endpoint is retired; never share it with the next file.
                     session = null;
-                    if (!IsUploadRetry(response.StatusCode, error.Code) || attempt == Attempts - 1) throw error;
+                    if (!rejected && bytes >= length)
+                    {
+                        Persist(pending: true, durable: true);
+                        var receipt = await FindOperationReceiptAsync(intent, token).ConfigureAwait(false);
+                        if (receipt is not null) return Complete(receipt, baseline: false);
+                        throw UnknownOutcome("upload", error);
+                    }
+                    Persist(pending: false);
+                    if (!IsUploadRetry(response.StatusCode, error.Code) || attempt == Attempts - 1) { Forget(); throw error; }
                     await BackoffAsync(response, attempt, token).ConfigureAwait(false);
                 }
-                catch (Exception ex) when ((ex is IOException and not B2RequestException || ex is HttpRequestException) && attempt < Attempts - 1)
+                catch (Exception ex) when (ex is not UnknownTransferOutcomeException &&
+                    (ex is IOException and not B2RequestException || ex is HttpRequestException))
                 {
                     session = null;
+                    if (!rejected && bytes >= length)
+                    {
+                        Persist(pending: true, durable: true);
+                        var receipt = await FindOperationReceiptAsync(intent, token).ConfigureAwait(false);
+                        if (receipt is not null) return Complete(receipt, baseline: false);
+                        throw UnknownOutcome("upload", ex);
+                    }
+                    Persist(pending: false);
+                    if (attempt == Attempts - 1) { Forget(); throw; }
                     await BackoffAsync(null, attempt, token).ConfigureAwait(false);
                 }
             }
@@ -297,8 +358,18 @@ public sealed partial class B2CloudStore : ICloudStore
         }
         finally
         {
-            if (reusable && session is not null) pool.Add(session);
-            _uploadRequests.Exit();
+            // Caller cancellation can arrive after the body or response was transmitted.
+            // Retain only unresolved attempts; never add a disk write to successful files.
+            try
+            {
+                if (_volatileIntents.TryGetValue(memoryId, out var unresolved) && unresolved.RequestPending && journal is not null)
+                    journal.Write(intentPath!, unresolved);
+            }
+            finally
+            {
+                if (reusable && session is not null) pool.Add(session);
+                _uploadRequests.Exit();
+            }
         }
     }
 
@@ -333,7 +404,7 @@ public sealed partial class B2CloudStore : ICloudStore
             using var json = await ApiAsync("b2_copy_file", new
             {
                 sourceFileId = version.FileId, fileName = version.Key, destinationBucketId = bucketId, metadataDirective = "COPY"
-            }, cancellationToken).ConfigureAwait(false);
+            }, cancellationToken, retryNetwork: false, retryTransient: false).ConfigureAwait(false);
             return ParseObject(json.RootElement);
         }
         // Large restores stay in the service: copy parts without downloading the entire file locally.
@@ -342,6 +413,7 @@ public sealed partial class B2CloudStore : ICloudStore
         var partCount = checked((int)((version.Size + partSize - 1) / partSize));
         string? fileId = null;
         var completed = false;
+        var finishUncertain = false;
         try
         {
             using (var start = await ApiAsync("b2_start_large_file", new
@@ -350,7 +422,7 @@ public sealed partial class B2CloudStore : ICloudStore
                 fileInfo = IsSha1(version.Sha1)
                     ? new Dictionary<string, string> { ["large_file_sha1"] = version.Sha1!, ["src_last_modified_millis"] = version.ModifiedUtc.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture) }
                     : new Dictionary<string, string> { ["src_last_modified_millis"] = version.ModifiedUtc.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture) }
-            }, cancellationToken, retryNetwork: false).ConfigureAwait(false)) fileId = RequiredString(start.RootElement, "fileId");
+            }, cancellationToken, retryNetwork: false, retryTransient: false).ConfigureAwait(false)) fileId = RequiredString(start.RootElement, "fileId");
             var hashes = new string[partCount];
             await Parallel.ForEachAsync(Enumerable.Range(0, partCount), new ParallelOptions
             { MaxDegreeOfParallelism = Volatile.Read(ref _connections), CancellationToken = cancellationToken }, async (i, ct) =>
@@ -362,14 +434,22 @@ public sealed partial class B2CloudStore : ICloudStore
                 hashes[i] = RequiredString(part.RootElement, "contentSha1");
                 if (!IsSha1(hashes[i])) throw new InvalidDataException("Backblaze returned an invalid copied part checksum.");
             }).ConfigureAwait(false);
-            var restored = await FinishAsync(fileId, hashes, cancellationToken).ConfigureAwait(false);
+            CloudObject restored;
+            try { restored = await FinishAsync(fileId, hashes, cancellationToken).ConfigureAwait(false); }
+            catch (Exception error) when (error is OperationCanceledException or HttpRequestException ||
+                error is IOException and not B2RequestException || error is B2RequestException request && IsTransient(request.StatusCode))
+            {
+                finishUncertain = true;
+                ReportDiagnostic("The restored B2 version could not be confirmed after finishing. Its file ID was retained in B2; no cancellation was sent for a possibly completed version.");
+                throw;
+            }
             if (restored.Size != version.Size) throw new IOException("The restored file size does not match the selected version.");
             completed = true;
             return restored;
         }
         finally
         {
-            if (fileId is not null && !completed)
+            if (fileId is not null && !completed && !finishUncertain)
             {
                 using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                 try { using var _ = await ApiAsync("b2_cancel_large_file", new { fileId }, cleanup.Token).ConfigureAwait(false); }
