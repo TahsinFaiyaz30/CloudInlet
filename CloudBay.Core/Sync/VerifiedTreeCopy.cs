@@ -12,6 +12,10 @@ namespace CloudBay.Core.Sync;
 public static class VerifiedTreeCopy
 {
     public static async Task CopyAsync(string source, string destination, CancellationToken ct = default, IProgress<string>? progress = null)
+    { await CopyVerifiedAsync(source, destination, ct, progress); }
+
+    /// <summary>Returns the actual source snapshot whose bytes passed final copy verification.</summary>
+    public static async Task<string> CopyVerifiedAsync(string source, string destination, CancellationToken ct = default, IProgress<string>? progress = null)
     {
         source = Path.TrimEndingDirectorySeparator(Path.GetFullPath(source));
         destination = Path.TrimEndingDirectorySeparator(Path.GetFullPath(destination));
@@ -143,6 +147,15 @@ public static class VerifiedTreeCopy
         }
         foreach (var (relative, attributes) in snapshot.DirectoryAttributes)
             PreserveAttributes(Path.Combine(destination, relative), attributes);
+        return FingerprintSnapshot(final);
+    }
+
+    /// <summary>Rejects saves after the verified snapshot, before a caller changes a Windows folder mapping.</summary>
+    public static void EnsureUnchanged(string source, string verifiedFingerprint, CancellationToken ct = default)
+    {
+        if (verifiedFingerprint is not { Length: 64 } || !verifiedFingerprint.All(Uri.IsHexDigit) ||
+            !verifiedFingerprint.Equals(GetFingerprint(source, ct), StringComparison.Ordinal))
+            throw SourceChanged();
     }
 
     public static string GetFingerprint(string path, CancellationToken ct = default)
@@ -298,9 +311,18 @@ public static class VerifiedTreeCopy
     {
         if (!OperatingSystem.IsWindows()) return new(0, 0, 0, 0, (uint)File.GetAttributes(path));
         using var handle = OpenMetadataGuard(path);
-        if (!GetFileInformationByHandleEx(handle, 0, out BasicInformation basic, (uint)Marshal.SizeOf<BasicInformation>()) ||
-            !GetFileInformationByHandleEx(handle, 18, out FileIdentification identity, (uint)Marshal.SizeOf<FileIdentification>()))
+        if (!GetFileInformationByHandleEx(handle, 0, out BasicInformation basic, (uint)Marshal.SizeOf<BasicInformation>()))
             throw LinkInspectionError(Marshal.GetLastWin32Error());
+        if (!GetFileInformationByHandleEx(handle, 18, out FileIdentification identity, (uint)Marshal.SizeOf<FileIdentification>()))
+        {
+            var error = Marshal.GetLastWin32Error();
+            // Some mounted providers expose the older file identity API but not FILE_ID_INFO.
+            // Both inspect the same no-follow, no-delete handle; never substitute path metadata.
+            if (error is not (50 or 87) || !GetFileInformationByHandle(handle, out var legacy))
+                throw new IOException("The source provider cannot expose a stable file identity for verified copying. Download this folder into an ordinary local folder and review that copy; source files were retained.",
+                    new Win32Exception(error));
+            identity = new() { Volume = legacy.Volume, Low = (ulong)legacy.IndexHigh << 32 | legacy.IndexLow, High = 0 };
+        }
         return new(identity.Volume, identity.Low, identity.High, basic.Changed, basic.Attributes);
     }
 
@@ -431,6 +453,12 @@ public static class VerifiedTreeCopy
     private struct BasicInformation { public long Created, Accessed, Modified, Changed; public uint Attributes; }
     [StructLayout(LayoutKind.Sequential)]
     private struct FileIdentification { public ulong Volume, Low, High; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LegacyFileInformation
+    {
+        public uint Attributes, CreatedLow, CreatedHigh, AccessedLow, AccessedHigh, WrittenLow, WrittenHigh,
+            Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+    }
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct StreamInformation
     {
@@ -445,6 +473,8 @@ public static class VerifiedTreeCopy
     private static extern bool GetFileInformationByHandleEx(SafeFileHandle handle, int infoClass, out BasicInformation info, uint size);
     [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetFileInformationByHandleEx(SafeFileHandle handle, int infoClass, out FileIdentification info, uint size);
+    [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandle(SafeFileHandle handle, out LegacyFileInformation information);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr FindFirstStreamW(string path, uint infoLevel, out StreamInformation information, uint flags);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]

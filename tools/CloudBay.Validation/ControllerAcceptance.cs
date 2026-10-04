@@ -142,6 +142,62 @@ internal static class ControllerAcceptance
                 Require(current.First(file => file.Action == "upload").Sha1 == Convert.ToHexString(SHA1.HashData(changed)).ToLowerInvariant(),
                     "The native dirty edit did not upload its changed bytes.");
             });
+            await check("controller_readonly_upload_and_reviewed_folder_import_keep_sources_and_metadata", async () =>
+            {
+                var incoming = Path.Combine(parent, "Incoming");
+                Directory.CreateDirectory(incoming);
+                var source = Path.Combine(incoming, "readonly.txt");
+                var bytes = Encoding.UTF8.GetBytes("verified read-only import " + id);
+                await File.WriteAllBytesAsync(source, bytes, ct);
+                await File.WriteAllTextAsync(source + ":Zone.Identifier:$DATA", "[ZoneTransfer]\r\nZoneId=3\r\n", ct);
+                File.SetAttributes(source, File.GetAttributes(source) | FileAttributes.ReadOnly);
+                try
+                {
+                    var plan = await controller.PreviewFolderImportAsync(incoming, "Imported-local", ct);
+                    Require(plan.FileCount == 1 && !Directory.Exists(plan.DestinationPath), "Review started copying before the user selected import.");
+                    await controller.ImportFolderAsync(plan, ct);
+                    await Sync(controller, ct);
+                    var target = Path.Combine(main, "Imported-local", "readonly.txt");
+                    Require(bytes.SequenceEqual(await File.ReadAllBytesAsync(source, ct)) && bytes.SequenceEqual(await File.ReadAllBytesAsync(target, ct)),
+                        "Native import changed its original or verified copy.");
+                    Require((File.GetAttributes(source) & FileAttributes.ReadOnly) != 0 && (File.GetAttributes(target) & FileAttributes.ReadOnly) != 0,
+                        "Native upload stripped a read-only attribute.");
+                    Require(await File.ReadAllTextAsync(target + ":Zone.Identifier:$DATA", ct) == "[ZoneTransfer]\r\nZoneId=3\r\n", "Native import dropped download-origin metadata.");
+                    var versions = await controller.GetVersionsAsync("Imported-local/readonly.txt");
+                    await Sync(controller, ct);
+                    Require((await controller.GetVersionsAsync("Imported-local/readonly.txt")).Count(item => item.Action == "upload") ==
+                        versions.Count(item => item.Action == "upload"), "A read-only file was uploaded again only to complete Windows status.");
+                    Require(controller.ImportHistory.Any(item => item.State == "Completed" && item.Plan.SourcePath == incoming), "Completed import did not retain its review history.");
+                    foreach (var (name, original) in knownLocations)
+                        Require(SafeKnownLocation(name) == original, "Import changed the user's Windows folder location: " + name);
+                }
+                finally
+                {
+                    foreach (var file in new[] { source, Path.Combine(main, "Imported-local", "readonly.txt") })
+                        if (File.Exists(file)) File.SetAttributes(file, File.GetAttributes(file) & ~FileAttributes.ReadOnly);
+                }
+            });
+            await check("controller_direct_b2_import_uses_stable_receipts_and_native_file_reads", async () =>
+            {
+                var bytes = RandomNumberGenerator.GetBytes(64 * 1024 + 17);
+                var sourcePrefix = prefix + "import-source/";
+                var source = await Upload(observer, bucket.Id, sourcePrefix + "cloud.bin", bytes, ct);
+                var plan = await controller.PreviewCloudImportAsync(bucket.Id, sourcePrefix, "Imported-cloud", ct);
+                Require(plan.FileCount == 1 && plan.TotalBytes == bytes.Length, "Cloud import review did not capture its immutable source.");
+                await controller.ImportCloudAsync(plan, ct);
+                await Sync(controller, ct);
+                var item = plan.Items.Single();
+                var key = controller.Settings.Prefix + "Imported-cloud/cloud.bin";
+                var first = (await observer.VersionsAsync(bucket.Id, key, ct)).First(file => file.Action == "upload");
+                var replay = await observer.CopyToAsync(bucket.Id, key, source,
+                    CloudBay.Core.Sync.CloudImport.OperationId(plan.JobId, item, key), ct);
+                Require(replay.FileId == first.FileId && (await observer.VersionsAsync(bucket.Id, key, ct)).Count(file => file.Action == "upload") == 1,
+                    "Replaying a completed import created another B2 version.");
+                Require(bytes.SequenceEqual(await Task.Run(() => File.ReadAllBytes(Path.Combine(main, "Imported-cloud", "cloud.bin")), ct)),
+                    "Directly imported cloud bytes did not hydrate correctly through Windows.");
+                Require(controller.CloudImportHistory.Any(record => record.Id == plan.JobId && record.State == "Completed"), "Direct cloud import history was not completed.");
+                Require((await observer.VersionsAsync(bucket.Id, source.Key, ct)).Any(file => file.FileId == source.FileId), "Cloud import removed its source version.");
+            });
             await check("controller_files_on_demand_pin_free_space_and_hydrate", async () =>
             {
                 var data = RandomNumberGenerator.GetBytes(128 * 1024 + 29);
@@ -375,10 +431,10 @@ internal static class ControllerAcceptance
             throw new InvalidOperationException("The controller did not sync: " + controller.Snapshot.Message);
         Require(controller.Snapshot.State == ClientState.UpToDate, "The controller did not finish all roots: " + controller.Snapshot.Message);
     }
-    private static async Task Upload(B2CloudStore store, string bucket, string key, byte[] bytes, CancellationToken ct)
+    private static async Task<CloudObject> Upload(B2CloudStore store, string bucket, string key, byte[] bytes, CancellationToken ct)
     {
         using var source = new MemoryStream(bytes);
-        await store.UploadAsync(bucket, key, source, bytes.Length, Convert.ToHexString(SHA1.HashData(bytes)).ToLowerInvariant(), DateTimeOffset.UtcNow, cancellationToken: ct);
+        return await store.UploadAsync(bucket, key, source, bytes.Length, Convert.ToHexString(SHA1.HashData(bytes)).ToLowerInvariant(), DateTimeOffset.UtcNow, cancellationToken: ct);
     }
     private static bool Owned(string path, string parent) => Path.GetFullPath(path).StartsWith(Path.GetFullPath(parent) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     private static IEnumerable<StorageProviderSyncRootInfo> CurrentOwnedRoots(string parent) =>

@@ -44,7 +44,10 @@ public sealed class TransferPipelineTests
         h.Cloud.HoldVerification = true;
         h.Cloud.VerificationDelay = TimeSpan.FromMilliseconds(20);
         var work = h.Engine.SyncNowAsync();
-        var snapshot = await h.WaitSnapshotAsync(value => value.ActiveTransfers == 8);
+        // Active includes hashing and uploading. Wait until every backlog slot has
+        // reached verification so the two final writers have acknowledged their uploads.
+        var snapshot = await h.WaitSnapshotAsync(value => value.ActiveTransfers == 8 &&
+            value.Transfers.Count(item => item.Phase == TransferPhase.Verifying) == 8);
         Assert.AreEqual(8, h.Cloud.UploadedCount);
         Assert.AreEqual(32, snapshot.QueuedTransfers);
         Assert.AreEqual(40, snapshot.Pending);
@@ -67,7 +70,8 @@ public sealed class TransferPipelineTests
         for (var i = 0; i < 20; i++) await File.WriteAllTextAsync(h.Path($"file-{i}.txt"), "retained local file");
         h.Cloud.HoldVerification = true;
         var work = h.Engine.SyncNowAsync();
-        await h.WaitSnapshotAsync(value => value.ActiveTransfers == 8);
+        await h.WaitSnapshotAsync(value => value.ActiveTransfers == 8 &&
+            value.Transfers.Count(item => item.Phase == TransferPhase.Verifying) == 8);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await h.Engine.QuiesceAsync(timeout.Token);
         await work.WaitAsync(timeout.Token);

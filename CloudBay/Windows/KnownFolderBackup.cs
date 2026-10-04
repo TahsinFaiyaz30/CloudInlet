@@ -4,9 +4,55 @@ using CloudBay.Core.Sync;
 
 namespace CloudBay.Windows;
 
+public sealed record BackupSourceReview(string Name, string OriginalWindowsPath,
+    FolderImportPlan CurrentFiles, FolderImportPlan? AdditionalFiles, bool IsRedirected);
+
 /// <summary>Opt-in Known Folder backup. Original data remains until the user removes it.</summary>
 public static class KnownFolderBackup
 {
+    public static BackupSourceReview Preview(string name, string root, string? additionalSource = null, CancellationToken ct = default)
+    {
+        KnownFolderPolicy.EnsureRedirectable(GetId(name));
+        var original = GetPath(name);
+        var destination = PathRules.FullPath(root, name);
+        if (Path.GetFullPath(original).Equals(destination, StringComparison.OrdinalIgnoreCase))
+            throw new IOException("This Windows folder already points at CloudBay. Recover its backup record before changing its location.");
+        var current = Directory.Exists(original) ? FolderImport.Preview(original, destination, ct) :
+            new FolderImportPlan(original, destination, "missing", 0, 0, null, false);
+        var extra = string.IsNullOrWhiteSpace(additionalSource) || Path.GetFullPath(additionalSource).Equals(Path.GetFullPath(original), StringComparison.OrdinalIgnoreCase)
+            ? null : FolderImport.Preview(additionalSource, destination, ct);
+        if (extra is not null && current.AvailableBytes is { } available && available < checked(current.TotalBytes + extra.TotalBytes))
+            throw new IOException("The destination drive does not have enough space for both selected sources.");
+        return new(name, original, current, extra,
+            !Path.GetFullPath(original).Equals(GetDefaultPath(name), StringComparison.OrdinalIgnoreCase));
+    }
+
+    public static async Task<BackupFolder> EnableReviewedAsync(BackupSourceReview reviewed, CancellationToken ct)
+    {
+        KnownFolderPolicy.EnsureRedirectable(GetId(reviewed.Name));
+        if (!GetPath(reviewed.Name).Equals(reviewed.OriginalWindowsPath, StringComparison.OrdinalIgnoreCase))
+            throw new IOException("Another app changed this Windows folder location. Review the source again; the mapping was retained.");
+        string verifiedOriginal;
+        if (reviewed.CurrentFiles.Fingerprint == "missing")
+        {
+            if (Directory.Exists(reviewed.OriginalWindowsPath))
+                throw new IOException("Files appeared in this Windows folder after review. Review its contents again.");
+            Directory.CreateDirectory(reviewed.OriginalWindowsPath);
+            verifiedOriginal = await VerifiedTreeCopy.CopyVerifiedAsync(reviewed.OriginalWindowsPath, reviewed.CurrentFiles.DestinationPath, ct);
+        }
+        else verifiedOriginal = await FolderImport.ExecuteAsync(reviewed.CurrentFiles, ct);
+        // A second selected source is copied without abandoning current Windows files.
+        if (reviewed.AdditionalFiles is { } extra) await FolderImport.ExecuteAsync(extra, ct);
+        // The verified copy retained the source appearance, including desktop.ini.
+        // The source may be a Windows folder redirected onto a network provider.
+        await FolderAppearance.EnsureIconAsync(reviewed.CurrentFiles.DestinationPath, FolderAppearance.GetKnownFolderIcon(reviewed.Name), ct);
+        VerifiedTreeCopy.EnsureUnchanged(reviewed.OriginalWindowsPath, verifiedOriginal, ct);
+        if (!GetPath(reviewed.Name).Equals(reviewed.OriginalWindowsPath, StringComparison.OrdinalIgnoreCase))
+            throw new IOException("The Windows folder changed before backup could finish. Original files and completed copies were retained; review it again.");
+        SetPath(reviewed.Name, reviewed.CurrentFiles.DestinationPath);
+        return new(reviewed.Name, reviewed.OriginalWindowsPath, reviewed.CurrentFiles.DestinationPath);
+    }
+
     public static IReadOnlyDictionary<string, Guid> FolderIds { get; } = new Dictionary<string, Guid>
     {
         ["Desktop"] = new("B4BFCC3A-DB2C-424C-B029-7FE99A87C641"),

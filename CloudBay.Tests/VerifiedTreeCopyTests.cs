@@ -155,7 +155,9 @@ public sealed class VerifiedTreeCopyTests
                 File.SetLastWriteTimeUtc(file, modified.AddMinutes(1));
                 File.SetLastWriteTimeUtc(file, modified);
             });
-            await VerifiedTreeCopy.CopyAsync(source, destination, progress: progress);
+            var verified = await VerifiedTreeCopy.CopyVerifiedAsync(source, destination, progress: progress);
+            Assert.AreEqual(VerifiedTreeCopy.GetFingerprint(source), verified,
+                "The returned snapshot must describe the reverified final source metadata, including hydration-like changes.");
             Assert.AreEqual("same bytes", await File.ReadAllTextAsync(Path.Combine(destination, "report.txt")));
             Assert.AreEqual(modified, File.GetLastWriteTimeUtc(file));
         }
