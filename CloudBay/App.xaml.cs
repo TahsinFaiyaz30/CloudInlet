@@ -122,7 +122,17 @@ public partial class App : Microsoft.UI.Xaml.Application
             _trayWindow = new TrayWindow(_controller, () => { MainWindow.ShowSettings(); MainWindow.ShowWindow(); }, () => _ = QuitAsync());
             _startupStage = "Register notification icon";
             _trayIcon = new TrayIcon(WinRT.Interop.WindowNative.GetWindowHandle(MainWindow),
-                Path.Combine(AppContext.BaseDirectory, "Assets", "CloudBay.ico"), () => _trayWindow.ShowAtTray(), MainWindow.ShowWindow);
+                Path.Combine(AppContext.BaseDirectory, "Assets", "CloudBay.ico"), () => _trayWindow.ShowAtTray(), MainWindow.ShowWindow,
+                new TrayIconActions(MainWindow.ShowWindow, () => _controller.LaunchFolder(),
+                    () => { if (_controller.Snapshot.State == ClientState.Paused) _controller.Resume(); else _controller.Pause(); },
+                    () => { MainWindow.ShowSettings(); MainWindow.ShowWindow(); }, () => _ = QuitAsync())
+                {
+                    Availability = () => new(_controller.Settings.IsConfigured, _controller.Settings.IsConfigured,
+                        _controller.Snapshot.State == ClientState.Paused),
+                    BeforeMenuOpen = () => _trayWindow.AppWindow.Hide(),
+                    Error = error => _ = ShowTrayCommandErrorAsync(error)
+                });
+            _trayIcon.Update(_controller.Snapshot);
             _controller.Changed += Controller_Changed;
             _ = ListenForActivationAsync();
             if (!commandLine.Contains("--background") || !_controller.Settings.IsConfigured) MainWindow.ShowWindow();
@@ -333,8 +343,22 @@ public partial class App : Microsoft.UI.Xaml.Application
         if (window is null || !window.DispatcherQueue.TryEnqueue(() =>
         {
             Interlocked.Exchange(ref _trayUpdatePending, 0);
-            if (!_exiting && _controller is not null) _trayIcon?.Update(_controller.Snapshot.Message);
+            if (!_exiting && _controller is not null) _trayIcon?.Update(_controller.Snapshot);
         })) Interlocked.Exchange(ref _trayUpdatePending, 0);
+    }
+    private async Task ShowTrayCommandErrorAsync(Exception error)
+    {
+        if (_exiting || MainWindow?.Content is not FrameworkElement content) return;
+        MainWindow.ShowWindow();
+        var dialog = new Microsoft.UI.Xaml.Controls.ContentDialog
+        {
+            Title = "CloudBay couldn't complete this action",
+            Content = error.Message,
+            CloseButtonText = "Close",
+            XamlRoot = content.XamlRoot
+        };
+        try { await dialog.ShowAsync(); }
+        catch (InvalidOperationException) { /* An existing dialog already owns the window. */ }
     }
     private async Task QuitAsync()
     {
