@@ -12,10 +12,12 @@ CloudBay uses native WinUI controls and Windows Community Toolkit SettingsCard a
 - Backup uses recognizable Windows folder tiles, accessible switches, and paths in tooltips. Less common folders remain discoverable on demand.
 - Pages share consistent outer gutters and adapt to the available window width. Activity offers All, In progress, Queued, and History views. Uploads and downloads show their filenames, relative folder, measured speed, and progress before completed history. The header summarizes current upload and download rates independently.
 - The Activity presentation is bounded while its queue count covers the complete workload. Changing a filter resets to its first visible file; ordinary progress updates preserve existing row containers and scroll position. Acceptance checks visible filenames intersecting the viewport and reaching the last displayed queued row, rather than accepting an item count behind a blank virtualized list.
+- Completed history reuses unchanged row objects as new events arrive. Local folder and B2-version actions align to the right of each row; narrow rows stack their text buttons, while the tray uses compact icons with accessible names and tooltips. Removed or unknown account identities do not produce guessed actions. Cloud navigation brings the selected file's version history into view.
 - The tray places up to three live transfers first, with per-file and total directional speeds. Its queue action opens Activity, and recent history follows beneath. Quiet, queued, paused, and verifying files do not display an invented transfer rate. The footer remains reachable as content scrolls.
 - The tray uses a compact layout: current state, relevant progress, recent activity when present, and quick actions. Its height follows the visible content.
 - The tray body scrolls when the work area limits its height. Footer actions stay reachable and stack when scaled text no longer fits beside each other. Connect opens Account directly; attention opens Overview's review action.
 - The tray synchronizes its native frame with the actual XAML theme. Windows 11 DWM suppresses the flyout's outer stroke while retaining native rounded corners and shadow; contrast themes keep the system boundary. The frame updates after theme, activation, and contrast-setting changes.
+- Right-clicking the notification icon opens the native command menu; selecting it opens the mini activity window. The notification badge animates during active file work and stays still during periodic scanning or idle states. Cached frames, an owner-thread timer, and Windows motion/contrast preferences keep the animation restrained.
 
 ## Interaction
 
@@ -68,3 +70,5 @@ These proportions follow the [Windows type ramp](https://learn.microsoft.com/en-
 - [Color](https://learn.microsoft.com/en-us/windows/apps/design/signature-experiences/color)
 - [Motion](https://learn.microsoft.com/en-us/windows/apps/design/signature-experiences/motion)
 - [AnimatedIcon and animation accessibility](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.animatedicon?view=windows-app-sdk-1.8)
+- [Windows notification icon callbacks](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shell_notifyiconw)
+- [Native notification menu](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-trackpopupmenuex)
