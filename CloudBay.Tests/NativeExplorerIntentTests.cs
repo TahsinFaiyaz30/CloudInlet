@@ -5,6 +5,7 @@ using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using CloudBay.Core;
+using CloudBay.Core.Sync;
 using CloudBay.Windows;
 using CloudBay.Windows.CloudFiles;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -260,6 +261,74 @@ public sealed class NativeExplorerIntentTests
                 if (!SetKernelObjectSecurity(restore, 4, original.GetSecurityDescriptorBinaryForm()))
                     throw new Win32Exception(Marshal.GetLastWin32Error());
             }
+        });
+    }
+
+    [TestMethod]
+    [Timeout(90_000)]
+    public async Task LongNativePathsConvertCreateHydrateAndEvictWithoutChangingTheirVisibleNames()
+    {
+        await RunIsolatedAsync(async (service, root, versions, token) =>
+        {
+            var folder = Path.Combine(root, new string('a', 110), new string('b', 110));
+            Directory.CreateDirectory(folder);
+            var localPath = Path.Combine(folder, "local.bin");
+            var cloudPath = Path.Combine(folder, "cloud.bin");
+            Assert.IsTrue(localPath.Length > 260, "This fixture must exercise a real path beyond MAX_PATH.");
+            var localBytes = RandomNumberGenerator.GetBytes(65_023);
+            var cloudBytes = RandomNumberGenerator.GetBytes(128_027);
+            versions["long-local"] = localBytes;
+            versions["long-cloud"] = cloudBytes;
+            await File.WriteAllBytesAsync(localPath, localBytes, token);
+            await service.MarkInSyncAsync(localPath, new("long-local", Path.GetRelativePath(root, localPath).Replace('\\', '/'),
+                localBytes.Length, Convert.ToHexString(SHA1.HashData(localBytes)),
+                new DateTimeOffset(File.GetLastWriteTimeUtc(localPath))), token);
+            Assert.IsTrue(service.IsPlaceholder(localPath));
+            Assert.IsTrue(service.IsHydrated(localPath));
+            await service.FreeSpaceAsync(localPath, token);
+            Assert.IsFalse(service.IsHydrated(localPath));
+            CollectionAssert.AreEqual(localBytes, await File.ReadAllBytesAsync(localPath, token));
+
+            await service.CreateOrUpdateAsync(cloudPath, new("long-cloud", Path.GetRelativePath(root, cloudPath).Replace('\\', '/'),
+                cloudBytes.Length, Convert.ToHexString(SHA1.HashData(cloudBytes)), DateTimeOffset.UtcNow), true, token);
+            Assert.IsTrue(service.IsPlaceholder(cloudPath));
+            Assert.IsFalse(service.IsHydrated(cloudPath));
+            SetWindowsPin(cloudPath, 1);
+            await UntilAsync(() => service.IsHydrated(cloudPath), token);
+            CollectionAssert.AreEqual(cloudBytes, await File.ReadAllBytesAsync(cloudPath, token));
+            SetWindowsPin(cloudPath, 2);
+            await UntilAsync(() => !service.IsHydrated(cloudPath), token);
+            CollectionAssert.AreEqual(cloudBytes, await File.ReadAllBytesAsync(cloudPath, token));
+            Assert.IsFalse(localPath.StartsWith(@"\\?\", StringComparison.Ordinal),
+                "The extended namespace belongs at the native boundary, not in persisted or visible paths.");
+        });
+    }
+
+    [TestMethod]
+    [Timeout(90_000)]
+    public async Task IncompatibleHardLinksRemainOrdinaryReadableAndUnchangedAfterNativeMarkFailure()
+    {
+        await RunIsolatedAsync(async (service, root, versions, token) =>
+        {
+            var path = Path.Combine(root, "linked-original.bin");
+            var alias = Path.Combine(root, "linked-alias.bin");
+            var bytes = RandomNumberGenerator.GetBytes(65_021);
+            await File.WriteAllBytesAsync(path, bytes, token);
+            if (!CreateHardLinkW(WindowsFilePaths.ToExtendedPath(alias), WindowsFilePaths.ToExtendedPath(path), IntPtr.Zero))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            var cloud = new CloudObject("linked-copy", "linked-original.bin", bytes.Length,
+                Convert.ToHexString(SHA1.HashData(bytes)), new DateTimeOffset(File.GetLastWriteTimeUtc(path)));
+            var error = await Assert.ThrowsExceptionAsync<COMException>(() => service.MarkInSyncAsync(path, cloud, token));
+            Assert.AreEqual(unchecked((int)0x8007018C), error.HResult,
+                "HardlinkPolicy.None must reject incompatible aliases rather than convert or unlink them.");
+            Assert.IsFalse(service.IsPlaceholder(path));
+            Assert.IsFalse(service.IsPlaceholder(alias));
+            CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(path, token));
+            CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(alias, token));
+            using var handle = CreateFileW(path, 0x80, 7, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
+            if (handle.IsInvalid || !GetFileInformationByHandle(handle.DangerousGetHandle(), out var information))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            Assert.AreEqual(2u, information.Links, "A native marking failure must not break the user's hard links.");
         });
     }
 
@@ -695,6 +764,10 @@ public sealed class NativeExplorerIntentTests
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetKernelObjectSecurity(Microsoft.Win32.SafeHandles.SafeFileHandle handle,
         uint securityInformation, byte[] securityDescriptor);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CreateHardLinkW(string path, string existingPath, IntPtr security);
 
     private static async Task UntilAsync(Func<bool> condition, CancellationToken token)
     {

@@ -12,6 +12,7 @@ public sealed class ClientStorage
     public string DiagnosticsPath => Path.Combine(DirectoryPath, "activity.jsonl");
     private readonly object _logGate = new();
     private readonly List<ActivityEvent> _activity = [];
+    private readonly Dictionary<string, ActivityEvent> _lastErrors = new(StringComparer.OrdinalIgnoreCase);
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     public ClientStorage(string? path = null)
     {
@@ -21,7 +22,11 @@ public sealed class ClientStorage
         {
             foreach (var line in File.ReadLines(DiagnosticsPath).TakeLast(300))
             {
-                try { if (JsonSerializer.Deserialize<ActivityEvent>(line) is { } value) _activity.Add(value); }
+                try
+                {
+                    if (JsonSerializer.Deserialize<ActivityEvent>(line) is { } value)
+                    { _activity.Add(value); TrackError(value); }
+                }
                 catch (JsonException) { /* An interrupted final line does not invalidate earlier events. */ }
             }
         }
@@ -69,10 +74,17 @@ public sealed class ClientStorage
         finally { CryptographicOperations.ZeroMemory(plaintext); }
     }
     public IReadOnlyList<ActivityEvent> Activity { get { lock (_logGate) return _activity.AsEnumerable().Reverse().ToArray(); } }
-    public void Log(ActivityEvent value)
+    public bool Log(ActivityEvent value)
     {
         lock (_logGate)
         {
+            // A failed file remains visible in Attention, but a polling retry must not bury
+            // the rest of history beneath identical errors. Changed errors and recovery
+            // are recorded immediately; an ongoing issue gets a reminder every five minutes.
+            if (value.Kind == ActivityKind.Error && _lastErrors.TryGetValue(value.Path, out var previous) &&
+                value.Message == previous.Message && value.Time >= previous.Time && value.Time - previous.Time < TimeSpan.FromMinutes(5))
+                return false;
+            TrackError(value);
             _activity.Add(value);
             if (_activity.Count > 300) _activity.RemoveAt(0);
             try
@@ -83,7 +95,15 @@ public sealed class ClientStorage
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             { /* Logging failure must never lose a completed transfer. */ }
+            return true;
         }
+    }
+    private void TrackError(ActivityEvent value)
+    {
+        if (value.Kind != ActivityKind.Error) { if (value.Completed) _lastErrors.Remove(value.Path); return; }
+        if (!_lastErrors.ContainsKey(value.Path) && _lastErrors.Count >= 2048)
+            _lastErrors.Remove(_lastErrors.MinBy(pair => pair.Value.Time).Key);
+        _lastErrors[value.Path] = value;
     }
     private static void AtomicWrite(string path, byte[] bytes)
     {

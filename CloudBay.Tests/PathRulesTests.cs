@@ -15,6 +15,12 @@ public sealed class PathRulesTests
     [DataRow("folder/stream:secret")]
     [DataRow("CON.txt")]
     [DataRow("x/LPT1.log")]
+    [DataRow("COM¹.txt")]
+    [DataRow("folder/com².log")]
+    [DataRow("COM³")]
+    [DataRow("folder/LPT¹.txt")]
+    [DataRow("lpt²")]
+    [DataRow("LPT³.tar.gz")]
     [DataRow("trailing.")]
     [DataRow("trailing ")]
     [DataRow("empty//name")]
@@ -28,6 +34,33 @@ public sealed class PathRulesTests
         Assert.IsTrue(PathRules.IsExcluded("Documents/~$draft.docx", ["~$*"]));
         Assert.IsFalse(PathRules.IsExcluded("Documents/final.docx", ["~$*"]));
         Assert.IsTrue(PathRules.IsExcluded(".cloudbay/transfers/partial", []));
+    }
+
+    [TestMethod]
+    public void ConflictNamesRetainUniqueSuffixExtensionAndValidUnicodeWithinWindowsLimit()
+    {
+        const string suffix = " (conflict 20261004-123456-abcdef)";
+        var result = PathRules.ConflictFileName(new string('x', 250) + ".txt", suffix);
+        Assert.IsTrue(result.Length <= 255);
+        StringAssert.EndsWith(result, suffix + ".txt");
+        PathRules.ValidateRelative(result);
+        var unicode = PathRules.ConflictFileName(string.Concat(Enumerable.Repeat("🙂", 125)) + ".png", suffix);
+        Assert.IsTrue(unicode.Length <= 255);
+        StringAssert.EndsWith(unicode, suffix + ".png");
+        for (var index = 0; index < unicode.Length; index++)
+            if (char.IsHighSurrogate(unicode[index])) Assert.IsTrue(index + 1 < unicode.Length && char.IsLowSurrogate(unicode[++index]));
+        Assert.AreNotEqual(result, PathRules.ConflictFileName(new string('x', 250) + ".txt", suffix.Replace("abcdef", "uvwxyz")));
+    }
+
+    [TestMethod]
+    public void ExtendedNativePathsPreserveDriveAndUncPathsAndRejectDeviceNamespaces()
+    {
+        Assert.AreEqual(@"\\?\C:\folder\file.txt", WindowsFilePaths.ToExtendedPath(@"C:\folder\file.txt"));
+        Assert.AreEqual(@"\\?\UNC\server\share\folder\file.txt", WindowsFilePaths.ToExtendedPath(@"\\server\share\folder\file.txt"));
+        Assert.AreEqual(@"\\?\C:\folder\file.txt", WindowsFilePaths.ToExtendedPath(@"\\?\C:\folder\file.txt"));
+        Assert.ThrowsException<ArgumentException>(() => WindowsFilePaths.ToExtendedPath(@"relative\file.txt"));
+        Assert.ThrowsException<ArgumentException>(() => WindowsFilePaths.ToExtendedPath(@"\\.\PhysicalDrive0"));
+        Assert.ThrowsException<ArgumentException>(() => WindowsFilePaths.ToExtendedPath(@"\\?\GLOBALROOT\Device\HarddiskVolume1\file.txt"));
     }
 
     [TestMethod]

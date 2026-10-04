@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using CloudBay.Core.Sync;
 using Microsoft.Win32.SafeHandles;
 
 namespace CloudBay.Windows.CloudFiles;
@@ -158,8 +159,10 @@ internal static class CloudFilesNative
         internal IntPtr EventHandle;
     }
 
-    [DllImport("cldapi.dll", CharSet = CharSet.Unicode)]
-    internal static extern int CfConnectSyncRoot(string path, [In] CallbackRegistration[] callbacks, IntPtr context, uint flags, out long connection);
+    [DllImport("cldapi.dll", EntryPoint = "CfConnectSyncRoot", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern int NativeConnectSyncRoot(string path, [In] CallbackRegistration[] callbacks, IntPtr context, uint flags, out long connection);
+    internal static int CfConnectSyncRoot(string path, CallbackRegistration[] callbacks, IntPtr context, uint flags, out long connection) =>
+        NativeConnectSyncRoot(WindowsFilePaths.ToExtendedPath(path), callbacks, context, flags, out connection);
     [DllImport("cldapi.dll")] internal static extern int CfDisconnectSyncRoot(long connection);
     [DllImport("cldapi.dll")] internal static extern int CfExecute(in OperationInfo info, in TransferParameters parameters);
     [DllImport("cldapi.dll", EntryPoint = "CfExecute")]
@@ -169,9 +172,14 @@ internal static class CloudFilesNative
     [DllImport("cldapi.dll", EntryPoint = "CfExecute")]
     internal static extern int CfAckData(in OperationInfo info, in AckParameters parameters);
     [DllImport("cldapi.dll")] internal static extern int CfReportProviderProgress(long connection, long transfer, long total, long completed);
-    [DllImport("cldapi.dll", CharSet = CharSet.Unicode)]
-    internal static extern int CfCreatePlaceholders(string baseDirectory, [In, Out] CreateInfo[] placeholders, uint count, uint flags, out uint processed);
-    [DllImport("cldapi.dll", CharSet = CharSet.Unicode)] internal static extern int CfOpenFileWithOplock(string path, uint flags, out ProtectedHandle handle);
+    [DllImport("cldapi.dll", EntryPoint = "CfCreatePlaceholders", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern int NativeCreatePlaceholders(string baseDirectory, [In, Out] CreateInfo[] placeholders, uint count, uint flags, out uint processed);
+    internal static int CfCreatePlaceholders(string baseDirectory, CreateInfo[] placeholders, uint count, uint flags, out uint processed) =>
+        NativeCreatePlaceholders(WindowsFilePaths.ToExtendedPath(baseDirectory), placeholders, count, flags, out processed);
+    [DllImport("cldapi.dll", EntryPoint = "CfOpenFileWithOplock", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern int NativeOpenFileWithOplock(string path, uint flags, out ProtectedHandle handle);
+    internal static int CfOpenFileWithOplock(string path, uint flags, out ProtectedHandle handle) =>
+        NativeOpenFileWithOplock(WindowsFilePaths.ToExtendedPath(path), flags, out handle);
     [DllImport("cldapi.dll")] internal static extern void CfCloseHandle(IntPtr handle);
     [DllImport("cldapi.dll")] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool CfReferenceProtectedHandle(ProtectedHandle handle);
     [DllImport("cldapi.dll")] internal static extern void CfReleaseProtectedHandle(ProtectedHandle handle);
@@ -198,11 +206,17 @@ internal static class CloudFilesNative
     [DllImport("cldapi.dll")]
     internal static extern int CfGetPlaceholderRangeInfoForHydration(long connection, long transfer, long fileId,
         uint infoClass, long offset, long length, out FileRange range, uint bufferLength, out uint returnedLength);
-    [DllImport("cldapi.dll", CharSet = CharSet.Unicode)]
-    internal static extern int CfGetSyncRootInfoByPath(string path, uint infoClass, out long rootFileId, uint bufferLength, out uint returnedLength);
+    [DllImport("cldapi.dll", EntryPoint = "CfGetSyncRootInfoByPath", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern int NativeGetSyncRootInfoByPath(string path, uint infoClass, out long rootFileId, uint bufferLength, out uint returnedLength);
+    internal static int CfGetSyncRootInfoByPath(string path, uint infoClass, out long rootFileId, uint bufferLength, out uint returnedLength) =>
+        NativeGetSyncRootInfoByPath(WindowsFilePaths.ToExtendedPath(path), infoClass, out rootFileId, bufferLength, out returnedLength);
     [DllImport("cldapi.dll")] internal static extern uint CfGetPlaceholderStateFromAttributeTag(uint attributes, uint tag);
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    internal static extern SafeFileHandle CreateFileW(string path, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+    private static extern SafeFileHandle NativeCreateFile(string path, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+    // Apply the long-path namespace at the native boundary only. Containment checks,
+    // persisted identities and visible paths continue to use their normal Windows paths.
+    internal static SafeFileHandle CreateFileW(string path, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template) =>
+        NativeCreateFile(WindowsFilePaths.ToExtendedPath(path), access, share, security, disposition, flags, template);
     [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool GetFileInformationByHandleEx(SafeFileHandle handle, int infoClass, out AttributeTag info, uint size);
     [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]

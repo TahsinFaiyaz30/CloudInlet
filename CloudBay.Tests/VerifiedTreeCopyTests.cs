@@ -13,6 +13,200 @@ namespace CloudBay.Tests;
 public sealed class VerifiedTreeCopyTests
 {
     [TestMethod]
+    public async Task NamedMetadataStreamsIncludingDownloadOriginAndFolderMetadataSurviveVerifiedCopyAndRetry()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "CloudBay.Copy.Tests", Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(root, "source"); var destination = Path.Combine(root, "backup");
+        var file = Path.Combine(source, "download.txt");
+        const string origin = "[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=https://example.test/download\r\n";
+        try
+        {
+            Directory.CreateDirectory(source);
+            await File.WriteAllTextAsync(file, "download bytes");
+            await File.WriteAllTextAsync(file + ":Zone.Identifier:$DATA", origin);
+            await File.WriteAllTextAsync(file + ":application.metadata:$DATA", "keep custom metadata");
+            await File.WriteAllTextAsync(source + ":catalog:$DATA", "folder tags");
+            var inspection = VerifiedTreeCopy.Inspect(source);
+            Assert.AreEqual(1L, inspection.FileCount);
+            Assert.AreEqual(new FileInfo(file).Length + System.Text.Encoding.UTF8.GetByteCount(origin + "keep custom metadata" + "folder tags"), inspection.TotalBytes);
+            Assert.IsFalse(inspection.HasOnlineOnlyFiles);
+            var fingerprint = inspection.Fingerprint;
+            await VerifiedTreeCopy.CopyAsync(source, destination);
+            await VerifiedTreeCopy.CopyAsync(source, destination);
+            Assert.AreEqual("download bytes", await File.ReadAllTextAsync(Path.Combine(destination, "download.txt")));
+            Assert.AreEqual(origin, await File.ReadAllTextAsync(Path.Combine(destination, "download.txt") + ":Zone.Identifier:$DATA"));
+            Assert.AreEqual("keep custom metadata", await File.ReadAllTextAsync(Path.Combine(destination, "download.txt") + ":application.metadata:$DATA"));
+            Assert.AreEqual("folder tags", await File.ReadAllTextAsync(destination + ":catalog:$DATA"));
+            Assert.AreEqual(fingerprint, VerifiedTreeCopy.GetFingerprint(source));
+            Assert.AreEqual(1, Directory.GetFiles(destination).Length);
+        }
+        finally { DeleteGeneratedRoot(root); }
+    }
+
+    [TestMethod]
+    public async Task EqualUnnamedBytesWithDifferentMetadataPreserveBothVersionsAsAConflict()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "CloudBay.Copy.Tests", Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(root, "source"); var destination = Path.Combine(root, "backup");
+        var sourceFile = Path.Combine(source, "report.txt"); var targetFile = Path.Combine(destination, "report.txt");
+        try
+        {
+            Directory.CreateDirectory(source); Directory.CreateDirectory(destination);
+            await File.WriteAllTextAsync(sourceFile, "same file bytes");
+            await File.WriteAllTextAsync(targetFile, "same file bytes");
+            await File.WriteAllTextAsync(sourceFile + ":tags:$DATA", "source metadata");
+            await File.WriteAllTextAsync(targetFile + ":tags:$DATA", "existing metadata");
+            await VerifiedTreeCopy.CopyAsync(source, destination);
+            var conflict = Directory.GetFiles(destination, "report (backup conflict *).txt").Single();
+            Assert.AreEqual("source metadata", await File.ReadAllTextAsync(targetFile + ":tags:$DATA"));
+            Assert.AreEqual("existing metadata", await File.ReadAllTextAsync(conflict + ":tags:$DATA"));
+            await VerifiedTreeCopy.CopyAsync(source, destination);
+            Assert.AreEqual(1, Directory.GetFiles(destination, "report (backup conflict *).txt").Length);
+        }
+        finally { DeleteGeneratedRoot(root); }
+    }
+
+    [TestMethod]
+    public async Task ExistingDirectoryMetadataConflictIsRejectedWithoutOverwritingEitherStream()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "CloudBay.Copy.Tests", Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(root, "source"); var destination = Path.Combine(root, "backup");
+        try
+        {
+            Directory.CreateDirectory(source); Directory.CreateDirectory(destination);
+            await File.WriteAllTextAsync(Path.Combine(source, "keep.txt"), "source retained");
+            await File.WriteAllTextAsync(source + ":tags:$DATA", "source tags");
+            await File.WriteAllTextAsync(destination + ":tags:$DATA", "destination tags");
+            var error = await Assert.ThrowsExceptionAsync<IOException>(() => VerifiedTreeCopy.CopyAsync(source, destination));
+            StringAssert.Contains(error.Message, "Neither metadata stream was overwritten");
+            Assert.AreEqual("source tags", await File.ReadAllTextAsync(source + ":tags:$DATA"));
+            Assert.AreEqual("destination tags", await File.ReadAllTextAsync(destination + ":tags:$DATA"));
+            Assert.AreEqual("source retained", await File.ReadAllTextAsync(Path.Combine(source, "keep.txt")));
+        }
+        finally { DeleteGeneratedRoot(root); }
+    }
+
+    [TestMethod]
+    public async Task LateSameSizeEditWithPreservedModificationTimeCannotPassFinalCopyValidation()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "CloudBay.Copy.Tests", Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(root, "source"); var destination = Path.Combine(root, "backup");
+        var file = Path.Combine(source, "report.txt");
+        try
+        {
+            Directory.CreateDirectory(source);
+            await File.WriteAllTextAsync(file, "alpha");
+            var modified = File.GetLastWriteTimeUtc(file);
+            var before = VerifiedTreeCopy.GetFingerprint(source);
+            var progress = new InlineProgress(relative =>
+            {
+                if (relative != "report.txt") return;
+                File.WriteAllText(file, "bravo");
+                File.SetLastWriteTimeUtc(file, modified);
+            });
+            var error = await Assert.ThrowsExceptionAsync<IOException>(() => VerifiedTreeCopy.CopyAsync(source, destination, progress: progress));
+            StringAssert.Contains(error.Message, "source folder changed");
+            Assert.AreEqual("bravo", await File.ReadAllTextAsync(file));
+            Assert.AreEqual("alpha", await File.ReadAllTextAsync(Path.Combine(destination, "report.txt")));
+            Assert.AreEqual(modified, File.GetLastWriteTimeUtc(file));
+            Assert.AreNotEqual(before, VerifiedTreeCopy.GetFingerprint(source));
+        }
+        finally { DeleteGeneratedRoot(root); }
+    }
+
+    [TestMethod]
+    public async Task LateNamedStreamEditWithPreservedFileModificationTimeCannotPassFinalCopyValidation()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "CloudBay.Copy.Tests", Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(root, "source"); var destination = Path.Combine(root, "backup");
+        var file = Path.Combine(source, "report.txt");
+        try
+        {
+            Directory.CreateDirectory(source);
+            await File.WriteAllTextAsync(file, "unchanged main bytes");
+            await File.WriteAllTextAsync(file + ":tags:$DATA", "alpha");
+            var modified = File.GetLastWriteTimeUtc(file);
+            var progress = new InlineProgress(relative =>
+            {
+                File.WriteAllText(file + ":tags:$DATA", "bravo");
+                File.SetLastWriteTimeUtc(file, modified);
+            });
+            await Assert.ThrowsExceptionAsync<IOException>(() => VerifiedTreeCopy.CopyAsync(source, destination, progress: progress));
+            Assert.AreEqual("bravo", await File.ReadAllTextAsync(file + ":tags:$DATA"));
+            Assert.AreEqual("alpha", await File.ReadAllTextAsync(Path.Combine(destination, "report.txt") + ":tags:$DATA"));
+            Assert.AreEqual(modified, File.GetLastWriteTimeUtc(file));
+        }
+        finally { DeleteGeneratedRoot(root); }
+    }
+
+    [TestMethod]
+    public async Task MetadataChangeWithIdenticalBytesIsReverifiedAndAccepted()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "CloudBay.Copy.Tests", Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(root, "source"); var destination = Path.Combine(root, "backup");
+        var file = Path.Combine(source, "report.txt");
+        try
+        {
+            Directory.CreateDirectory(source);
+            await File.WriteAllTextAsync(file, "same bytes");
+            var modified = File.GetLastWriteTimeUtc(file);
+            var progress = new InlineProgress(_ =>
+            {
+                File.SetLastWriteTimeUtc(file, modified.AddMinutes(1));
+                File.SetLastWriteTimeUtc(file, modified);
+            });
+            await VerifiedTreeCopy.CopyAsync(source, destination, progress: progress);
+            Assert.AreEqual("same bytes", await File.ReadAllTextAsync(Path.Combine(destination, "report.txt")));
+            Assert.AreEqual(modified, File.GetLastWriteTimeUtc(file));
+        }
+        finally { DeleteGeneratedRoot(root); }
+    }
+
+    [TestMethod]
+    public async Task LongNativePathsAndNearLimitConflictNamesAreCopiedWithoutChangingSourceBytes()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "CloudBay.Copy.Tests", Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(root, "source"); var destination = Path.Combine(root, "backup");
+        var relative = Path.Combine(new string('a', 110), new string('b', 110), new string('x', 245) + ".txt");
+        var file = Path.Combine(source, relative); var target = Path.Combine(destination, relative);
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!); Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            await File.WriteAllTextAsync(file, "source bytes"); await File.WriteAllTextAsync(target, "existing bytes");
+            File.SetAttributes(file, FileAttributes.Hidden | FileAttributes.ReadOnly);
+            await VerifiedTreeCopy.CopyAsync(source, destination);
+            Assert.AreEqual("source bytes", await File.ReadAllTextAsync(target));
+            var conflict = Directory.GetFiles(Path.GetDirectoryName(target)!).Single(path => path != target);
+            Assert.IsTrue(Path.GetFileName(conflict).Length <= 255);
+            Assert.AreEqual("existing bytes", await File.ReadAllTextAsync(conflict));
+            Assert.AreEqual("source bytes", await File.ReadAllTextAsync(file));
+            Assert.IsTrue((File.GetAttributes(target) & FileAttributes.ReadOnly) != 0);
+        }
+        finally
+        {
+            if (File.Exists(file)) File.SetAttributes(file, FileAttributes.Normal);
+            if (File.Exists(target)) File.SetAttributes(target, FileAttributes.Normal);
+            DeleteGeneratedRoot(root);
+        }
+    }
+
+    [DataTestMethod]
+    [DataRow(FileAttributes.Encrypted)]
+    [DataRow(FileAttributes.Encrypted | FileAttributes.Directory)]
+    public void EfsProtectionRequiresExplicitRejectionInsteadOfADecryptedNativeCopy(FileAttributes attributes)
+    {
+        // Creating EFS fixture credentials would mutate the real user's certificate store.
+        // Exercise the exact metadata policy used before any source bytes or destination writes.
+        var error = Assert.ThrowsException<IOException>(() => VerifiedTreeCopy.ValidateCopyAttributes(attributes));
+        StringAssert.Contains(error.Message, "EFS-encrypted");
+        StringAssert.Contains(error.Message, "encrypted originals were retained");
+        VerifiedTreeCopy.ValidateCopyAttributes(FileAttributes.ReadOnly | FileAttributes.Hidden | FileAttributes.System);
+    }
+
+    private sealed class InlineProgress(Action<string> report) : IProgress<string>
+    { public void Report(string value) => report(value); }
+
+    [TestMethod]
     public async Task RootAndNestedShellCustomizationRetainsIniBytesRelativeIconsAndActivationAttributes()
     {
         var root = Path.Combine(Path.GetTempPath(), "CloudBay.Copy.Tests", Guid.NewGuid().ToString("N"));

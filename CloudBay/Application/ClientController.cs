@@ -30,7 +30,7 @@ public sealed record PreferenceUpdate
     public IReadOnlyList<string>? DisabledLegacyExclusions { get; init; }
 }
 
-public sealed class ClientController : IAsyncDisposable
+public sealed partial class ClientController : IAsyncDisposable
 {
     private readonly ClientStorage _storage;
     private readonly SemaphoreSlim _operations = new(1, 1);
@@ -693,7 +693,7 @@ public sealed class ClientController : IAsyncDisposable
         }
         Changed?.Invoke(this, EventArgs.Empty);
     }
-    private void AddActivity(ActivityEvent value) { _storage.Log(value); NotifyChanged(); }
+    private void AddActivity(ActivityEvent value) { if (_storage.Log(value)) NotifyChanged(); }
     private static void ConfigureTransport(B2CloudStore cloud, AppSettings settings)
     {
         var limits = TransferLimits.For(settings);

@@ -158,6 +158,13 @@ public sealed class SyncEngine : IAsyncDisposable
         var baseline = _manifest.ReadAll();
         var directoryBaseline = _manifest.ReadDirectories();
         var localSnapshot = await Task.Run(() => ScanLocal(settings, ct), ct);
+        var scanIssues = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void ReportScanIssues(LocalSnapshot snapshot)
+        {
+            foreach (var issue in snapshot.Issues)
+                if (scanIssues.Add(issue.Key)) Record(ActivityKind.Error, issue.Key, issue.Value);
+        }
+        ReportScanIssues(localSnapshot);
         var local = localSnapshot.Files;
         var remote = new Dictionary<string, CloudObject>(StringComparer.OrdinalIgnoreCase);
         var remoteDirectories = new Dictionary<string, CloudObject>(StringComparer.OrdinalIgnoreCase);
@@ -171,15 +178,17 @@ public sealed class SyncEngine : IAsyncDisposable
             try { relative = PathRules.FromKey(directory ? file.Key[..^1] : file.Key, settings.Prefix); }
             catch (InvalidDataException error) { invalid++; Record(ActivityKind.Error, file.Key, error.Message); continue; }
             if (PathRules.IsExcluded(relative, settings, isDirectory: directory)) continue;
+            if (localSnapshot.IsUnavailable(relative)) continue;
             if (!(directory ? remoteDirectories : remote).TryAdd(relative, file))
                 throw new InvalidDataException("B2 contains names that differ only by letter case. Resolve the collision before syncing to Windows.");
         }
         ValidateRemoteHierarchy(remote.Keys, remoteDirectories.Keys);
         ValidateMixedHierarchy(localSnapshot, remote.Keys, remoteDirectories.Keys);
-        // Do not infer deletions unless BOTH complete snapshots were read successfully.
-        var deletions = baseline.Keys.Where(p => !PathRules.IsExcluded(p, settings) &&
+        // Missing paths are deletion candidates only inside successfully inspected portions
+        // of both snapshots. Unavailable subtrees retain their last verified cloud baseline.
+        var deletions = baseline.Keys.Where(p => !PathRules.IsExcluded(p, settings) && !localSnapshot.IsUnavailable(p) &&
             (!local.ContainsKey(p) || !remote.ContainsKey(p))).Select(p => "F:" + p)
-            .Concat(directoryBaseline.Keys.Where(p => !PathRules.IsExcluded(p, settings, isDirectory: true) &&
+            .Concat(directoryBaseline.Keys.Where(p => !PathRules.IsExcluded(p, settings, isDirectory: true) && !localSnapshot.IsUnavailable(p) &&
                 (!localSnapshot.Directories.Contains(p) || !remoteDirectories.ContainsKey(p))).Select(p => "D:" + p)).ToList();
         var massDelete = deletions.Count >= 10 && deletions.Count > (baseline.Count + directoryBaseline.Count) / 4;
         var review = deletions.ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -198,11 +207,11 @@ public sealed class SyncEngine : IAsyncDisposable
         }
         var uploads = new List<string>();
         var downloads = new List<(string Relative, CloudObject File)>();
-        var errors = invalid;
+        var errors = invalid + scanIssues.Count;
         foreach (var relative in local.Keys.Concat(remote.Keys).Concat(baseline.Keys).Distinct(StringComparer.OrdinalIgnoreCase))
         {
             ct.ThrowIfCancellationRequested();
-            if (PathRules.IsExcluded(relative, settings)) continue;
+            if (PathRules.IsExcluded(relative, settings) || localSnapshot.IsUnavailable(relative)) continue;
             local.TryGetValue(relative, out var disk);
             remote.TryGetValue(relative, out var cloud);
             baseline.TryGetValue(relative, out var last);
@@ -316,56 +325,111 @@ public sealed class SyncEngine : IAsyncDisposable
             UploadPipelineAsync(uploads, settings, limits.Uploads, FinishTransfer, ct),
             Parallel.ForEachAsync(downloads, new ParallelOptions { MaxDegreeOfParallelism = limits.Downloads, CancellationToken = ct },
                 (item, token) => new ValueTask(TransferAsync(item.Relative, ActivityKind.Download, t => ApplyRemoteAsync(item.Relative, item.File, settings, t), token))));
-        errors += await ReconcileDirectoriesAsync(localSnapshot.Directories, remoteDirectories, directoryBaseline, settings, ct);
+        errors += await ReconcileDirectoriesAsync(localSnapshot, remoteDirectories, directoryBaseline, settings, ct);
         var final = _manifest.ReadAll();
-        var localBytes = (await Task.Run(() => ScanLocal(settings, ct), ct)).Files.Values.Where(f => f.Hydrated).Sum(f => f.Size);
+        var finalSnapshot = await Task.Run(() => ScanLocal(settings, ct), ct);
+        var previousScanIssues = scanIssues.Count;
+        ReportScanIssues(finalSnapshot);
+        errors += scanIssues.Count - previousScanIssues;
+        var localBytes = finalSnapshot.Files.Values.Where(f => f.Hydrated).Sum(f => f.Size);
         SetStatus(new(errors == 0 ? ClientState.UpToDate : ClientState.Attention,
-            errors == 0 ? "Your files are up to date" : $"{errors} items need attention. Failed changes will retry.",
+            errors == 0 ? "Your files are up to date" : scanIssues.Count > 0
+                ? $"{errors} items need attention. Readable folders were checked; unavailable paths were left unchanged. Check Activity for the affected paths."
+                : $"{errors} items need attention. Failed changes will retry.",
             0, final.Count, final.Values.Sum(f => f.Remote.Size), localBytes, LastSync: DateTimeOffset.UtcNow));
     }
 
     private LocalSnapshot ScanLocal(AppSettings settings, CancellationToken ct)
     {
-        var result = new Dictionary<string, LocalFile>(StringComparer.OrdinalIgnoreCase);
-        var folderNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // A linked root or ancestor cannot be treated as a partial scan: it could redirect
+        // every later write outside this backup, so stop before consulting cloud deletions.
+        for (var ancestor = Path.GetFullPath(settings.RootPath); ancestor is not null; ancestor = Path.GetDirectoryName(ancestor))
+            if (new DirectoryInfo(ancestor).LinkTarget is not null)
+                throw new IOException("The sync folder or a parent folder is linked. Choose its actual location; no deletions were sent to B2.");
+        var snapshot = new LocalSnapshot();
         var directories = new Stack<string>(); directories.Push(settings.RootPath);
         while (directories.TryPop(out var directory))
         {
-            foreach (var child in Directory.EnumerateFileSystemEntries(directory))
+            ct.ThrowIfCancellationRequested();
+            var directoryRelative = Path.GetRelativePath(settings.RootPath, directory).Replace('\\', '/');
+            if (directoryRelative != "." && snapshot.IsUnavailable(directoryRelative)) continue;
+            try
             {
-                ct.ThrowIfCancellationRequested();
-                var relative = Path.GetRelativePath(settings.RootPath, child).Replace('\\', '/');
-                var attributes = File.GetAttributes(child);
-                if (PathRules.IsExcluded(relative, settings, isDirectory: (attributes & FileAttributes.Directory) != 0)) continue;
-                if ((attributes & FileAttributes.Directory) != 0)
+                // Recheck a queued folder before traversing it; a rename can replace it
+                // with a link between discovery and enumeration.
+                if (new DirectoryInfo(directory).LinkTarget is not null)
+                    throw new IOException("Linked folders are not followed. Choose the folder's actual location for backup.");
+                foreach (var child in Directory.EnumerateFileSystemEntries(directory))
                 {
-                    if ((attributes & FileAttributes.ReparsePoint) != 0 && new DirectoryInfo(child).LinkTarget is not null)
-                        throw new IOException($"Linked directory is not supported: {relative}");
-                    PathRules.ValidateRelative(relative);
-                    if (!folderNames.Add(relative)) throw new InvalidDataException("Local folder names differ only by case and cannot be synchronized safely.");
-                    directories.Push(child); continue;
+                    ct.ThrowIfCancellationRequested();
+                    var relative = Path.GetRelativePath(settings.RootPath, child).Replace('\\', '/');
+                    FileAttributes attributes;
+                    try
+                    {
+                        attributes = File.GetAttributes(child);
+                        if (PathRules.IsExcluded(relative, settings, isDirectory: (attributes & FileAttributes.Directory) != 0)) continue;
+                        if ((attributes & FileAttributes.Directory) != 0)
+                        {
+                            if ((attributes & FileAttributes.ReparsePoint) != 0)
+                            {
+                                if (VerifiedTreeCopy.IsProtectedCompatibilityJunction(child))
+                                {
+                                    // Windows keeps these protected legacy aliases alongside
+                                    // the actual folder. Never follow or reconcile their targets.
+                                    snapshot.Block(relative); continue;
+                                }
+                                if (new DirectoryInfo(child).LinkTarget is not null)
+                                    throw new IOException("Linked folders are not followed. Choose the folder's actual location for backup.");
+                            }
+                            PathRules.ValidateRelative(relative);
+                        }
+                        else
+                        {
+                            var placeholder = _placeholders.IsPlaceholder(child);
+                            if ((attributes & FileAttributes.ReparsePoint) != 0 && !placeholder)
+                                throw new IOException("Linked files are not followed. Back up the file from its actual location.");
+                            PathRules.ValidateRelative(relative);
+                            snapshot.Files.Add(relative, ReadLocal(child));
+                            continue;
+                        }
+                    }
+                    catch (Exception error) when (IsUnavailableScanError(error))
+                    {
+                        snapshot.Block(relative, error); continue;
+                    }
+                    if (!snapshot.Directories.Add(relative))
+                        throw new InvalidDataException("Local folder names differ only by case and cannot be synchronized safely.");
+                    directories.Push(child);
                 }
-                var placeholder = _placeholders.IsPlaceholder(child);
-                if ((attributes & FileAttributes.ReparsePoint) != 0 && !placeholder)
-                    throw new IOException($"Linked file is not supported: {relative}");
-                PathRules.ValidateRelative(relative);
-                result.Add(relative, ReadLocal(child));
+            }
+            catch (Exception error) when (IsUnavailableScanError(error))
+            {
+                if (directoryRelative == ".")
+                    throw new IOException("The sync folder could not be scanned. No deletions were sent to B2. " + FileSystemError.Describe(error), error);
+                // Enumeration may fail after yielding some entries. Protect the whole
+                // folder, including those entries, rather than infer anything from a prefix.
+                snapshot.Block(directoryRelative, error);
             }
         }
-        return new(result, folderNames);
+        snapshot.RemoveUnavailableEntries();
+        return snapshot;
     }
 
-    private async Task<int> ReconcileDirectoriesAsync(HashSet<string> local, Dictionary<string, CloudObject> remote,
+    private static bool IsUnavailableScanError(Exception error) => error is IOException or UnauthorizedAccessException or
+        System.ComponentModel.Win32Exception or System.Runtime.InteropServices.COMException;
+
+    private async Task<int> ReconcileDirectoriesAsync(LocalSnapshot snapshot, Dictionary<string, CloudObject> remote,
         IReadOnlyDictionary<string, SyncDirectoryEntry> baseline, AppSettings settings, CancellationToken ct)
     {
         var errors = 0;
+        var local = snapshot.Directories;
         // Children first: remote folder removal only removes truly empty directories, never their data.
         var paths = local.Concat(remote.Keys).Concat(baseline.Keys).Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderByDescending(p => p.Count(c => c == '/')).ThenBy(p => p, StringComparer.OrdinalIgnoreCase);
         foreach (var relative in paths)
         {
             ct.ThrowIfCancellationRequested();
-            if (PathRules.IsExcluded(relative, settings, isDirectory: true)) continue;
+            if (PathRules.IsExcluded(relative, settings, isDirectory: true) || snapshot.IsUnavailable(relative)) continue;
             remote.TryGetValue(relative, out var cloud);
             baseline.TryGetValue(relative, out var last);
             try
@@ -765,7 +829,44 @@ public sealed class SyncEngine : IAsyncDisposable
     }
     private sealed record LocalFile(long Size, DateTimeOffset WriteUtc, bool Hydrated, bool HasLocalChanges);
     private sealed record UploadedLocal(string Relative, CloudObject File, long Size, DateTimeOffset Modified);
-    private sealed record LocalSnapshot(Dictionary<string, LocalFile> Files, HashSet<string> Directories);
+    private sealed class LocalSnapshot
+    {
+        public Dictionary<string, LocalFile> Files { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> Directories { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, string> Issues { get; } = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _unavailable = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _protectedParents = new(StringComparer.OrdinalIgnoreCase);
+
+        public void Block(string relative, Exception? error = null)
+        {
+            _unavailable.Add(relative);
+            // An ancestor folder marker can hide the unavailable subtree through a
+            // cloud/local type change. Protect the marker without blocking healthy siblings.
+            for (var index = relative.LastIndexOf('/'); index > 0; index = relative.LastIndexOf('/', index - 1))
+                _protectedParents.Add(relative[..index]);
+            if (error is not null)
+                Issues.TryAdd(relative, $"Could not inspect '{relative}'. This path and its cloud history were left unchanged; " +
+                    "readable folders can continue syncing. " + FileSystemError.Describe(error));
+        }
+
+        public bool IsUnavailable(string relative)
+        {
+            if (_protectedParents.Contains(relative)) return true;
+            for (var path = relative; ;)
+            {
+                if (_unavailable.Contains(path)) return true;
+                var separator = path.LastIndexOf('/');
+                if (separator < 0) return false;
+                path = path[..separator];
+            }
+        }
+
+        public void RemoveUnavailableEntries()
+        {
+            foreach (var path in Files.Keys.Where(IsUnavailable).ToArray()) Files.Remove(path);
+            Directories.RemoveWhere(IsUnavailable);
+        }
+    }
     private sealed class InlineProgress(Action<TransferProgress> action) : IProgress<TransferProgress>
     { public void Report(TransferProgress value) => action(value); }
 }
