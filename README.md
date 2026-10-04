@@ -6,12 +6,13 @@ The previous mounted-drive migration helper is preserved on the **`legacy` branc
 
 ## Features
 
-- Notification area icon and activity flyout with upload/download history, pause/resume, quick settings, and full settings.
+- Notification area icon and activity flyout with live per-file uploads/downloads, waiting counts, recent history, pause/resume, quick settings, and full settings. Activity includes All activity, In progress, Queued, and History filters.
 - Files On-Demand, native Explorer status, download progress, always-available files, and freeing local space.
 - Windows Storage Sense integration for eligible clean, unpinned cloud content. Windows owns cache retention; configure it through **Settings → Files and storage → Windows Storage Sense**.
 - Backup for Desktop, Documents, Pictures, Music, Videos, Downloads, Favorites, Contacts, Saved Games, Links, Searches, and 3D Objects where Windows makes them available. Turning on a personal folder backup changes its actual Windows default location after a verified copy. Apps using that Windows folder then save to CloudBay automatically.
 - Custom personal folder backup in its existing location, with its own native sync root. No symlinks or mounted drives.
-- Persistent B2 connections and reusable exclusive upload sessions for small files, streaming multipart uploads, concurrency controls, and shared upload/download speed caps.
+- Persistent B2 connections, reusable exclusive upload sessions for small files, resumable multipart uploads, parallel resumable downloads, separate upload/download concurrency, and shared speed caps.
+- Original Windows and custom folder icons are retained when personal folders are backed up. Standard Windows compatibility junctions inside Documents are skipped without following their targets.
 - Durable sync state, conflict copies, exact-set review of large deletion batches, version-preserving B2 deletion, empty-folder sync, and previous-version restore.
 - Visual exclusions: browse for files or folders, choose file types, match names, or assemble advanced path patterns from named parts. Rules can apply to all backups, one backup, or a specific folder, and can be edited, disabled, or removed.
 - Optional pause on metered connections or Battery Saver, sign-in startup, and Windows light/dark/system themes.
@@ -53,6 +54,12 @@ Choose whether a rule matches files, folders and their contents, or both, then c
 ## Data and recovery
 
 State lives in `%LOCALAPPDATA%\CloudBay\Client`: settings and prior copies, DPAPI-protected credentials, root-specific SQLite sync baselines, backup intent, activity history, and Recovery. Some atomic recovery copies live under the sync root's excluded `.cloudbay\Recovery`. These copies are retained for review; CloudBay does not delete them automatically.
+
+Uploads of **64 MiB or larger** use streaming multipart transfer. Confirmed B2 parts survive an interruption and app restart when the source is unchanged; smaller uploads are atomic and retry that file from its beginning. Download staging saves confirmed chunks under the excluded `.cloudbay\transfers` directory, verifies saved bytes before reuse, and verifies the completed file before installation. Native on-demand reads can resume from Windows' retained cache after provider restart. Before releasing clean cloud data to an app, CloudBay checks the assembled native cache, including the retained prefix, against the cloud version's whole-file checksum. A failed check gets one automatic fresh download; another failure stops the read. Unsent local edits are preserved. Foreign legacy versions without a whole-file checksum receive transport, identity, and length checks but cannot receive the same checksum guarantee.
+
+Open **Settings → Transfers and power → Transfer performance** to choose Intelligent, Maximum throughput, or Manual. Intelligent uses a bounded CPU/memory-aware budget; Manual exposes separate upload and download slots. Existing speed caps still apply. Hashing and verification have their own shared limits, so increasing network slots does not create the same number of disk-hashing workers. HTTP/TLS connections and upload sessions are reused across files; upload workers can start another file while earlier uploads are verified. Each B2 object still requires its own request, so tiny-file throughput depends on network latency as well as bandwidth. Live Activity and the tray show measured per-file and total upload/download speeds, with smoothing and idle expiry. Checkpoint bytes do not inflate rates, and verification shows its own phase before a native download enters completed history.
+
+Private unfinished download parts older than seven days are removed during periodic maintenance when unlocked. Managed unfinished uploads are cancelled when their source disappears or their checkpoint has been inactive for seven days. These scratch checkpoints are separate from Windows' downloaded-file cache and from retained Recovery copies.
 
 Deleting a synced file hides the current B2 name while retaining older versions. The bucket owner's B2 lifecycle policies determine how long those versions remain. Changes made on multiple computers are reconciled periodically; conflicting edits are preserved as separate files. CloudBay is a personal-folder backup/sync client, not a Windows disk image or a consistent snapshot of locked application/registry state.
 

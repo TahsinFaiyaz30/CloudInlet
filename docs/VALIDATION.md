@@ -1,8 +1,51 @@
-# CloudBay 2 unsigned local release validation
+# CloudBay validation record
 
-Acceptance was performed on 2026-10-03 and 2026-10-04 using Windows 11 Pro Insider Preview build 26340, x64, and .NET SDK 8.0.425. This is the unsigned local release requested by the owner. The previous migration helper remains on the local `legacy` branch at `03656fb`.
+## Current transfer milestone — 2026-10-04
 
-## Automated and native checks
+The transfer pipeline is committed as `de3ed4d`, source-folder appearance as `e645b11`, native cache validation as `431c855`, tracked controller completion as `4b18eae`, and live activity views as `1eef827`. The completed results below describe the integrated implementation. Each unsigned package is additionally gated on a fresh full Release build/test run; its archive, revision, runtime provenance, dependency notices, and checksum are audited separately.
+
+| Completed check | Result | Evidence |
+| --- | --- | --- |
+| Latest completed local full suite | **308/308 passed, zero skips** | `artifacts/validation/tests/transfers-release-integrated.trx` |
+| Native assembled-cache and Explorer subset of that complete suite | **39/39 passed** | Fully qualified test definitions containing `Native` in the same TRX |
+| Live B2 small-file sessions, listing, version operations, and native hydration/reconciliation | **10/10 passed** | `artifacts/validation/b2-4aca031bfea04fc8a21a5ec21a81886e.json` |
+| Live B2 upload/download interruption and fresh-process resume | **7/7 passed**, including isolated remote and local cleanup | `artifacts/validation/b2-0941dd6af5044a96807021dfb2f98c74.json` and `transfer-processes-0941dd6af5044a96807021dfb2f98c74.json` |
+| Live product controller, including verified native completion history | **16/16 passed** | `artifacts/validation/b2-767f6a9125b94d5e9990d7f5547c45b7.json` |
+| Latest mixed-state UI pass | **250 fresh captures**, Dark and Light completed, no failure marker | `artifacts/validation/speed-ui-final-run.json`, `artifacts/ui-smoke/complete*.txt`, `transfers-validation.txt`, and `tray-assertions.txt` |
+
+The earlier `handoff-speed-integrated.trx` result was 299/301, including two native failures. The completed 308-test run supersedes it after retained-prefix detection, bounded checksum recovery, and validated readiness were corrected. Native tests exercise real Windows range maps, interrupted provider restart, assembled corrupt-prefix rejection, one automatic recovery attempt, dirty-byte preservation, and missing legacy checksum metadata. A held validation gate proves cached but unacknowledged bytes are not reported available and no-recall icon reads reject them promptly; after ACK, the exact file and later local edits remain available. Three managed controller cases separately verify successful wire transfer, final rejection, and recovered-attempt cancellation without false history. Those cases remain included in the hosted CI filter.
+
+The live controller check holds the native verification gate, proves ordinary file I/O remains blocked and the live row stays in Verifying with no wire rate, then releases the gate and checks new completed history. Its earlier failed assertion counted legitimate history from setup; the corrected check establishes an idle baseline and compares only the new read.
+
+### Transfer and integrity coverage
+
+Upload requests share pooled HTTP connections and reusable exclusive B2 upload endpoints. Multiple files can transfer concurrently within the configured shared limits. Completed network uploads enter a bounded queue while separate workers perform independent B2 version/size/checksum verification and native marking. Each root buffers at most twice its upload worker count; additional producers wait instead of accumulating tasks. Verification workers are capped at eight, metadata verification shares an eight-request budget across roots, and disk hashing shares a one-to-two-worker budget. Tests hold verification open and prove later uploads advance, verify backpressure, cancel and drain both stages during pause, adopt acknowledged versions on resume, and preserve edits made during deferred verification or native marking. The local baseline records the verified snapshot so a later save remains a change.
+
+Files below the 64 MiB upload multipart threshold use a single B2 upload request. An interrupted request retries that entire file; it cannot resume inside that request. Files at or above the threshold use streamed multipart uploads with durable, version-bound journals. A fresh process checks server-acknowledged parts and their checksums before reusing them. Confirmed parts are retained across an interrupted transfer, while unsafe or mismatched state is rejected. Pooling and overlapping work remove repeated client-side connection setup and verification stalls; each B2 object still requires its own request and acknowledgment.
+
+Ordinary staged downloads use bounded parallel ranges for files larger than one 8 MiB chunk. Completed chunks are flushed before their checkpoint is committed, locally rehashed before reuse, and the assembled file is independently checked against its whole-file SHA1 before atomic installation. Very large files increase their chunk size to keep journals within 10,000 entries. A download of 8 MiB or less skips an immediately obsolete final checkpoint; interruption in the same process retries only the not-yet-written byte range, while a process restart before installation restarts that small staged file. Malformed JSON, a different immutable version, oversized journals or private staging files, null chunk entries/lists, and invalid chunk offsets restart only guarded private staging bytes. The original destination remains intact until a complete verified replacement is installed.
+
+The live resume acceptance used a generated **205 MiB** file and four separate worker processes. The interrupted upload retained acknowledged part 1; the new upload process listed the existing parts and sent only parts 2 and 3, without starting a replacement large file. The interrupted download retained its first durable 8 MiB chunk; the new download process made 25 remaining range requests, never requested offset zero, reached four concurrent downloads, and verified the final on-disk SHA1. The parent run completed in **235.09 seconds**. Reports retain safe operation counts and process IDs; credentials, headers, and upload URLs are excluded. These results cover the staged transfer path, not Windows' assembled native cache.
+
+Native hydration uses FULL plus ValidationRequired and resumes the missing tail without replaying the persisted prefix. Before acknowledging user I/O, CFAPI RETRIEVE_DATA streams the assembled zero-to-EOF cache through one separate validation worker and a pooled 64 KiB buffer. Its SHA1 must match the immutable B2 object before ACK_DATA. The separate gate avoids blocking a disk hash on a native read that needs the same gate. Corrupt clean bytes trigger a full native cache restart once; repeated failure rejects the cache and stops automatic retry. Locally modified ranges are preserved rather than compared against an older remote checksum or discarded. External multipart B2 objects without whole-file SHA1 metadata are explicitly treated as limited verification: authenticated HTTPS, immutable identity, range and length checks cannot independently prove their whole-file checksum.
+
+### Live activity, rates, and Windows folders
+
+The tray presents active per-file uploads/downloads before recent history, with individual progress and measured speeds, a complete queue count, and actions opening the full activity view. Rates are calculated from payload-byte deltas on a monotonic clock, smoothed across short writes, and expire after five seconds without payload. Restored bytes and retry rollback baselines do not invent network traffic. Directional rates continue across file handoffs while that direction transfers, and hashing, verification, queued, and paused phases do not show a wire rate. The one-second activity refresh updates rates without starting a new scan.
+
+The first transfer UI pass produced 242 captures. The later 250-capture pass supersedes it and covers both themes, mixed phases, narrow viewports, active rows before history, measured per-file and aggregate upload/download rates, hidden inactive rates, filtered queue endpoints intersecting the viewport, reused progress containers, and retained manual upload/download drafts when transfer modes change. Dark completed at `2026-10-04T05:31:17Z`, Light at `05:32:28Z`; all 250 PNG modification times fall between the recorded run start and overall completion. The completion files and assertion records establish success; the `speed-ui-*.json` files alone record process starts. Native compositor appearance still requires desktop review because XAML bitmap capture cannot reproduce Mica Alt.
+
+Documents copying recognizes Windows' protected compatibility junction signature: directory/reparse/hidden/system attributes, the mount-point tag, and a DACL denying Everyone directory-list access. Matching source junctions, including localized names, are skipped without traversing or changing their targets. Source fingerprints detect changes to skipped links. Ordinary links, linked roots/ancestors, and destination links remain rejected before writes. Tests cover `My Music`, `My Pictures`, `My Videos`, a localized name, incomplete signatures, changed targets, and destination collisions.
+
+Backup copies preserve the original `desktop.ini`, relative icon resources, and Shell customization attributes. The UI uses resident original icon resources through a bounded cache, with Windows Known Folder or stock icons as fallback. Icon probes inspect native metadata before opening file data, so refreshing a folder card does not recall online-only INI or icon content. The current full snapshot passes those appearance regressions; the earlier stock-icon and handle checks below are historical evidence for their own release generation.
+
+The existing owned Desktop, Pictures, Music, and Videos backup destinations were also repaired in place. All four received icon configuration without reconnecting the account or changing Windows folder mappings; see `artifacts/validation/owned-folder-icon-repair.json`.
+
+## Historical unsigned local release evidence — 2026-10-03 to 2026-10-04
+
+The earlier release acceptance was performed on 2026-10-03 and 2026-10-04 using Windows 11 Pro Insider Preview build 26340, x64, and .NET SDK 8.0.425. Those checks covered the unsigned local release requested by the owner. The previous migration helper remains on the local `legacy` branch at `03656fb`.
+
+### Automated and native checks
 
 The Release suite passed **202/202 tests, with zero skips** after scoped exclusion rules were introduced. The release script gates packaging on a complete Release solution build and the full MSTest suite, including actual Windows Cloud Files tests. Transport tests use deterministic HTTP responses to exercise reusable exclusive upload sessions, retries, authorization renewal, shared transfer caps, stalled sockets/responses, multipart ordering and cancellation, and acknowledgment recovery. Current-name pagination adds 26 cases covering malformed metadata, repeated or out-of-prefix cursors, duplicate names, restricted prefixes, nested directory markers, and interrupted snapshots preventing both local and remote deletion. Sync tests exercise persistent baselines, conflicts, deletion review, incomplete snapshots, concurrent saves, directory markers, path collisions, exclusions, and pause/quiescence. Preference tests verify concurrent field updates preserve account and backup ownership, queued updates snapshot caller collections, invalid or cancelled updates do not write, unchanged values do not rotate settings, isolated previews do not change Windows startup, and failed persistence restores the exact previous startup value and registry type.
 
@@ -12,7 +55,7 @@ Native tests register GUID-isolated roots in the current user's profile. They ve
 
 The local build and test output is available under `artifacts/validation/` and `artifacts/tests/`; the preference suite report is `artifacts/validation/tests/preferences-backend-release-final.trx`. Generated outputs and credentials are excluded from Git.
 
-## Live Backblaze B2 acceptance
+### Live Backblaze B2 acceptance
 
 A bucket-restricted application key was used only with generated `CloudBayValidation/<GUID>/` prefixes. The product controller acceptance covers connection, DPAPI settings, multiple native roots, B2 version retention, pin/free/hydration, timestamp-preserving edits, pause inherited by a newly added root, durable restart, custom-folder removal, safe full disconnect, and immediate retries after injected Windows unregister failures. It confirms the exact previous startup registration is restored and the real Windows personal-folder mappings are unchanged.
 
@@ -22,7 +65,7 @@ Use the [validation CLI](../tools/CloudBay.Validation/README.md) for reproducibl
 
 After the current-name listing change, the smaller native/B2 run passed **10/10 checks**. It includes real current-name pagination at three objects per page and verifies hidden names disappear from the current snapshot while their versions remain available. After the preference update change, fresh controller acceptance passed **15/15 checks**, including concurrent updates while paused: account and backup ownership, native registration IDs, and global pause remain intact, with no reconnect. `artifacts/validation/backend-release-summary.json` links the successful reports, separating them from retained reports of earlier failures.
 
-## UI and distribution
+### UI and distribution
 
 The final interface rendered **224 fresh captures**, including all five pages at window widths of 800, 1100, and 1300 pixels, seven sync states, both themes, focused Settings pages, expanded controls, changed Windows folder mappings, and dynamic tray heights. Fresh processes isolate each theme and completion is reported only after both pass. Bounds assertions, 180-entry activity scrolling, catalog filtering and availability, invalid numeric drafts, preservation of unsaved form values, and keyboard focus returning to the originating action passed. Narrow folder names remain complete at normal text size. Tray checks cover quiet states, long scrolling content, and action captions that stack when large text needs more width, keeping the footer reachable.
 
@@ -56,7 +99,7 @@ The tray frame correction passed fresh isolated Dark and Light tray captures. Na
 
 Live refresh now waits for a matching process/UTC readiness marker after successful tray registration and controller initialization. Network authorization may continue after shell readiness. An actual copied-output fault with the notification icon unavailable failed at icon registration, exited with sanitized diagnostics, and restored the prior ready preview with its selected page intact. This also exercised the race where a failing child exits during native process lookup. Evidence is in `artifacts/validation/live-startup-rollback.json`. Tray-only diagnostics use a separate output directory and cannot substitute for full UI acceptance.
 
-## Verified scope and remaining release requirements
+### Verified scope and remaining release requirements
 
 - All 12 supported Windows personal folders were queried through their real Known Folder IDs, default/current paths, and redirection policy capabilities. Their actual default locations were not changed during acceptance. Initial copy, collision preservation, source-change checks, and journal recovery are covered independently; real personal-folder enable/restore should be verified in a disposable Windows user profile before public distribution.
 - Acceptance used one Windows Insider build and x64. Windows 10, stable Windows 11 builds, other NTFS drives, and managed enterprise policies need a compatibility matrix before public distribution.
