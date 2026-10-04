@@ -162,12 +162,16 @@ public sealed partial class TrayWindow : Window
         var settings = DisplaySettings;
         var snapshot = DisplaySnapshot;
         TrayActivityHeading.Visibility = TrayActivitySection.Visibility = _viewModel.HasActivity ? Visibility.Visible : Visibility.Collapsed;
-        TrayViewActivity.Visibility = _viewModel.HasActivity ? Visibility.Visible : Visibility.Collapsed;
+        TrayViewActivity.Visibility = _viewModel.HasActivity || _viewModel.HasTransferSummary ? Visibility.Visible : Visibility.Collapsed;
         TrayBucket.Visibility = settings.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
-        TrayStatusDetail.Visibility = _viewModel.HasStatusDetail || snapshot.State == ClientState.NotConnected
+        TrayStatusDetail.Visibility = (_viewModel.HasStatusDetail && !_viewModel.HasTransferSummary) || snapshot.State == ClientState.NotConnected
             ? Visibility.Visible : Visibility.Collapsed;
         TrayLastSync.Visibility = _viewModel.HasLastSync ? Visibility.Visible : Visibility.Collapsed;
-        TrayTransferPanel.Visibility = _viewModel.IsProgressVisible ? Visibility.Visible : Visibility.Collapsed;
+        TrayTransferPanel.Visibility = _viewModel.IsProgressVisible && !_viewModel.HasTransfers ? Visibility.Visible : Visibility.Collapsed;
+        TrayLiveTransfers.Visibility = _viewModel.HasTransfers ? Visibility.Visible : Visibility.Collapsed;
+        TrayTransferSpeed.Visibility = _viewModel.HasTransferSpeed && _viewModel.HasTransfers ? Visibility.Visible : Visibility.Collapsed;
+        TrayQueueAction.Visibility = _viewModel.HasQueue ? Visibility.Visible : Visibility.Collapsed;
+        TrayAdditionalTransfers.Visibility = _viewModel.HasAdditionalTransfers ? Visibility.Visible : Visibility.Collapsed;
         TrayProgress.IsIndeterminate = snapshot.TransferTotalBytes <= 0;
         TrayProgressDetail.Visibility = string.IsNullOrEmpty(_viewModel.ProgressLabel) ? Visibility.Collapsed : Visibility.Visible;
         TrayPrimaryLabel.Text = snapshot.State == ClientState.Attention
@@ -382,6 +386,12 @@ public sealed partial class TrayWindow : Window
         App.MainWindow?.ShowActivity();
     }
 
+    private void ViewQueue_Click(object sender, RoutedEventArgs args)
+    {
+        AppWindow.Hide();
+        App.MainWindow?.ShowQueuedActivity();
+    }
+
     private void Quit_Click(object sender, RoutedEventArgs args)
     {
         if (_viewModel.Preview is not null) return;
@@ -431,6 +441,74 @@ public sealed partial class TrayWindow : Window
             if (TrayActivitySection.Visibility != Visibility.Collapsed || AppWindow.Size.Height >= historyHeight)
                 throw new InvalidOperationException("The tray must shrink when there is no activity to display.");
             await UiSmokeCapture.SaveAsync(TrayRoot, Path.Combine(outputDirectory, $"tray-quiet{suffix}.png"));
+
+            var live = ClientPreview.TransferQueue();
+            _viewModel.SetPreview(live with { Settings = live.Settings with { Theme = theme.ToString() } });
+            ShowAtTray();
+            await Task.Delay(220);
+            ResizeToContent();
+            TrayContentScroll.ChangeView(null, 0, null, true);
+            TrayRoot.UpdateLayout();
+            AssertTrayLayout(ClientState.Syncing, outputDirectory);
+            var livePosition = TrayLiveTransfers.TransformToVisual(TrayContentScroll).TransformPoint(new global::Windows.Foundation.Point());
+            var historyPosition = TrayActivityHeading.TransformToVisual(TrayContentScroll).TransformPoint(new global::Windows.Foundation.Point());
+            if (_viewModel.RecentTransfers.Count != 3 ||
+                !_viewModel.RecentTransfers.Any(row => row.Glyph == "\uE898") ||
+                !_viewModel.RecentTransfers.Any(row => row.Glyph == "\uE896") ||
+                livePosition.Y + TrayLiveTransfers.ActualHeight > historyPosition.Y || TrayQueueAction.Visibility != Visibility.Visible)
+                throw new InvalidOperationException("The tray must show live uploads and downloads above recent history and expose its queue action.");
+            var fileSpeedLabels = new List<TextBlock>();
+            CollectSpeedLabels(TrayTransferList, fileSpeedLabels);
+            if (TrayTransferSpeed.Visibility != Visibility.Visible ||
+                !TrayTransferSpeed.Text.Contains("MiB/s", StringComparison.Ordinal) ||
+                !TrayTransferSpeed.Text.Contains("KiB/s", StringComparison.Ordinal) ||
+                fileSpeedLabels.Count(label => label.Visibility == Visibility.Visible && label.ActualHeight > 0 &&
+                    label.Text.Length > 0) != 2 ||
+                ClientViewModel.FormatSpeed(512) != "512 B/s" || ClientViewModel.FormatSpeed(65536) != "64 KiB/s")
+                throw new InvalidOperationException("The tray must render measured per-file upload/download rates and aggregate directional rates using B/s, KiB/s or MiB/s.");
+            await UiSmokeCapture.SaveAsync(TrayRoot, Path.Combine(outputDirectory, $"tray-live-transfers{suffix}.png"));
+            foreach (var mixedState in new[] { ClientState.Attention, ClientState.Offline })
+            {
+                _viewModel.SetPreview(live with { Settings = live.Settings with { Theme = theme.ToString() },
+                    Snapshot = live.Snapshot with { State = mixedState, Message = "Another folder needs attention; these transfers continue." } });
+                ShowAtTray();
+                await Task.Delay(220);
+                ResizeToContent();
+                TrayRoot.UpdateLayout();
+                if (TrayTransferSpeed.Visibility != Visibility.Visible ||
+                    _viewModel.RecentTransfers.Count(row => row.SpeedVisibility == Visibility.Visible) != 2)
+                    throw new InvalidOperationException("The tray must retain live directional rates while another sync root needs attention or is offline.");
+                await UiSmokeCapture.SaveAsync(TrayRoot, Path.Combine(outputDirectory,
+                    $"tray-live-transfers-{mixedState.ToString().ToLowerInvariant()}{suffix}.png"));
+            }
+            _viewModel.SetPreview(live with { Settings = live.Settings with { Theme = theme.ToString() },
+                Snapshot = live.Snapshot with { State = ClientState.Paused } });
+            Refresh();
+            if (TrayTransferSpeed.Visibility != Visibility.Collapsed ||
+                _viewModel.RecentTransfers.Any(row => row.SpeedVisibility == Visibility.Visible))
+                throw new InvalidOperationException("Global pause must hide the tray's aggregate and per-file wire rates.");
+
+            var onlyQueued = live with
+            {
+                Activity = [],
+                Snapshot = live.Snapshot with
+                {
+                    ActiveTransfers = 0,
+                    Transfers = live.Snapshot.Transfers.Where(transfer => transfer.Phase == TransferPhase.Queued).ToArray()
+                }
+            };
+            _viewModel.SetPreview(onlyQueued with { Settings = onlyQueued.Settings with { Theme = theme.ToString() } });
+            ShowAtTray();
+            await Task.Delay(220);
+            ResizeToContent();
+            AssertTrayLayout(ClientState.Syncing, outputDirectory);
+            if (TrayActivitySection.Visibility != Visibility.Collapsed || TrayViewActivity.Visibility != Visibility.Visible ||
+                TrayQueueAction.Visibility != Visibility.Visible || TrayLiveTransfers.Visibility != Visibility.Collapsed ||
+                TrayTransferSpeed.Visibility != Visibility.Collapsed)
+                throw new InvalidOperationException("A queue without completed history must still offer Activity and a direct queue action.");
+            await UiSmokeCapture.SaveAsync(TrayRoot, Path.Combine(outputDirectory, $"tray-queue-only{suffix}.png"));
+            await File.AppendAllTextAsync(Path.Combine(outputDirectory, "tray-assertions.txt"),
+                $"PASS: transfers{suffix} places live upload/download rows and measured per-file/aggregate rates above history, hides inactive rates, caps visible live rows at three, keeps the complete queue count, and exposes queue/activity actions without history.{Environment.NewLine}");
 
             var bounded = ClientPreview.ForState(ClientState.Attention);
             _viewModel.SetPreview(bounded with
@@ -530,11 +608,15 @@ public sealed partial class TrayWindow : Window
             }
         }
         var hasHistory = _viewModel.HasActivity;
-        var hasProgress = state is ClientState.Syncing or ClientState.Connecting;
+        var hasProgress = (state is ClientState.Syncing or ClientState.Connecting) && !_viewModel.HasTransfers;
+        var hasActivityAction = hasHistory || _viewModel.HasTransferSummary;
         if ((TrayActivitySection.Visibility == Visibility.Visible) != hasHistory ||
             (TrayActivityHeading.Visibility == Visibility.Visible) != hasHistory ||
-            (TrayViewActivity.Visibility == Visibility.Visible) != hasHistory ||
+            (TrayViewActivity.Visibility == Visibility.Visible) != hasActivityAction ||
             (TrayTransferPanel.Visibility == Visibility.Visible) != hasProgress ||
+            (TrayLiveTransfers.Visibility == Visibility.Visible) != _viewModel.HasTransfers ||
+            (TrayQueueAction.Visibility == Visibility.Visible) != _viewModel.HasQueue ||
+            _viewModel.RecentTransfers.Count > 3 ||
             (ResumeMenu.Visibility == Visibility.Visible) != (state == ClientState.Paused))
             throw new InvalidOperationException($"The {state} tray contains an irrelevant section or omits a relevant action.");
         if (state == ClientState.Attention && TrayPrimaryLabel.Text != "Review changes")
@@ -543,7 +625,7 @@ public sealed partial class TrayWindow : Window
             Math.Abs(QuickSettingsIcon.ActualHeight - 20) > 0.5 ||
             QuickSettingsButton.ActualWidth < 40 || QuickSettingsButton.ActualHeight < 40)
             throw new InvalidOperationException("The settings animation must stay within a 20 px icon and a 40 px button.");
-        if (!hasHistory && Math.Abs(TrayOpenFolder.ActualWidth - (TrayRoot.ActualWidth - TrayFooter.Padding.Left - TrayFooter.Padding.Right)) > 1)
+        if (!hasActivityAction && Math.Abs(TrayOpenFolder.ActualWidth - (TrayRoot.ActualWidth - TrayFooter.Padding.Left - TrayFooter.Padding.Right)) > 1)
             throw new InvalidOperationException("A quiet tray's primary action must fill its footer without a gap for the hidden action.");
         if (hasHistory && TrayContentScroll.ScrollableHeight <= 0.5 &&
             TrayActivitySection.ContainerFromIndex(_viewModel.RecentActivity.Count - 1) is FrameworkElement lastEntry)
@@ -562,6 +644,16 @@ public sealed partial class TrayWindow : Window
             var origin = button.TransformToVisual(TrayRoot).TransformPoint(new global::Windows.Foundation.Point(0, 0));
             if (button.ActualHeight < 48 || origin.Y < 0 || origin.Y + button.ActualHeight > TrayRoot.ActualHeight + 1)
                 throw new InvalidOperationException("Tray footer actions must retain their target size and remain inside the window.");
+        }
+    }
+
+    private static void CollectSpeedLabels(DependencyObject parent, List<TextBlock> labels)
+    {
+        for (var index = 0; index < Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(parent); index++)
+        {
+            var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(parent, index);
+            if (child is TextBlock { Name: "TrayFileSpeed" } label) labels.Add(label);
+            CollectSpeedLabels(child, labels);
         }
     }
 

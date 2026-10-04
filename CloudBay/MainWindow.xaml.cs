@@ -49,6 +49,7 @@ public sealed partial class MainWindow : Window
     private bool _loadingPreferences;
     private bool _closed;
     private int _refreshPending;
+    private int _activityViewRevision;
     private AppSettings? _loadedSettings;
     private string _versionPath = "";
     private bool? _compactLayout;
@@ -175,6 +176,14 @@ public sealed partial class MainWindow : Window
 
     public void ShowActivity()
     {
+        ActivityFilterBox.SelectedIndex = 0;
+        RequestNavigationRoute("activity");
+        ShowWindow();
+    }
+
+    public void ShowQueuedActivity()
+    {
+        ActivityFilterBox.SelectedItem = ActivityFilterBox.Items.Cast<ComboBoxItem>().First(item => (string)item.Tag == "Queue");
         RequestNavigationRoute("activity");
         ShowWindow();
     }
@@ -320,7 +329,8 @@ public sealed partial class MainWindow : Window
         WelcomePanel.Visibility = FilesConnectPanel.Visibility = settings.IsConfigured ? Visibility.Collapsed : Visibility.Visible;
         ConnectedOverview.Visibility = FilesConnectedPanel.Visibility = settings.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
         RecentActivitySection.Visibility = settings.IsConfigured && _viewModel.HasActivity ? Visibility.Visible : Visibility.Collapsed;
-        ActivityEmpty.Visibility = _viewModel.HasActivity ? Visibility.Collapsed : Visibility.Visible;
+        ActivityEmpty.Visibility = _viewModel.HasActivityRows ? Visibility.Collapsed : Visibility.Visible;
+        ActivityQueueCoverage.Visibility = _viewModel.HasQueueCoverage ? Visibility.Visible : Visibility.Collapsed;
         OverviewStatusDetail.Visibility = _viewModel.HasStatusDetail ? Visibility.Visible : Visibility.Collapsed;
         OverviewLastSync.Visibility = _viewModel.HasLastSync ? Visibility.Visible : Visibility.Collapsed;
         UpdatePageHeader();
@@ -405,7 +415,8 @@ public sealed partial class MainWindow : Window
         SettingsBackButton.Visibility = SettingsContextLabel.Visibility = settingsDetail ? Visibility.Visible : Visibility.Collapsed;
         PageDescription.Text = _currentPage == "backup" ? "Keep your Windows folders backed up and available in File Explorer." : "";
         PageDescription.Visibility = PageDescription.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-        ActivityPending.Visibility = _currentPage == "activity" && _viewModel.HasPending ? Visibility.Visible : Visibility.Collapsed;
+        ActivityPending.Visibility = _currentPage == "activity" && _viewModel.HasTransferSummary ? Visibility.Visible : Visibility.Collapsed;
+        ActivityTransferSpeed.Visibility = _currentPage == "activity" && _viewModel.HasTransferSpeed && _viewModel.HasTransfers ? Visibility.Visible : Visibility.Collapsed;
         StorageSummary.Visibility = _currentPage == "files" && _viewModel.HasStorageSummary ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -435,6 +446,9 @@ public sealed partial class MainWindow : Window
             if (reloadPreferences || previous is null || NumberTextMatches(UploadLimitBox, previous.UploadBytesPerSecond / 1024d)) UploadLimitBox.Value = settings.UploadBytesPerSecond / 1024d;
             if (reloadPreferences || previous is null || NumberTextMatches(DownloadLimitBox, previous.DownloadBytesPerSecond / 1024d)) DownloadLimitBox.Value = settings.DownloadBytesPerSecond / 1024d;
             if (reloadPreferences || previous is null || NumberTextMatches(ConcurrencyBox, previous.UploadConcurrency)) ConcurrencyBox.Value = settings.UploadConcurrency;
+            if (reloadPreferences || previous is null || NumberTextMatches(DownloadConcurrencyBox, previous.DownloadConcurrency)) DownloadConcurrencyBox.Value = settings.DownloadConcurrency;
+            if (reloadPreferences || previous is null || SelectedUploadMode == previous.UploadMode)
+                UploadModeBox.SelectedItem = UploadModeBox.Items.Cast<ComboBoxItem>().First(item => (string)item.Tag == settings.UploadMode.ToString());
             if (reloadPreferences || previous is null || MeteredBox.IsOn == previous.PauseOnMetered) MeteredBox.IsOn = settings.PauseOnMetered;
             if (reloadPreferences || previous is null || BatterySaverBox.IsOn == previous.PauseOnBatterySaver) BatterySaverBox.IsOn = settings.PauseOnBatterySaver;
             if (reloadPreferences || previous is null || StartAtSignInBox.IsOn == previous.StartAtSignIn) StartAtSignInBox.IsOn = settings.StartAtSignIn;
@@ -527,7 +541,7 @@ public sealed partial class MainWindow : Window
             var toggle = new ToggleSwitch { Tag = name, OnContent = "", OffContent = "", Width = 44, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudBayToggleStyle"] };
             AutomationProperties.SetName(toggle, $"Back up {name}");
             toggle.Toggled += Backup_Toggled;
-            var folderIcon = FolderIconProvider.GetIcon(name, IconPixels(40));
+            var folderIcon = GetKnownFolderVisual(name, IconPixels(40));
             var card = new SettingsCard
             {
                 Header = new TextBlock { Text = name, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["BodyStrongTextBlockStyle"], TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis },
@@ -612,6 +626,8 @@ public sealed partial class MainWindow : Window
                 var tooltip = currentPath + (notice is not null ? Environment.NewLine + notice : "");
                 ToolTipService.SetToolTip(card, tooltip);
                 AutomationProperties.SetHelpText(toggle, tooltip);
+                if (GetKnownFolderVisual(name, IconPixels(40)) is { } folderIcon)
+                    card.HeaderIcon = new ImageIcon { Source = folderIcon, Width = 40, Height = 40 };
             }
         }
         finally { _refreshingBackups = false; }
@@ -649,8 +665,9 @@ public sealed partial class MainWindow : Window
             CustomBackupRows.Children.Add(new SettingsCard
             {
                 Header = new TextBlock { Text = folder.Name, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["BodyStrongTextBlockStyle"] },
-                HeaderIcon = FolderIconProvider.GetCustomFolderIcon(IconPixels(40)) is { } folderIcon
+                HeaderIcon = GetFolderVisual(folder.SourcePath, IconPixels(40)) is { } folderIcon
                     ? new ImageIcon { Source = folderIcon, Width = 40, Height = 40 } : new FontIcon { Glyph = "\uE8B7" },
+                Tag = folder.SourcePath,
                 Content = actions,
                 MinHeight = 112,
                 Padding = new Thickness(20)
@@ -675,7 +692,8 @@ public sealed partial class MainWindow : Window
         foreach (var folder in folders)
         {
             var contents = new StackPanel { Spacing = 8, HorizontalAlignment = HorizontalAlignment.Center };
-            var source = folder.Custom ? FolderIconProvider.GetCustomFolderIcon(IconPixels(40)) : FolderIconProvider.GetIcon(folder.Name, IconPixels(40));
+            var customSource = settings.CustomBackups.FirstOrDefault(item => item.Name == folder.Name)?.SourcePath;
+            var source = folder.Custom ? GetFolderVisual(customSource, IconPixels(40)) : GetKnownFolderVisual(folder.Name, IconPixels(40));
             contents.Children.Add(source is not null ? new Image { Source = source, Width = 40, Height = 40 } : new FontIcon { Glyph = "\uE8B7", FontSize = 32 });
             contents.Children.Add(new TextBlock { Text = folder.Name, TextTrimming = TextTrimming.CharacterEllipsis, HorizontalAlignment = HorizontalAlignment.Center });
             var button = new Button
@@ -728,18 +746,35 @@ public sealed partial class MainWindow : Window
 
     private int IconPixels(double logicalSize) => Math.Clamp((int)Math.Ceiling(logicalSize * GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this)) / 96d), 16, 128);
 
+    private ImageSource? GetFolderVisual(string? path, int pixels, string? knownFolderName = null)
+    {
+        // Presentation fixtures never inspect real user folder metadata.
+        if (_viewModel.Preview is not null || string.IsNullOrWhiteSpace(path))
+            return knownFolderName is null ? FolderIconProvider.GetCustomFolderIcon(pixels) : FolderIconProvider.GetIcon(knownFolderName, pixels);
+        return FolderIconProvider.GetFolderIcon(path, pixels, knownFolderName);
+    }
+
+    private ImageSource? GetKnownFolderVisual(string name, int pixels)
+    {
+        var backup = DisplaySettings.Backups.FirstOrDefault(item => item.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        var path = backup is not null && Directory.Exists(backup.OriginalPath) ? backup.OriginalPath
+            : _backupMetadataPaths.GetValueOrDefault(name) ?? backup?.DestinationPath;
+        return GetFolderVisual(path, pixels, name);
+    }
+
     private void RefreshFolderIconSources()
     {
         var pixels = IconPixels(40);
         if (_folderIconPixels == pixels) return;
         _folderIconPixels = pixels;
         foreach (var (name, card) in _backupCards)
-            if (FolderIconProvider.GetIcon(name, pixels) is { } source) card.HeaderIcon = new ImageIcon { Source = source, Width = 40, Height = 40 };
+            if (GetKnownFolderVisual(name, pixels) is { } source) card.HeaderIcon = new ImageIcon { Source = source, Width = 40, Height = 40 };
         foreach (var card in CustomBackupRows.Children.OfType<SettingsCard>())
-            if (FolderIconProvider.GetCustomFolderIcon(pixels) is { } source) card.HeaderIcon = new ImageIcon { Source = source, Width = 40, Height = 40 };
+            if (GetFolderVisual(card.Tag as string, pixels) is { } source) card.HeaderIcon = new ImageIcon { Source = source, Width = 40, Height = 40 };
         foreach (var button in ProtectedFolderRows.Children.OfType<Button>())
             if (button.Tag is ProtectedFolderLink folder && button.Content is StackPanel panel && panel.Children[0] is Image image)
-                image.Source = folder.Custom ? FolderIconProvider.GetCustomFolderIcon(pixels) : FolderIconProvider.GetIcon(folder.Name, pixels);
+                image.Source = folder.Custom ? GetFolderVisual(DisplaySettings.CustomBackups.FirstOrDefault(item => item.Name == folder.Name)?.SourcePath, pixels)
+                    : GetKnownFolderVisual(folder.Name, pixels);
         UpdateFileScopeLabels();
     }
 
@@ -807,7 +842,8 @@ public sealed partial class MainWindow : Window
         if (FileScopeBox.SelectedItem is not SyncFolderItem scope) return;
         FileFolderName.Text = scope.BackupName is null ? "CloudBay folder" : scope.Name;
         FileFolderPath.Text = scope.RootPath;
-        FileLocationCard.HeaderIcon = FolderIconProvider.GetCustomFolderIcon(IconPixels(48)) is { } folderIcon
+        var knownFolderName = DisplaySettings.Backups.FirstOrDefault(folder => SameFolderPath(folder.DestinationPath, scope.RootPath))?.Name;
+        FileLocationCard.HeaderIcon = GetFolderVisual(scope.RootPath, IconPixels(48), knownFolderName) is { } folderIcon
             ? new ImageIcon { Source = folderIcon, Width = 48, Height = 48 } : new FontIcon { Glyph = "\uE8B7", FontSize = 40 };
     }
 
@@ -918,19 +954,55 @@ public sealed partial class MainWindow : Window
         finally { _loadingPreferences = false; }
     }
 
+    private UploadMode SelectedUploadMode => Enum.TryParse<UploadMode>((UploadModeBox.SelectedItem as ComboBoxItem)?.Tag as string, out var mode) ? mode : UploadMode.Intelligent;
+
+    private void UploadMode_SelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (ManualConcurrencyCard is null || ManualDownloadConcurrencyCard is null || UploadPerformanceCard is null) return;
+        var mode = SelectedUploadMode;
+        ManualConcurrencyCard.Visibility = ManualDownloadConcurrencyCard.Visibility = mode == UploadMode.Manual ? Visibility.Visible : Visibility.Collapsed;
+        UploadPerformanceCard.Description = mode switch
+        {
+            UploadMode.MaximumThroughput => "Prioritizes speed with more parallel transfers. Can use more network, CPU and disk resources.",
+            UploadMode.Manual => "Choose separate limits for simultaneous upload requests and downloads.",
+            _ => "Balances parallel transfers with available system resources."
+        };
+    }
+
+    private void ActivityFilter_SelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (_viewModel is null || ActivityEmpty is null) return;
+        _viewModel.SetActivityFilter((ActivityFilterBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "All");
+        ActivityEmpty.Visibility = _viewModel.HasActivityRows ? Visibility.Collapsed : Visibility.Visible;
+        ActivityQueueCoverage.Visibility = _viewModel.HasQueueCoverage ? Visibility.Visible : Visibility.Collapsed;
+        var revision = ++_activityViewRevision;
+        DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
+        {
+            if (_closed || revision != _activityViewRevision || _viewModel.ActivityRows.Count == 0) return;
+            ActivityList.UpdateLayout();
+            ActivityList.ScrollIntoView(_viewModel.ActivityRows[0], ScrollIntoViewAlignment.Leading);
+            FindDescendant<ScrollViewer>(ActivityList)?.ChangeView(null, 0, null, true);
+        });
+    }
+
     private async void ApplyNetwork_Click(object sender, RoutedEventArgs args) =>
-        await RunAsync("Applying bandwidth limits…", async () =>
+        await RunAsync("Applying transfer settings…", async () =>
         {
             var upload = ReadWholeNumber(UploadLimitBox, "Upload limit", 0, 1048576);
             var download = ReadWholeNumber(DownloadLimitBox, "Download limit", 0, 1048576);
-            var concurrency = ReadWholeNumber(ConcurrencyBox, "Concurrent uploads", 1, 16);
+            var concurrency = SelectedUploadMode == UploadMode.Manual
+                ? ReadWholeNumber(ConcurrencyBox, "Upload slots", 1, 16) : DisplaySettings.UploadConcurrency;
+            var downloadConcurrency = SelectedUploadMode == UploadMode.Manual
+                ? ReadWholeNumber(DownloadConcurrencyBox, "Download slots", 1, 16) : DisplaySettings.DownloadConcurrency;
             await _controller.UpdatePreferencesAsync(new()
             {
                 UploadBytesPerSecond = upload * 1024L,
                 DownloadBytesPerSecond = download * 1024L,
-                UploadConcurrency = concurrency
+                UploadMode = SelectedUploadMode,
+                UploadConcurrency = concurrency,
+                DownloadConcurrency = downloadConcurrency
             });
-        }, "Bandwidth limits are applied.");
+        }, "Transfer settings are applied.");
 
     private async void Disconnect_Click(object sender, RoutedEventArgs args)
     {
@@ -1330,6 +1402,7 @@ public sealed partial class MainWindow : Window
             await File.WriteAllTextAsync(Path.Combine(outputDirectory, "layout.txt"), "");
             await File.WriteAllTextAsync(Path.Combine(outputDirectory, "capture-metrics.txt"), "");
             await File.WriteAllTextAsync(Path.Combine(outputDirectory, "exclusions-validation.txt"), "");
+            await File.WriteAllTextAsync(Path.Combine(outputDirectory, "transfers-validation.txt"), "");
         }
         ShowWindow();
         await InitialNavigationReady.WaitAsync(TimeSpan.FromSeconds(3));
@@ -1430,6 +1503,107 @@ public sealed partial class MainWindow : Window
         foreach (var theme in themes)
         {
             var suffix = theme == ElementTheme.Light ? "-light" : "";
+            AppWindow.Resize(new SizeInt32(1100, 840));
+            var transferPreview = ClientPreview.TransferQueue();
+            SetPresentation(transferPreview, theme);
+            ActivityFilterBox.SelectedIndex = 0;
+            if (_viewModel.ActiveTransfers.Count != 3 || _viewModel.QueuedTransfers.Count != 253 ||
+                _viewModel.RecentTransfers.Count != 3 || !_viewModel.QueueCoverage.Contains("360", StringComparison.Ordinal) ||
+                _viewModel.ActivityRows.Take(3).Any(row => row is not TransferItem))
+                throw new InvalidOperationException("Active uploads and downloads must precede queued files and history, with an honest bounded-queue count.");
+            var retainedTransferRow = _viewModel.ActiveTransfers[0];
+            var progressedTransfers = transferPreview.Snapshot.Transfers.Select((transfer, index) =>
+                index == 0 ? transfer with { Bytes = transfer.Bytes + 1048576 } : transfer).ToArray();
+            SetPresentation(transferPreview with { Snapshot = transferPreview.Snapshot with { Transfers = progressedTransfers } }, theme);
+            if (!ReferenceEquals(retainedTransferRow, _viewModel.ActiveTransfers[0]))
+                throw new InvalidOperationException("A progress refresh must update its existing row rather than rebuild the transfer list.");
+            ActivityFilterBox.SelectedIndex = 1;
+            if (_viewModel.ActivityRows.Count != 3 || _viewModel.ActivityRows.Any(row => row is not TransferItem))
+                throw new InvalidOperationException("The In progress filter must show only live uploads and downloads.");
+            await CapturePageAsync("activity", $"activity-transferring{suffix}");
+            AssertVisibleActivityRow(_viewModel.ActiveTransfers[0]);
+            if (ActivityTransferSpeed.Visibility != Visibility.Visible ||
+                !ActivityTransferSpeed.Text.Contains("MiB/s", StringComparison.Ordinal) ||
+                !ActivityTransferSpeed.Text.Contains("KiB/s", StringComparison.Ordinal) ||
+                FindDescendant<TextBlock>((DependencyObject)ActivityList.ContainerFromItem(_viewModel.ActiveTransfers[0]),
+                    label => label.Name == "ActivityFileSpeed") is not { ActualHeight: > 0, Visibility: Visibility.Visible } uploadSpeed ||
+                uploadSpeed.Text != _viewModel.ActiveTransfers[0].SpeedText ||
+                FindDescendant<TextBlock>((DependencyObject)ActivityList.ContainerFromItem(_viewModel.ActiveTransfers[1]),
+                    label => label.Name == "ActivityFileSpeed") is not { ActualHeight: > 0, Visibility: Visibility.Visible } downloadSpeed ||
+                downloadSpeed.Text != _viewModel.ActiveTransfers[1].SpeedText)
+                throw new InvalidOperationException("Activity must render measured upload and download speed for each transferring file and their aggregate directions.");
+            foreach (var mixedState in new[] { ClientState.Attention, ClientState.Offline })
+            {
+                SetPresentation(transferPreview with { Snapshot = transferPreview.Snapshot with
+                {
+                    State = mixedState,
+                    Message = "Another sync folder needs attention while these files continue transferring."
+                } }, theme);
+                await CapturePageAsync("activity", $"activity-transferring-{mixedState.ToString().ToLowerInvariant()}{suffix}");
+                if (ActivityTransferSpeed.Visibility != Visibility.Visible ||
+                    _viewModel.ActiveTransfers.Count(row => row.SpeedVisibility == Visibility.Visible) != 2)
+                    throw new InvalidOperationException("A root needing attention or waiting for a connection must not hide another root's measured live transfer rates.");
+            }
+            SetPresentation(transferPreview with { Snapshot = transferPreview.Snapshot with { State = ClientState.Paused } }, theme);
+            if (ActivityTransferSpeed.Visibility != Visibility.Collapsed ||
+                _viewModel.ActiveTransfers.Any(row => row.SpeedVisibility == Visibility.Visible))
+                throw new InvalidOperationException("Global pause must suppress both aggregate and per-file wire rates even if a native request still retains its transfer phase.");
+            SetPresentation(transferPreview, theme);
+            ActivityFilterBox.SelectedIndex = 2;
+            if (_viewModel.ActivityRows.Count != 253 || ActivityQueueCoverage.Visibility != Visibility.Visible)
+                throw new InvalidOperationException("The queue filter must show queued files and disclose its complete queue count.");
+            await CapturePageAsync("activity", $"activity-queue{suffix}");
+            AssertVisibleActivityRow(_viewModel.QueuedTransfers[0]);
+            if (_viewModel.QueuedTransfers.Any(row => row.SpeedVisibility != Visibility.Collapsed))
+                throw new InvalidOperationException("Queued files must not display transfer speeds.");
+            ActivityList.ScrollIntoView(_viewModel.QueuedTransfers[^1]);
+            await Task.Delay(250);
+            var queueScroller = FindDescendant<ScrollViewer>(ActivityList);
+            if (queueScroller is null || queueScroller.ScrollableHeight <= 0 || queueScroller.VerticalOffset <= 0)
+                throw new InvalidOperationException("The virtualized queue must allow its final displayed item to be reached.");
+            AssertVisibleActivityRow(_viewModel.QueuedTransfers[^1]);
+            await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"activity-queue-bottom{suffix}.png"));
+            ActivityFilterBox.SelectedIndex = 3;
+            if (_viewModel.ActivityRows.Count != transferPreview.Activity.Count || _viewModel.ActivityRows.Any(row => row is TransferItem))
+                throw new InvalidOperationException("History must remain separate from in-progress and queued transfers.");
+            await CapturePageAsync("activity", $"activity-history-filter{suffix}");
+            var pausedPreview = transferPreview with { Snapshot = transferPreview.Snapshot with
+            {
+                State = ClientState.Paused, ActiveTransfers = 0, QueuedTransfers = 363,
+                Transfers = transferPreview.Snapshot.Transfers.Select(transfer => transfer with { Phase = TransferPhase.Paused }).ToArray()
+            } };
+            SetPresentation(pausedPreview, theme);
+            ActivityFilterBox.SelectedIndex = 1;
+            if (_viewModel.HasTransfers || _viewModel.ActiveTransfers.Count != 0 || _viewModel.ActivityRows.Count != 0)
+                throw new InvalidOperationException("Paused files must remain pending without appearing to be actively transferring.");
+            ActivityFilterBox.SelectedIndex = 2;
+            if (_viewModel.QueuedTransfers.Count != 256 || !_viewModel.QueueCoverage.Contains("363", StringComparison.Ordinal))
+                throw new InvalidOperationException("Paused files must retain their pending status and honest queue count.");
+            await CapturePageAsync("activity", $"activity-paused{suffix}");
+            if (ActivityTransferSpeed.Visibility != Visibility.Collapsed ||
+                _viewModel.QueuedTransfers.Any(row => row.SpeedVisibility != Visibility.Collapsed))
+                throw new InvalidOperationException("Paused files and the paused Activity header must not display stale transfer speeds.");
+            SetPresentation(transferPreview, theme);
+            ActivityFilterBox.SelectedIndex = 0;
+            OpenSettingsRoute("network");
+            UploadModeBox.SelectedIndex = 2;
+            ConcurrencyBox.Value = 7;
+            DownloadConcurrencyBox.Value = 3;
+            _viewModel.SetPreview(transferPreview with { Settings = transferPreview.Settings with { Theme = theme.ToString(), PauseOnMetered = false } });
+            LoadSettings(reloadAccount: true, reloadPreferences: false);
+            Refresh();
+            if (SelectedUploadMode != UploadMode.Manual || ManualConcurrencyCard.Visibility != Visibility.Visible ||
+                ManualDownloadConcurrencyCard.Visibility != Visibility.Visible || ConcurrencyBox.Value != 7 || DownloadConcurrencyBox.Value != 3)
+                throw new InvalidOperationException("A background refresh must retain manual transfer mode and both concurrency drafts.");
+            await CapturePageAsync("settings", $"settings-transfers-manual{suffix}", "network");
+            UploadModeBox.SelectedIndex = 1;
+            if (ManualConcurrencyCard.Visibility != Visibility.Collapsed || ManualDownloadConcurrencyCard.Visibility != Visibility.Collapsed)
+                throw new InvalidOperationException("Automatic transfer modes must hide irrelevant manual controls.");
+            await CapturePageAsync("settings", $"settings-transfers-maximum{suffix}", "network");
+            UploadModeBox.SelectedIndex = 0;
+            LoadSettings(reloadPreferences: true);
+            await File.AppendAllTextAsync(Path.Combine(outputDirectory, "transfers-validation.txt"),
+                $"PASS: {theme} rendered live upload/download rows precede history, measured per-file and aggregate directional speeds are visible, queued/paused rates are hidden, filtered queue first/last filenames intersect the viewport, progress reuses containers, and transfer mode preserves both manual drafts.{Environment.NewLine}");
             foreach (var width in new[] { 1300, 1100, 800 })
             {
                 AppWindow.Resize(new SizeInt32(width, 840));
@@ -1691,6 +1865,8 @@ public sealed partial class MainWindow : Window
                 var position = ActivityPage.TransformToVisual(RootGrid).TransformPoint(new global::Windows.Foundation.Point());
                 if (position.X < -1 || position.X + ActivityPage.ActualWidth > RootGrid.ActualWidth + 1)
                     throw new InvalidOperationException("The activity page extends beyond its visible area.");
+                if (_viewModel.ActivityRows.Count > 0 && !_viewModel.ActivityRows.Any(IsActivityRowVisible))
+                    throw new InvalidOperationException("A nonempty Activity view must render at least one actual filename inside its viewport.");
             }
             await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"{fileName}.png"));
         }
@@ -1705,6 +1881,24 @@ public sealed partial class MainWindow : Window
             if (FindDescendant<T>(child, predicate) is { } descendant) return descendant;
         }
         return null;
+    }
+
+    private bool IsActivityRowVisible(object row)
+    {
+        if (ActivityList.ContainerFromItem(row) is not FrameworkElement { IsLoaded: true, ActualWidth: > 0, ActualHeight: > 0 } container ||
+            FindDescendant<TextBlock>(container, label => label.Name == "ActivityFileName") is not
+                { ActualWidth: > 0, ActualHeight: > 0, Visibility: Visibility.Visible } fileName) return false;
+        var expected = row switch { TransferItem transfer => transfer.FileName, ActivityItem history => history.FileName, _ => "" };
+        if (expected.Length == 0 || fileName.Text != expected) return false;
+        var position = fileName.TransformToVisual(ActivityList).TransformPoint(new global::Windows.Foundation.Point());
+        return position.X < ActivityList.ActualWidth && position.X + fileName.ActualWidth > 0 &&
+            position.Y < ActivityList.ActualHeight && position.Y + fileName.ActualHeight > 0;
+    }
+
+    private void AssertVisibleActivityRow(object row)
+    {
+        if (!IsActivityRowVisible(row))
+            throw new InvalidOperationException($"The Activity row '{row}' must render its filename inside the visible list viewport.");
     }
 
     private static void ArrangeTiles(Grid grid, int columns)

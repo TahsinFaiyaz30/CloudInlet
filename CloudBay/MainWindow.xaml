@@ -8,6 +8,34 @@
         <MicaBackdrop Kind="BaseAlt" />
     </Window.SystemBackdrop>
     <Grid x:Name="RootGrid" Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}">
+        <Grid.Resources>
+            <DataTemplate x:Key="TransferActivityRowTemplate">
+                <Border Style="{StaticResource CloudBaySurfaceStyle}" Padding="20,16">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <FontIcon Glyph="{Binding Glyph}" FontSize="20" VerticalAlignment="Top" Margin="0,2,0,0"
+                                  Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <StackPanel Grid.Column="1" Spacing="6">
+                            <TextBlock x:Name="ActivityFileName" Text="{Binding FileName}" Style="{StaticResource BodyStrongTextBlockStyle}"
+                                       TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Location}" />
+                            <TextBlock Text="{Binding Location}" Style="{StaticResource CloudBaySecondaryTextStyle}"
+                                       TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" ToolTipService.ToolTip="{Binding Location}" />
+                            <TextBlock Text="{Binding Summary}" Style="{StaticResource CloudBaySecondaryTextStyle}"
+                                       ToolTipService.ToolTip="{Binding TimeFullText}" />
+                            <TextBlock x:Name="ActivityFileSpeed" Text="{Binding SpeedText}" Visibility="{Binding SpeedVisibility}"
+                                       Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                            <ProgressBar Value="{Binding Progress}" Maximum="100" IsIndeterminate="{Binding IsIndeterminate}"
+                                         Visibility="{Binding ProgressVisibility}" AutomationProperties.Name="{Binding ProgressAccessibleName}" />
+                            <TextBlock Text="{Binding Detail}" Visibility="{Binding DetailVisibility}"
+                                       Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+            </DataTemplate>
+        </Grid.Resources>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -87,7 +115,7 @@
                             Visibility="Collapsed" />
                         <TextBlock
                             x:Name="ActivityPending"
-                            Text="{Binding PendingLabel}"
+                            Text="{Binding TransferSummary}"
                             Style="{StaticResource CloudBaySecondaryTextStyle}"
                             Visibility="Collapsed" />
                         <TextBlock
@@ -95,6 +123,9 @@
                             Text="{Binding StorageSummary}"
                             Style="{StaticResource CloudBaySecondaryTextStyle}"
                             Visibility="Collapsed" />
+                        <TextBlock x:Name="ActivityTransferSpeed" Text="{Binding TransferSpeedSummary}"
+                                   Style="{StaticResource CloudBaySecondaryTextStyle}" Visibility="Collapsed"
+                                   AutomationProperties.Name="Measured transfer speed" />
                     </StackPanel>
                 </Grid>
                 <InfoBar
@@ -316,16 +347,33 @@
                         MaxWidth="1120"
                         HorizontalAlignment="Center"
                         Padding="{StaticResource CloudBayPageInset}">
-                        <Grid>
+                        <Grid RowSpacing="16">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <StackPanel Spacing="12">
+                                <ComboBox x:Name="ActivityFilterBox" Width="200" HorizontalAlignment="Left" SelectedIndex="0"
+                                          AutomationProperties.Name="Activity filter" SelectionChanged="ActivityFilter_SelectionChanged">
+                                    <ComboBoxItem Content="All activity" Tag="All" />
+                                    <ComboBoxItem Content="In progress" Tag="Active" />
+                                    <ComboBoxItem Content="Queued" Tag="Queue" />
+                                    <ComboBoxItem Content="History" Tag="History" />
+                                </ComboBox>
+                                <TextBlock x:Name="ActivityQueueCoverage" Text="{Binding QueueCoverage}"
+                                           Style="{StaticResource CloudBaySecondaryTextStyle}" Visibility="Collapsed" />
+                            </StackPanel>
                             <ListView
                                 x:Name="ActivityList"
-                                ItemsSource="{Binding Activity}"
-                                ItemTemplate="{StaticResource ActivityRowTemplate}"
+                                Grid.Row="1"
+                                ItemsSource="{Binding ActivityRows}"
+                                ItemTemplate="{StaticResource TransferActivityRowTemplate}"
                                 ItemContainerStyle="{StaticResource CloudBayListItemStyle}"
                                 SelectionMode="None"
                                 HorizontalContentAlignment="Stretch" />
                             <StackPanel
                                 x:Name="ActivityEmpty"
+                                Grid.Row="1"
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center"
                                 Spacing="12">
@@ -334,7 +382,7 @@
                                     FontSize="28"
                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                 <TextBlock
-                                    Text="No transfers yet"
+                                    Text="{Binding ActivityEmptyMessage}"
                                     Style="{StaticResource CloudBaySecondaryTextStyle}" />
                             </StackPanel>
                         </Grid>
@@ -999,6 +1047,28 @@
                                     </settings:SettingsExpander>
                                 </StackPanel>
                                 <StackPanel x:Name="NetworkSettingsDetail" Spacing="4" Visibility="Collapsed">
+                                    <settings:SettingsCard x:Name="UploadPerformanceCard" Header="Transfer performance"
+                                        Description="Balances parallel transfers with available system resources.">
+                                        <settings:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE895;" /></settings:SettingsCard.HeaderIcon>
+                                        <ComboBox x:Name="UploadModeBox" Width="220" SelectionChanged="UploadMode_SelectionChanged"
+                                                  AutomationProperties.Name="Transfer performance mode">
+                                            <ComboBoxItem Content="Intelligent (recommended)" Tag="Intelligent" />
+                                            <ComboBoxItem Content="Maximum throughput" Tag="MaximumThroughput" />
+                                            <ComboBoxItem Content="Manual" Tag="Manual" />
+                                        </ComboBox>
+                                    </settings:SettingsCard>
+                                    <settings:SettingsCard x:Name="ManualConcurrencyCard" Header="Upload slots"
+                                        Description="Maximum simultaneous upload requests, shared by files and large-file parts." Visibility="Collapsed">
+                                        <NumberBox x:Name="ConcurrencyBox" Width="200" Minimum="1" Maximum="16" SmallChange="1"
+                                                   SpinButtonPlacementMode="Compact" ValidationMode="Disabled"
+                                                   AutomationProperties.Name="Maximum simultaneous upload requests" />
+                                    </settings:SettingsCard>
+                                    <settings:SettingsCard x:Name="ManualDownloadConcurrencyCard" Header="Download slots"
+                                        Description="Maximum simultaneous download requests, shared by files and large-file chunks." Visibility="Collapsed">
+                                        <NumberBox x:Name="DownloadConcurrencyBox" Width="200" Minimum="1" Maximum="16" SmallChange="1"
+                                                   SpinButtonPlacementMode="Compact" ValidationMode="Disabled"
+                                                   AutomationProperties.Name="Maximum simultaneous downloads" />
+                                    </settings:SettingsCard>
                                     <settings:SettingsCard
                                         Header="Metered connections"
                                         Description="Pause syncing to limit mobile data use.">
@@ -1026,7 +1096,7 @@
                                     <settings:SettingsExpander
                                         x:Name="NetworkSettingsExpander"
                                         Header="Bandwidth limits"
-                                        Description="Control transfer speed and concurrent uploads.">
+                                        Description="Set upload and download speed limits.">
                                         <settings:SettingsExpander.HeaderIcon>
                                             <FontIcon Glyph="" />
                                         </settings:SettingsExpander.HeaderIcon>
@@ -1055,21 +1125,11 @@
                                                     SpinButtonPlacementMode="Compact"
                                                     ValidationMode="Disabled" />
                                             </settings:SettingsCard>
-                                            <settings:SettingsCard Header="Concurrent uploads">
-                                                <NumberBox
-                                                    x:Name="ConcurrencyBox"
-                                                    Width="200"
-                                                    Minimum="1"
-                                                    Maximum="16"
-                                                    SmallChange="1"
-                                                    SpinButtonPlacementMode="Compact"
-                                                    ValidationMode="Disabled" />
-                                            </settings:SettingsCard>
-                                            <settings:SettingsCard Header="Bandwidth changes">
-                                                <Button Content="Apply limits" Click="ApplyNetwork_Click" />
-                                            </settings:SettingsCard>
                                         </settings:SettingsExpander.Items>
                                     </settings:SettingsExpander>
+                                    <StackPanel Orientation="Horizontal" Padding="0,16,0,0">
+                                        <Button Content="Apply transfer settings" Style="{StaticResource AccentButtonStyle}" Click="ApplyNetwork_Click" />
+                                    </StackPanel>
                                 </StackPanel>
                                 <StackPanel x:Name="AppearanceSettingsDetail" Spacing="4" Visibility="Collapsed">
                                     <settings:SettingsCard Header="App theme" Description="Choose how CloudBay looks.">

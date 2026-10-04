@@ -51,6 +51,27 @@
                     </StackPanel>
                 </Grid>
             </DataTemplate>
+            <DataTemplate x:Key="TrayTransferTemplate">
+                <Grid Padding="0,8" ColumnSpacing="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <FontIcon Glyph="{Binding Glyph}" FontSize="18" Margin="0,2,0,0" VerticalAlignment="Top"
+                              Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <StackPanel Grid.Column="1" Spacing="4">
+                        <TextBlock Text="{Binding FileName}" Style="{StaticResource BodyStrongTextBlockStyle}"
+                                   TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Location}" />
+                        <TextBlock Text="{Binding Location}" Style="{StaticResource CloudBaySecondaryTextStyle}"
+                                   TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" ToolTipService.ToolTip="{Binding Location}" />
+                        <TextBlock Text="{Binding Summary}" Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                        <TextBlock x:Name="TrayFileSpeed" Text="{Binding SpeedText}" Visibility="{Binding SpeedVisibility}"
+                                   Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                        <ProgressBar Value="{Binding Progress}" Maximum="100" IsIndeterminate="{Binding IsIndeterminate}"
+                                     Visibility="{Binding ProgressVisibility}" AutomationProperties.Name="{Binding ProgressAccessibleName}" />
+                    </StackPanel>
+                </Grid>
+            </DataTemplate>
         </Grid.Resources>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -191,6 +212,19 @@
                             Text="{Binding ProgressLabel}"
                             Style="{StaticResource CloudBaySecondaryTextStyle}" />
                     </StackPanel>
+                    <StackPanel x:Name="TrayLiveTransfers" Visibility="Collapsed" Spacing="8">
+                        <TextBlock Text="In progress" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                        <TextBlock x:Name="TrayTransferSpeed" Text="{Binding TransferSpeedSummary}"
+                                   Style="{StaticResource CloudBaySecondaryTextStyle}" Visibility="Collapsed"
+                                   AutomationProperties.Name="Measured transfer speed" />
+                        <ItemsControl x:Name="TrayTransferList" ItemsSource="{Binding RecentTransfers}"
+                                      ItemTemplate="{StaticResource TrayTransferTemplate}" />
+                        <TextBlock x:Name="TrayAdditionalTransfers" Text="{Binding AdditionalTransfersSummary}"
+                                   Style="{StaticResource CloudBaySecondaryTextStyle}" Visibility="Collapsed" />
+                    </StackPanel>
+                    <HyperlinkButton x:Name="TrayQueueAction" Content="{Binding QueueSummary}" Padding="0"
+                                     HorizontalAlignment="Left" Click="ViewQueue_Click" Visibility="Collapsed"
+                                     AutomationProperties.Name="View queued files" />
                     <InfoBar
                         x:Name="TrayError"
                         IsOpen="False"
