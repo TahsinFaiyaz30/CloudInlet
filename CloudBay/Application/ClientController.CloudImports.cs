@@ -131,13 +131,15 @@ public sealed partial class ClientController
                 // Persist only the new receipt. Rewriting the complete reviewed
                 // source list for every tiny object would make import quadratic.
                 journal.SaveProgress(plan.JobId, item.Source.FileId, copied);
-                AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Backup, targetKey[Settings.Prefix.Length..],
-                    "Imported and verified in Backblaze B2. The original cloud version was retained.", copied.Size));
+                AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Upload, targetKey[Settings.Prefix.Length..],
+                    "Imported and verified in Backblaze B2. The original cloud version was retained.", copied.Size)
+                { Location = MainActivityLocation(targetKey[Settings.Prefix.Length..]) });
             }
             journal.Save(record with { State = "Completed" });
             AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Backup,
                 Path.GetRelativePath(Settings.RootPath, plan.DestinationPath).Replace('\\', '/'),
-                $"Cloud import completed: {plan.FileCount:N0} files. They will appear in your native CloudBay folder.", plan.TotalBytes));
+                $"Cloud import completed: {plan.FileCount:N0} files. They will appear in your native CloudBay folder.", plan.TotalBytes)
+            { Location = MainActivityLocation(Path.GetRelativePath(Settings.RootPath, plan.DestinationPath).Replace('\\', '/')) });
         }
         catch (Exception error)
         {

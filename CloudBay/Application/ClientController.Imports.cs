@@ -71,14 +71,16 @@ public sealed partial class ClientController
             NotifyChanged();
             await Task.Run(() => FolderImport.ExecuteAsync(reviewed, operation.Token, new ImportProgress(relative =>
                 AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Information,
-                    Path.GetRelativePath(Settings.RootPath, reviewed.DestinationPath).Replace('\\', '/') + "/" + relative.Replace('\\', '/'), "Imported and verified local copy")))), operation.Token);
+                    Path.GetRelativePath(Settings.RootPath, reviewed.DestinationPath).Replace('\\', '/') + "/" + relative.Replace('\\', '/'), "Imported and verified local copy")
+                { Location = MainActivityLocation(Path.GetRelativePath(Settings.RootPath, reviewed.DestinationPath).Replace('\\', '/') + "/" + relative.Replace('\\', '/')) }))), operation.Token);
             // VerifiedTreeCopy already preserved desktop.ini, named streams and their
             // activation attributes. A second cosmetic pass must not reject a valid
             // UNC or mounted-provider source after its verified copy has completed.
             journal.Save(record with { State = "Completed" });
             AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Backup,
                 Path.GetRelativePath(Settings.RootPath, reviewed.DestinationPath).Replace('\\', '/'),
-                $"Imported {reviewed.FileCount:N0} files. The source folder was retained; CloudBay will back up the verified copies.", reviewed.TotalBytes));
+                $"Imported {reviewed.FileCount:N0} files. The source folder was retained; CloudBay will back up the verified copies.", reviewed.TotalBytes)
+            { Location = MainActivityLocation(Path.GetRelativePath(Settings.RootPath, reviewed.DestinationPath).Replace('\\', '/')) });
         }
         catch (Exception error)
         {
@@ -149,7 +151,8 @@ public sealed partial class ClientController
                 BackupTransferMode.Move => "Windows folder backup enabled. Verified source files were moved into CloudBay.",
                 _ => "Windows folder backup enabled. Verified source files were copied; originals retained."
             };
-            AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Backup, reviewed.Name, applied.RetentionWarning ?? detail));
+            AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Backup, reviewed.Name, applied.RetentionWarning ?? detail)
+            { Location = MainActivityLocation(reviewed.Name) });
             return applied.RetentionWarning;
         }
         finally { EndMaintenance(resume: true); _operations.Release(); }
@@ -222,7 +225,8 @@ public sealed partial class ClientController
                 BackupTransferMode.Move => "Windows folder backup stopped. Verified files moved to " + reviewed.DestinationPath + ". Removing CloudBay originals also removes their current B2 copies through sync.",
                 _ => "Windows folder backup stopped. Verified files copied to " + reviewed.DestinationPath + "; CloudBay copies retained."
             };
-            AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Backup, reviewed.Folder.Name, outcome.RetentionWarning ?? detail));
+            AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Backup, reviewed.Folder.Name, outcome.RetentionWarning ?? detail)
+            { Location = MainActivityLocation(reviewed.Folder.Name) });
             var warning = outcome.RetentionWarning;
             if (freeLocalSpace)
             {

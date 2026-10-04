@@ -112,17 +112,27 @@ public sealed class ClientViewModel : INotifyPropertyChanged
         if (!_lastActivity.SequenceEqual(events))
         {
             _lastActivity = events;
-            Activity.Clear();
-            RecentActivity.Clear();
+            // A completed transfer adds one history entry. Retain all other
+            // row identities so the native virtualizer keeps its viewport and
+            // existing render state instead of receiving a full remove/add.
+            var retained = Activity.GroupBy(row => row.Event)
+                .ToDictionary(group => group.Key, group => new Queue<ActivityItem>(group));
+            var history = new List<ActivityItem>(events.Length);
             foreach (var item in events)
             {
-                var display = new ActivityItem(item);
-                Activity.Add(display);
-                if (RecentActivity.Count < 3) RecentActivity.Add(display);
+                var display = retained.TryGetValue(item, out var matches) && matches.Count > 0
+                    ? matches.Dequeue() : new ActivityItem(item);
+                history.Add(display);
             }
+            ReplaceIfChanged(Activity, history);
+            ReplaceIfChanged(RecentActivity, history.Take(3).ToArray());
         }
         HasActivity = events.Length > 0;
         RefreshTransfers(snapshot);
+        foreach (var row in Activity)
+            row.Actions.SetTarget(ActivityLocationResolver.ForActivity(row.Event, settings), Preview is not null);
+        foreach (var row in _transferItems.Values)
+            row.Actions.SetTarget(ActivityLocationResolver.ForTransfer(row.Transfer, settings), Preview is not null);
         if (HasTransferSummary && snapshot.State == ClientState.Syncing)
         {
             StatusDescription = TransferSummary;
@@ -196,7 +206,12 @@ public sealed class ClientViewModel : INotifyPropertyChanged
             _ => ActiveTransfers.Cast<object>().Concat(QueuedTransfers).Concat(Activity)
         };
         var displayedRows = rows.ToArray();
-        if (resetView) ActivityRows = new ObservableCollection<object>(displayedRows);
+        // A wholly different view has no retained scroll anchor. Swapping its
+        // source atomically avoids a native virtualizer retaining containers
+        // from an emptied source after a resize or complete history refresh.
+        var retainedRows = new HashSet<object>(ActivityRows);
+        if (resetView || ActivityRows.Count > 0 && !displayedRows.Any(retainedRows.Contains))
+            ActivityRows = new ObservableCollection<object>(displayedRows);
         else ReplaceIfChanged(ActivityRows, displayedRows);
         HasActivityRows = ActivityRows.Count > 0;
         ActivityEmptyMessage = _activityFilter switch
@@ -261,8 +276,10 @@ public sealed class ClientViewModel : INotifyPropertyChanged
     }
 }
 
-public sealed class ActivityItem(ActivityEvent activity)
+public sealed class ActivityItem(ActivityEvent activity) : IActivityActionRow
 {
+    public ActivityEvent Event { get; } = activity;
+    public ActivityRowActions Actions { get; } = new();
     public string SpeedText => "";
     public Microsoft.UI.Xaml.Visibility SpeedVisibility => Microsoft.UI.Xaml.Visibility.Collapsed;
     public Microsoft.UI.Xaml.Visibility ProgressVisibility => Microsoft.UI.Xaml.Visibility.Collapsed;
@@ -305,9 +322,11 @@ public sealed class ActivityItem(ActivityEvent activity)
     public override string ToString() => $"{Title}: {FileName}. {Detail}. {TimeText}.";
 }
 
-public sealed class TransferItem : INotifyPropertyChanged
+public sealed class TransferItem : INotifyPropertyChanged, IActivityActionRow
 {
     private TransferSnapshot _transfer;
+    public TransferSnapshot Transfer => _transfer;
+    public ActivityRowActions Actions { get; } = new();
     public event PropertyChangedEventHandler? PropertyChanged;
     public TransferItem(TransferSnapshot transfer) => _transfer = transfer;
     public string Id => _transfer.Id;
@@ -393,9 +412,12 @@ public sealed record ClientPreview(AppSettings Settings, SyncSnapshot Snapshot, 
             CustomBackups = [new("Projects", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Projects"), "CloudBay/Projects/")] };
         var now = DateTimeOffset.UtcNow;
         var activity = new ActivityEvent[] {
-            new(now.AddMinutes(-1), ActivityKind.Upload, "Documents/Proposal.docx", "Uploaded", 184320),
-            new(now.AddMinutes(-3), ActivityKind.Download, "Pictures/Weekend.jpg", "Downloaded on demand", 2460000),
-            new(now.AddMinutes(-8), ActivityKind.Backup, "Desktop", "Folder backup enabled") };
+            new(now.AddMinutes(-1), ActivityKind.Upload, "Documents/Proposal.docx", "Uploaded", 184320)
+                { Location = new(root, null, "Documents/Proposal.docx", settings.BucketId, settings.Prefix) },
+            new(now.AddMinutes(-3), ActivityKind.Download, "Pictures/Weekend.jpg", "Downloaded on demand", 2460000)
+                { Location = new(root, null, "Pictures/Weekend.jpg", settings.BucketId, settings.Prefix) },
+            new(now.AddMinutes(-8), ActivityKind.Backup, "Desktop", "Folder backup enabled")
+                { Location = new(root, null, "Desktop", settings.BucketId, settings.Prefix) } };
         var snapshot = transferring
             ? new SyncSnapshot(ClientState.Syncing, "Syncing your files", 5, 1284, 7516192768, 3221225472, 98304, 184320, now.AddMinutes(-10))
             {
@@ -410,6 +432,26 @@ public sealed record ClientPreview(AppSettings Settings, SyncSnapshot Snapshot, 
             }
             : new SyncSnapshot(ClientState.UpToDate, "All files are in sync", 0, 1284, 7516192768, 3221225472, LastSync: now.AddMinutes(-1));
         return new(settings, snapshot, activity);
+    }
+
+    public static ClientPreview ActivityActions()
+    {
+        var preview = Connected();
+        var settings = preview.Settings;
+        var custom = settings.CustomBackups[0];
+        var now = DateTimeOffset.UtcNow;
+        const string path = "Screenshots/A longer screenshot file name from a Windows desktop session.png";
+        return preview with { Activity = [
+            new(now, ActivityKind.Upload, "Pictures/" + path, "Uploaded", 75612)
+                { Location = new(settings.RootPath, null, "Pictures/" + path, settings.BucketId, settings.Prefix) },
+            new(now.AddMinutes(-1), ActivityKind.Download, custom.Name + "/Reports/Quarterly report.pdf", "Downloaded", 3145728)
+                { Location = new(custom.SourcePath, custom.Name, "Reports/Quarterly report.pdf", settings.BucketId, custom.Prefix) },
+            new(now.AddMinutes(-2), ActivityKind.Backup, "Desktop", "Folder backup enabled")
+                { Location = new(settings.RootPath, null, "Desktop", settings.BucketId, settings.Prefix) },
+            new(now.AddMinutes(-3), ActivityKind.Upload, "Pictures/Old account.png", "Retained history from another account", 1234)
+                { Location = new(settings.RootPath, null, "Pictures/Old account.png", "previous-bucket", settings.Prefix) },
+            new(now.AddMinutes(-4), ActivityKind.Upload, "Pictures/Legacy history.png", "History without a recorded cloud location", 1234)
+        ] };
     }
 
     public static ClientPreview TransferQueue(int queueCount = 360)

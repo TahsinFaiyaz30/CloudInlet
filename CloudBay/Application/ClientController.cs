@@ -198,7 +198,8 @@ public sealed partial class ClientController : IAsyncDisposable
             await placeholders.ConnectAsync(settings.RootPath, account.AccountId + ":" + bucket.Id + ":" + settings.Prefix,
                 async (file, offset, length, destination, token) =>
                 {
-                    await HydrateTrackedAsync(cloud, file, settings.Prefix, "CloudBay", offset, length, destination, token);
+                    await HydrateTrackedAsync(cloud, file, settings.Prefix, "CloudBay", offset, length, destination, token,
+                        new(settings.RootPath, null, "", settings.BucketId, settings.Prefix));
                 }, ct);
             // Each account/root/prefix has independent state, so reconnecting never inherits a different baseline.
             var identity = account.AccountId + "|" + bucket.Id + "|" + settings.Prefix + "|" + settings.RootPath.ToUpperInvariant();
@@ -216,7 +217,8 @@ public sealed partial class ClientController : IAsyncDisposable
             catch (OperationCanceledException) { throw; }
             catch (Exception) { AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Information, "", "Pending upload cleanup will retry when B2 is available.")); }
             _engine = new SyncEngine(cloud, placeholders, manifest, settings,
-                Path.Combine(_storage.DirectoryPath, "Recovery"), AddActivity, SetStatus,
+                Path.Combine(_storage.DirectoryPath, "Recovery"),
+                value => AddActivity(value with { Location = new(settings.RootPath, null, value.Path, settings.BucketId, settings.Prefix) }), SetStatus,
                 () => SystemIntegration.GetPauseReason(Settings), "CloudBay");
             foreach (var folder in settings.CustomBackups)
             {
@@ -408,7 +410,8 @@ public sealed partial class ClientController : IAsyncDisposable
                 _storage.ClearBackupIntent();
             }
             _engine.Configure(Settings);
-            AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Backup, name, enabled ? "System folder backup enabled" : "System folder restored to its local location. Cloud copy retained."));
+            AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Backup, name, enabled ? "System folder backup enabled" : "System folder restored to its local location. Cloud copy retained.")
+            { Location = MainActivityLocation(name) });
         }
         finally { EndMaintenance(resume: true); _operations.Release(); }
     }
@@ -432,17 +435,20 @@ public sealed partial class ClientController : IAsyncDisposable
         try
         {
             var cloud = _cloud;
+            var activitySettings = Settings;
             await placeholders.ConnectAsync(folder.SourcePath, Settings.AccountId + ":" + Settings.BucketId + ":" + folder.Prefix,
                 async (file, offset, length, destination, token) =>
                 {
-                    await HydrateTrackedAsync(cloud, file, folder.Prefix, folder.Name, offset, length, destination, token);
+                    await HydrateTrackedAsync(cloud, file, folder.Prefix, folder.Name, offset, length, destination, token,
+                        new(folder.SourcePath, folder.Name, "", activitySettings.BucketId, folder.Prefix));
                 }, ct);
             var identity = Settings.AccountId + "|" + Settings.BucketId + "|" + folder.Prefix + "|" + folder.SourcePath.ToUpperInvariant();
             var stateName = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..24];
             var manifest = new SyncManifest(Path.Combine(_storage.DirectoryPath, "State", stateName + ".sqlite"));
             var engine = new SyncEngine(cloud, placeholders, manifest, CustomSettings(folder),
                 Path.Combine(_storage.DirectoryPath, "Recovery", folder.Name),
-                value => AddActivity(value with { Path = folder.Name + "/" + value.Path }),
+                value => AddActivity(value with { Path = folder.Name + "/" + value.Path,
+                    Location = new(folder.SourcePath, folder.Name, value.Path, activitySettings.BucketId, folder.Prefix) }),
                 value => { _customSnapshots[folder.Name] = value; PublishAggregate(); },
                 () => SystemIntegration.GetPauseReason(Settings), folder.Name);
             if (!_customRoots.TryAdd(folder.Name, new(folder, placeholders, engine)))
@@ -474,7 +480,8 @@ public sealed partial class ClientController : IAsyncDisposable
             _storage.SaveSettings(Settings);
             try { await OpenCustomRootAsync(folder, cancellationToken); }
             catch { Settings = previous; _storage.SaveSettings(Settings); throw; }
-            AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Backup, name, "Custom folder backup enabled in its existing Windows location."));
+            AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Backup, name, "Custom folder backup enabled in its existing Windows location.")
+            { Location = new(sourcePath, name, "", Settings.BucketId, folder.Prefix) });
         }
         finally { _operations.Release(); }
     }
@@ -605,12 +612,16 @@ public sealed partial class ClientController : IAsyncDisposable
         var prefix = backupName is null ? Settings.Prefix : GetCustom(backupName).Folder.Prefix;
         return _cloud!.VersionsAsync(Settings.BucketId, prefix + relativePath.Replace('\\', '/'), _lifetime.Token);
     }
-    public async Task RestoreVersionAsync(CloudObject version)
+    public async Task RestoreVersionAsync(CloudObject version, string? backupName = null)
     {
         EnsureConnected();
-        PathRules.FromKey(version.Key, Settings.Prefix);
-        await _cloud!.RestoreAsync(Settings.BucketId, version, _lifetime.Token);
-        AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Restore, version.Key, "A previous B2 version was restored"));
+        var settings = Settings;
+        var folder = backupName is null ? null : GetCustom(backupName).Folder;
+        var prefix = folder?.Prefix ?? settings.Prefix;
+        var relative = PathRules.FromKey(version.Key, prefix);
+        await _cloud!.RestoreAsync(settings.BucketId, version, _lifetime.Token);
+        AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Restore, version.Key, "A previous B2 version was restored")
+        { Location = new(folder?.SourcePath ?? settings.RootPath, folder?.Name, relative, settings.BucketId, prefix) });
         await SyncNowAsync();
     }
     public Task SetPinAsync(string relativePath, PinMode mode, string? backupName = null)
@@ -697,6 +708,11 @@ public sealed partial class ClientController : IAsyncDisposable
         Changed?.Invoke(this, EventArgs.Empty);
     }
     private void AddActivity(ActivityEvent value) { if (_storage.Log(value)) NotifyChanged(); }
+    private ActivityLocation MainActivityLocation(string relativePath)
+    {
+        var settings = Settings;
+        return new(settings.RootPath, null, relativePath, settings.BucketId, settings.Prefix);
+    }
     private static void ConfigureTransport(B2CloudStore cloud, AppSettings settings)
     {
         var limits = TransferLimits.For(settings);
@@ -705,9 +721,10 @@ public sealed partial class ClientController : IAsyncDisposable
     }
 
     private async Task HydrateTrackedAsync(B2CloudStore cloud, CloudObject file, string prefix, string rootName,
-        long offset, long length, Stream destination, CancellationToken token)
+        long offset, long length, Stream destination, CancellationToken token, ActivityLocation? location = null)
     {
         var relative = file.Key.StartsWith(prefix, StringComparison.Ordinal) ? file.Key[prefix.Length..] : file.Key;
+        location = location is null ? null : location with { RelativePath = relative };
         var id = "hydrate|" + rootName + "|" + file.FileId + "|" + Guid.NewGuid().ToString("N");
         var speed = new TransferSpeedMeter();
         long previousBytes = 0;
@@ -721,7 +738,7 @@ public sealed partial class ClientController : IAsyncDisposable
             // Monitor before transport starts: a failed transport checksum can trigger
             // a successful CFAPI restart. Only the service's final validation outcome
             // decides whether this attempt is completed, cancelled, or a real error.
-            var completion = FinalizeNativeHydrationAsync(id, rootName, relative, length, native.ValidationCompletion);
+            var completion = FinalizeNativeHydrationAsync(id, rootName, relative, length, native.ValidationCompletion, location);
             _hydrationFinalizations[id] = completion;
             _ = completion.ContinueWith(_ => _hydrationFinalizations.TryRemove(id, out var removed),
                 CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
@@ -757,13 +774,14 @@ public sealed partial class ClientController : IAsyncDisposable
             // Return to CFAPI so it can persist and validate the assembled cache; the
             // independent monitor keeps its row visible through ACK without a deadlock.
             if (!awaitingValidation)
-                AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Download, rootName + "/" + relative, "Downloaded on demand", length));
+                AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Download, rootName + "/" + relative, "Downloaded on demand", length)
+                { Location = location });
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
         catch (Exception error)
         {
             if (!awaitingValidation)
-                AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Error, rootName + "/" + relative, error.Message));
+                AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Error, rootName + "/" + relative, error.Message) { Location = location });
             throw;
         }
         finally
@@ -776,17 +794,19 @@ public sealed partial class ClientController : IAsyncDisposable
             }
         }
     }
-    private async Task FinalizeNativeHydrationAsync(string id, string rootName, string relative, long length, Task validation)
+    private async Task FinalizeNativeHydrationAsync(string id, string rootName, string relative, long length, Task validation,
+        ActivityLocation? location = null)
     {
         try
         {
             await validation.ConfigureAwait(false);
-            AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Download, rootName + "/" + relative, "Downloaded on demand", length));
+            AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Download, rootName + "/" + relative, "Downloaded on demand", length)
+            { Location = location });
         }
         catch (OperationCanceledException) { /* Interruption or a bounded native restart has its own next live request. */ }
         catch (Exception error)
         {
-            AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Error, rootName + "/" + relative, error.Message));
+            AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Error, rootName + "/" + relative, error.Message) { Location = location });
         }
         finally
         {

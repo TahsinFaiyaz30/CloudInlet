@@ -492,6 +492,9 @@ public sealed class ClientControllerTests
         Assert.AreEqual("Projects/Documents/buffered.txt", recorded.Path);
         Assert.AreEqual(hydration.File.Size, recorded.Bytes);
         Assert.IsTrue(recorded.Completed);
+        Assert.AreEqual(new ActivityLocation(hydration.Controller.Settings.RootPath, "Projects", "Documents/buffered.txt",
+            "test-bucket", "CloudBay/"), recorded.Location,
+            "Completed native downloads must retain the exact backup root and cloud namespace for activity actions.");
         Assert.AreEqual(0, hydration.Controller.Activity.Count(item => item.Kind == ActivityKind.Error));
     }
 
@@ -565,7 +568,8 @@ public sealed class ClientControllerTests
 
         internal Task DownloadAsync() => ((Task)typeof(ClientController)
             .GetMethod("HydrateTrackedAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(Controller, [_cloud, File, "CloudBay/", "Projects", 0L, File.Size, Stream, CancellationToken.None])!)
+            .Invoke(Controller, [_cloud, File, "CloudBay/", "Projects", 0L, File.Size, Stream, CancellationToken.None,
+                new ActivityLocation(Controller.Settings.RootPath, "Projects", "", "test-bucket", "CloudBay/")])!)
             .WaitAsync(TimeSpan.FromSeconds(10));
 
         public async ValueTask DisposeAsync()

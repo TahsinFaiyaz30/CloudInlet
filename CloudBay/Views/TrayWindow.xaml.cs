@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using CloudBay.Application;
 using CloudBay.Core;
 using CloudBay.ViewModels;
+using CloudBay.Windows;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
@@ -356,6 +357,37 @@ public sealed partial class TrayWindow : Window
         catch (Exception error) { ShowError(error); }
     }
 
+    private async void ActivityRow_Loaded(object sender, RoutedEventArgs args)
+    {
+        if (sender is FrameworkElement { DataContext: IActivityActionRow row })
+            await row.Actions.RefreshLocalAvailabilityAsync(_viewModel.Preview is not null);
+    }
+
+    private async void ActivityOpenFolder_Click(object sender, RoutedEventArgs args)
+    {
+        if (_viewModel.Preview is not null || sender is not FrameworkElement { DataContext: IActivityActionRow row } || row.Actions.Target is not { } target) return;
+        try
+        {
+            var folder = await ActivityRowNavigation.ResolveFolderAsync(target, _controller.Settings);
+            if (_closed || !ActivityLocationResolver.MatchesCurrentRoot(target.Location, _controller.Settings)) return;
+            SystemIntegration.OpenFolder(folder);
+            AppWindow.Hide();
+        }
+        catch (Exception error) { ShowError(error); }
+    }
+
+    private async void ActivityViewCloud_Click(object sender, RoutedEventArgs args)
+    {
+        if (_viewModel.Preview is not null || sender is not FrameworkElement { DataContext: IActivityActionRow row } || row.Actions.Target is not { CanViewCloud: true } target) return;
+        AppWindow.Hide();
+        try { if (App.MainWindow is { } main) await main.ShowActivityCloudAsync(target); }
+        catch (Exception error)
+        {
+            ShowAtTray();
+            ShowError(error);
+        }
+    }
+
     private void TrayPrimary_Click(object sender, RoutedEventArgs args)
     {
         if (_viewModel.Preview is not null) return;
@@ -427,12 +459,29 @@ public sealed partial class TrayWindow : Window
                 ResizeToContent();
                 TrayRoot.UpdateLayout();
                 AssertTrayLayout(state, outputDirectory);
+                if (state != ClientState.NotConnected)
+                {
+                    AssertTrayActivityActions(TrayActivitySection, 0, openFolder: true, cloud: true);
+                    AssertTrayActivityActions(TrayActivitySection, 2, openFolder: true, cloud: false);
+                }
                 await File.AppendAllTextAsync(Path.Combine(outputDirectory, "tray-assertions.txt"),
                     $"PASS: {state}{suffix} has the correct contextual content, native gear dimensions, and reachable footer actions.{Environment.NewLine}");
                 await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"), $"tray-{state}{suffix}: width={AppWindow.Size.Width}, height={AppWindow.Size.Height}{Environment.NewLine}");
                 await UiSmokeCapture.SaveAsync(TrayRoot, Path.Combine(outputDirectory, $"tray-{state}{suffix}.png"));
             }
             var historyHeight = AppWindow.Size.Height;
+            var actions = ClientPreview.ActivityActions();
+            _viewModel.SetPreview(actions with { Settings = actions.Settings with { Theme = theme.ToString() } });
+            ShowAtTray();
+            await Task.Delay(220);
+            ResizeToContent();
+            TrayRoot.UpdateLayout();
+            AssertTrayActivityActions(TrayActivitySection, 0, openFolder: true, cloud: true);
+            AssertTrayActivityActions(TrayActivitySection, 1, openFolder: true, cloud: true);
+            AssertTrayActivityActions(TrayActivitySection, 2, openFolder: true, cloud: false);
+            await UiSmokeCapture.SaveAsync(TrayRoot, Path.Combine(outputDirectory, $"tray-row-actions{suffix}.png"));
+            await File.AppendAllTextAsync(Path.Combine(outputDirectory, "activity-action-assertions.txt"),
+                $"PASS: tray {theme} contextual local/cloud icons have accessible names and fit inside long-filename history rows; folder entries do not pretend to be cloud files.{Environment.NewLine}");
             var quiet = ClientPreview.Connected() with { Activity = [] };
             _viewModel.SetPreview(quiet with { Settings = quiet.Settings with { Theme = theme.ToString() } });
             ShowAtTray();
@@ -450,6 +499,8 @@ public sealed partial class TrayWindow : Window
             TrayContentScroll.ChangeView(null, 0, null, true);
             TrayRoot.UpdateLayout();
             AssertTrayLayout(ClientState.Syncing, outputDirectory);
+            AssertTrayActivityActions(TrayTransferList, 0, openFolder: true, cloud: false);
+            AssertTrayActivityActions(TrayTransferList, 1, openFolder: true, cloud: true);
             var livePosition = TrayLiveTransfers.TransformToVisual(TrayContentScroll).TransformPoint(new global::Windows.Foundation.Point());
             var historyPosition = TrayActivityHeading.TransformToVisual(TrayContentScroll).TransformPoint(new global::Windows.Foundation.Point());
             if (_viewModel.RecentTransfers.Count != 3 ||
@@ -635,6 +686,36 @@ public sealed partial class TrayWindow : Window
                 throw new InvalidOperationException("The final recent activity entry must fit completely inside the tray viewport.");
         }
         AssertFooterWithinViewport();
+    }
+
+    private static T? FindActivityDescendant<T>(DependencyObject parent, Func<T, bool> predicate) where T : DependencyObject
+    {
+        for (var index = 0; index < Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(parent); index++)
+        {
+            var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(parent, index);
+            if (child is T match && predicate(match)) return match;
+            if (FindActivityDescendant(child, predicate) is { } descendant) return descendant;
+        }
+        return null;
+    }
+
+    private static void AssertTrayActivityActions(ItemsControl list, int index, bool openFolder, bool cloud)
+    {
+        if (list.ContainerFromIndex(index) is not FrameworkElement { ActualWidth: > 0, ActualHeight: > 0 } container)
+            throw new InvalidOperationException("Tray activity actions need a rendered row.");
+        foreach (var (name, expected) in new[] { ("TrayActivityOpenFolder", openFolder), ("TrayActivityViewCloud", cloud) })
+        {
+            var button = FindActivityDescendant<Button>(container, item => item.Name == name)
+                ?? throw new InvalidOperationException("Tray activity rows must contain contextual actions.");
+            if ((button.Visibility == Visibility.Visible) != expected)
+                throw new InvalidOperationException("Tray activity actions must match their exact current root and file identity.");
+            if (!expected) continue;
+            var position = button.TransformToVisual(container).TransformPoint(new global::Windows.Foundation.Point());
+            if (button.ActualWidth < 32 || button.ActualHeight < 32 || position.X < 0 || position.Y < 0 ||
+                position.X + button.ActualWidth > container.ActualWidth + 1 || position.Y + button.ActualHeight > container.ActualHeight + 1 ||
+                string.IsNullOrWhiteSpace(Microsoft.UI.Xaml.Automation.AutomationProperties.GetName(button)))
+                throw new InvalidOperationException("Tray icons must have accessible names and stay inside their activity row.");
+        }
     }
 
     private void AssertFooterWithinViewport()

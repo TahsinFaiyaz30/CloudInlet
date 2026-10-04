@@ -20,8 +20,13 @@ public sealed record TransferSnapshot(string Id, string RootName, string Relativ
 }
 public enum UploadMode { Intelligent, MaximumThroughput, Manual }
 public enum ActivityKind { Upload, Download, Delete, Restore, Conflict, Backup, Information, Error }
+/// <summary>The exact root and B2 namespace that produced an event. Contains no credentials.</summary>
+public sealed record ActivityLocation(string RootPath, string? BackupName, string RelativePath, string BucketId, string Prefix);
 public sealed record ActivityEvent(DateTimeOffset Time, ActivityKind Kind, string Path, string Message,
-    long Bytes = 0, bool Completed = true);
+    long Bytes = 0, bool Completed = true)
+{
+    public ActivityLocation? Location { get; init; }
+}
 public enum PinMode { OnlineOnly, Available, AlwaysAvailable }
 public enum ClientState { NotConnected, Connecting, Syncing, UpToDate, Paused, Offline, Attention }
 public sealed record SyncSnapshot(ClientState State, string Message, int Pending = 0,

@@ -67,6 +67,9 @@ public sealed partial class MainWindow : Window
     private int _activityViewRevision;
     private AppSettings? _loadedSettings;
     private string _versionPath = "";
+    private ActivityLocation? _versionLocation;
+    private int _activityCloudRevision;
+    private string? _activityActionValidationPath;
     private bool? _compactLayout;
     private string _currentPage = "overview";
     private string _settingsRoute = "home";
@@ -376,6 +379,14 @@ public sealed partial class MainWindow : Window
         RefreshBackups();
         RefreshCustomBackups();
         RefreshFileScopes();
+        if (_versionLocation is { } versionLocation && !ActivityLocationResolver.MatchesCurrentRoot(versionLocation, settings))
+        {
+            _activityCloudRevision++;
+            _versionLocation = null;
+            VersionsPanel.Visibility = Visibility.Collapsed;
+            VersionsList.ItemsSource = null;
+        }
+        RestoreVersionButton.IsEnabled = !_busy && CanRestoreSelectedVersion();
         RefreshProtectedFolders();
         ApplyTheme(settings.Theme);
         if (!ReferenceEquals(_loadedSettings, settings) && !_busy) LoadSettings();
@@ -938,6 +949,7 @@ public sealed partial class MainWindow : Window
         finally { _refreshingFileScopes = false; }
         VersionsPanel.Visibility = Visibility.Collapsed;
         VersionsList.ItemsSource = null;
+        _versionLocation = null;
         FilePathBox.Text = "";
     }
 
@@ -948,6 +960,7 @@ public sealed partial class MainWindow : Window
         FilePathBox.Text = "";
         VersionsPanel.Visibility = Visibility.Collapsed;
         VersionsList.ItemsSource = null;
+        _versionLocation = null;
     }
 
     private void UpdateFileScopeLabels()
@@ -1387,6 +1400,94 @@ public sealed partial class MainWindow : Window
         catch (Exception error) { ShowError(error); }
     }
 
+    private async void ActivityRow_Loaded(object sender, RoutedEventArgs args)
+    {
+        if (sender is FrameworkElement { DataContext: IActivityActionRow row })
+            await row.Actions.RefreshLocalAvailabilityAsync(_viewModel.Preview is not null);
+    }
+
+    private void ActivityRow_SizeChanged(object sender, SizeChangedEventArgs args)
+    {
+        if (sender is DependencyObject element && FindDescendant<StackPanel>(element, panel => panel.Name == "ActivityActions") is { } actions)
+            actions.Orientation = args.NewSize.Width < 740 ? Orientation.Vertical : Orientation.Horizontal;
+    }
+
+    private async void ActivityOpenFolder_Click(object sender, RoutedEventArgs args)
+    {
+        if (_viewModel.Preview is not null || sender is not FrameworkElement { DataContext: IActivityActionRow row } || row.Actions.Target is not { } target) return;
+        try
+        {
+            var folder = await ActivityRowNavigation.ResolveFolderAsync(target, _controller.Settings);
+            if (!_closed && ActivityLocationResolver.MatchesCurrentRoot(target.Location, _controller.Settings)) SystemIntegration.OpenFolder(folder);
+        }
+        catch (Exception error) { ShowError(error); }
+    }
+
+    private async void ActivityViewCloud_Click(object sender, RoutedEventArgs args)
+    {
+        if (_viewModel.Preview is not null || sender is not FrameworkElement { DataContext: IActivityActionRow row } || row.Actions.Target is not { CanViewCloud: true } target) return;
+        try { await ShowActivityCloudAsync(target); }
+        catch (Exception error) { ShowError(error); }
+    }
+
+    public async Task ShowActivityCloudAsync(ActivityActionTarget target)
+    {
+        if (_viewModel.Preview is not null || _closed) return;
+        if (!target.CanViewCloud || !ActivityLocationResolver.MatchesCurrentRoot(target.Location, _controller.Settings))
+            throw new IOException("This activity belongs to a backup location that is no longer connected.");
+        var request = ++_activityCloudRevision;
+        RefreshFileScopes();
+        if (FileScopeBox.ItemsSource is not IEnumerable<SyncFolderItem> scopes ||
+            scopes.SingleOrDefault(scope => scope.BackupName == target.Location.BackupName) is not { } selected)
+            throw new IOException("The activity's backup folder is no longer connected.");
+        FileScopeBox.SelectedItem = selected;
+        FilePathBox.Text = target.Location.RelativePath;
+        FileToolsExpander.IsExpanded = true;
+        RequestNavigationRoute("files");
+        ShowWindow();
+        _versionPath = $"{selected.Name} / {target.Location.RelativePath}";
+        _versionLocation = target.Location;
+        VersionPathLabel.Text = _versionPath;
+        VersionsPanel.Visibility = Visibility.Visible;
+        VersionsList.ItemsSource = null;
+        VersionsEmptyLabel.Text = "Loading versions from Backblaze B2…";
+        VersionsEmptyLabel.Visibility = Visibility.Visible;
+        RestoreVersionButton.IsEnabled = false;
+        BringActivityVersionsIntoView(request, target.Location);
+        // Viewing cloud metadata never reads or downloads local file content.
+        // Independent requests keep navigation and folder choices responsive.
+        try
+        {
+            var versions = await _controller.GetVersionsAsync(target.Location.RelativePath, target.Location.BackupName);
+            if (_closed || request != _activityCloudRevision ||
+                !ActivityLocationResolver.MatchesCurrentRoot(target.Location, _controller.Settings) ||
+                SelectedBackupName != target.Location.BackupName || FilePathBox.Text.Trim().Replace('\\', '/') != target.Location.RelativePath) return;
+            VersionsList.ItemsSource = versions.OrderByDescending(item => item.ModifiedUtc).Select(item => new VersionItem(item)).ToList();
+            VersionsEmptyLabel.Text = "No retained versions found.";
+            VersionsEmptyLabel.Visibility = versions.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            BringActivityVersionsIntoView(request, target.Location);
+        }
+        catch
+        {
+            if (_closed || request != _activityCloudRevision ||
+                !ActivityLocationResolver.MatchesCurrentRoot(target.Location, _controller.Settings) ||
+                SelectedBackupName != target.Location.BackupName || FilePathBox.Text.Trim().Replace('\\', '/') != target.Location.RelativePath) return;
+            if (!_closed && request == _activityCloudRevision)
+                VersionsEmptyLabel.Text = "Cloud versions could not be loaded. Try Version history again.";
+            throw;
+        }
+    }
+
+    private void BringActivityVersionsIntoView(int request, ActivityLocation location) =>
+        DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
+        {
+            if (_closed || request != _activityCloudRevision || CurrentRoute != "files" ||
+                !ActivityLocationResolver.MatchesCurrentRoot(location, _controller.Settings) ||
+                SelectedBackupName != location.BackupName || FilePathBox.Text.Trim().Replace('\\', '/') != location.RelativePath) return;
+            RootGrid.UpdateLayout();
+            VersionPathLabel.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = true });
+        });
+
     private void ManageBackup_Click(object sender, RoutedEventArgs args) => Navigation.SelectedItem = Navigation.MenuItems[2];
     private void ViewActivity_Click(object sender, RoutedEventArgs args) => ShowActivity();
     private void Settings_Click(object sender, RoutedEventArgs args) => ShowAccount();
@@ -1518,8 +1619,17 @@ public sealed partial class MainWindow : Window
         await RunAsync("Loading retained B2 versions…", async () =>
         {
             var path = SelectedFilePath();
-            var versions = await _controller.GetVersionsAsync(path, SelectedBackupName);
+            var backupName = SelectedBackupName;
+            var settings = _controller.Settings;
+            var custom = backupName is null ? null : settings.CustomBackups.Single(folder => folder.Name == backupName);
+            var location = new ActivityLocation(custom?.SourcePath ?? settings.RootPath, backupName, path, settings.BucketId, custom?.Prefix ?? settings.Prefix);
+            var request = ++_activityCloudRevision;
+            var versions = await _controller.GetVersionsAsync(path, backupName);
+            if (_closed || request != _activityCloudRevision || SelectedBackupName != backupName || FilePathBox.Text.Trim().Replace('\\', '/') != path ||
+                !ActivityLocationResolver.MatchesCurrentRoot(location, _controller.Settings)) return;
+            VersionsEmptyLabel.Text = "No retained versions found.";
             _versionPath = $"{FileFolderName.Text} / {path}";
+            _versionLocation = location;
             VersionPathLabel.Text = _versionPath;
             VersionsList.ItemsSource = versions.OrderByDescending(item => item.ModifiedUtc).Select(item => new VersionItem(item)).ToList();
             VersionsEmptyLabel.Visibility = versions.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -1528,11 +1638,16 @@ public sealed partial class MainWindow : Window
         });
 
     private void VersionsList_SelectionChanged(object sender, SelectionChangedEventArgs args) =>
-        RestoreVersionButton.IsEnabled = !_busy && VersionsList.SelectedItem is VersionItem { File.Action: "upload" };
+        RestoreVersionButton.IsEnabled = !_busy && CanRestoreSelectedVersion();
+
+    private bool CanRestoreSelectedVersion() => _versionLocation is { } location &&
+        ActivityLocationResolver.MatchesCurrentRoot(location, _controller.Settings) &&
+        VersionsList.SelectedItem is VersionItem { File.Action: "upload" } selected &&
+        selected.File.Key.Equals(location.Prefix + location.RelativePath, StringComparison.Ordinal);
 
     private async void RestoreVersion_Click(object sender, RoutedEventArgs args)
     {
-        if (_busy || VersionsList.SelectedItem is not VersionItem version || version.File.Action != "upload") return;
+        if (_busy || !CanRestoreSelectedVersion() || _versionLocation is not { } location || VersionsList.SelectedItem is not VersionItem version) return;
         await RunAsync("Restoring the selected version…", async () =>
         {
             var dialog = new ContentDialog
@@ -1546,7 +1661,9 @@ public sealed partial class MainWindow : Window
                 RequestedTheme = RootGrid.RequestedTheme
             };
             if (await ShowModalAsync(dialog) != ContentDialogResult.Primary) return;
-            await _controller.RestoreVersionAsync(version.File);
+            if (!ActivityLocationResolver.MatchesCurrentRoot(location, _controller.Settings))
+                throw new IOException("The backup location changed. Load its version history again before restoring.");
+            await _controller.RestoreVersionAsync(version.File, location.BackupName);
             ShowInfo("The selected version was restored.");
         });
     }
@@ -1619,7 +1736,7 @@ public sealed partial class MainWindow : Window
                 SetBusy(false, "CloudBay continues working in the background");
                 UpdateBackupBusyFooter();
                 Refresh();
-                RestoreVersionButton.IsEnabled = VersionsList.SelectedItem is VersionItem { File.Action: "upload" };
+                RestoreVersionButton.IsEnabled = CanRestoreSelectedVersion();
             }
         }
     }
@@ -1736,6 +1853,7 @@ public sealed partial class MainWindow : Window
 
     public async Task RunUiSmokeAsync(string outputDirectory)
     {
+        _activityActionValidationPath = Path.Combine(outputDirectory, "activity-action-assertions.txt");
         Directory.CreateDirectory(outputDirectory);
         var themeArgument = Environment.GetCommandLineArgs().FirstOrDefault(arg => arg.StartsWith("--ui-smoke-theme=", StringComparison.Ordinal))?[17..];
         if (themeArgument != "Light")
@@ -1844,6 +1962,42 @@ public sealed partial class MainWindow : Window
         foreach (var theme in themes)
         {
             var suffix = theme == ElementTheme.Light ? "-light" : "";
+            var initialHistory = ClientPreview.ActivityActions();
+            SetPresentation(initialHistory, theme);
+            ActivityFilterBox.SelectedIndex = 3;
+            var retainedHistoryRow = _viewModel.Activity[0];
+            var retainedHistorySource = _viewModel.ActivityRows;
+            var newEvent = initialHistory.Activity[0] with { Time = initialHistory.Activity[0].Time.AddSeconds(1), Path = "Pictures/New screenshot.png",
+                Location = initialHistory.Activity[0].Location! with { RelativePath = "Pictures/New screenshot.png" } };
+            SetPresentation(initialHistory with { Activity = new[] { newEvent }.Concat(initialHistory.Activity).ToArray() }, theme);
+            if (!ReferenceEquals(retainedHistoryRow, _viewModel.Activity[1]) ||
+                !ReferenceEquals(retainedHistoryRow, _viewModel.RecentActivity[1]) ||
+                !ReferenceEquals(retainedHistorySource, _viewModel.ActivityRows))
+                throw new InvalidOperationException("Adding one completed activity must retain existing history rows and the list's scroll source.");
+            foreach (var width in new[] { 800, 1300 })
+            {
+                AppWindow.Resize(new SizeInt32(width, 840));
+                var oldHistorySource = _viewModel.ActivityRows;
+                SetPresentation(ClientPreview.ActivityActions(), theme);
+                if (ReferenceEquals(oldHistorySource, _viewModel.ActivityRows))
+                    throw new InvalidOperationException("A wholly replaced history must swap its native list source atomically.");
+                ActivityFilterBox.SelectedIndex = 3;
+                await CapturePageAsync("activity", $"activity-row-actions-{width}{suffix}");
+                AssertActivityActions(_viewModel.Activity[0], openFolder: true, cloud: true);
+                AssertActivityActions(_viewModel.Activity[1], openFolder: true, cloud: true);
+                AssertActivityActions(_viewModel.Activity[2], openFolder: true, cloud: false);
+                foreach (var row in _viewModel.Activity.Skip(3))
+                {
+                    ActivityList.ScrollIntoView(row);
+                    await WaitForUiAsync(() => IsActivityRowVisible(row), "Retained history must remain reachable without actions that guess its account.");
+                    AssertActivityActions(row, openFolder: false, cloud: false);
+                }
+                var historyCapture = Path.Combine(outputDirectory, $"activity-row-actions-history-{width}{suffix}.png");
+                await UiSmokeCapture.SaveAsync(RootGrid, historyCapture);
+                await AssertCapturedActivityInkAsync(historyCapture);
+                await File.AppendAllTextAsync(Path.Combine(outputDirectory, "activity-action-assertions.txt"),
+                    $"PASS: {theme} {width}px exact main/custom file rows offer local folder and B2-version actions; folder rows offer only local actions; old-account/untagged history has no guessed target; actions stay inside their row and leave filenames visible.{Environment.NewLine}");
+            }
             AppWindow.Resize(new SizeInt32(1100, 840));
             var transferPreview = ClientPreview.TransferQueue();
             SetPresentation(transferPreview, theme);
@@ -1863,6 +2017,8 @@ public sealed partial class MainWindow : Window
                 throw new InvalidOperationException("The In progress filter must show only live uploads and downloads.");
             await CapturePageAsync("activity", $"activity-transferring{suffix}");
             AssertVisibleActivityRow(_viewModel.ActiveTransfers[0]);
+            AssertActivityActions(_viewModel.ActiveTransfers[0], openFolder: true, cloud: false);
+            AssertActivityActions(_viewModel.ActiveTransfers[1], openFolder: true, cloud: true);
             if (ActivityTransferSpeed.Visibility != Visibility.Visible ||
                 !ActivityTransferSpeed.Text.Contains("MiB/s", StringComparison.Ordinal) ||
                 !ActivityTransferSpeed.Text.Contains("KiB/s", StringComparison.Ordinal) ||
@@ -1903,7 +2059,9 @@ public sealed partial class MainWindow : Window
             if (queueScroller is null || queueScroller.ScrollableHeight <= 0 || queueScroller.VerticalOffset <= 0)
                 throw new InvalidOperationException("The virtualized queue must allow its final displayed item to be reached.");
             AssertVisibleActivityRow(_viewModel.QueuedTransfers[^1]);
-            await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"activity-queue-bottom{suffix}.png"));
+            var queueCapture = Path.Combine(outputDirectory, $"activity-queue-bottom{suffix}.png");
+            await UiSmokeCapture.SaveAsync(RootGrid, queueCapture);
+            await AssertCapturedActivityInkAsync(queueCapture);
             ActivityFilterBox.SelectedIndex = 3;
             if (_viewModel.ActivityRows.Count != transferPreview.Activity.Count || _viewModel.ActivityRows.Any(row => row is TransferItem))
                 throw new InvalidOperationException("History must remain separate from in-progress and queued transfers.");
@@ -1968,7 +2126,9 @@ public sealed partial class MainWindow : Window
                 var activityScroller = FindDescendant<ScrollViewer>(ActivityList);
                 if (activityScroller is null || activityScroller.ScrollableHeight <= 0 || activityScroller.VerticalOffset <= 0)
                     throw new InvalidOperationException("A long activity history must allow the oldest item to be reached.");
-                await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"activity-history-bottom-{width}{suffix}.png"));
+                var bottomCapture = Path.Combine(outputDirectory, $"activity-history-bottom-{width}{suffix}.png");
+                await UiSmokeCapture.SaveAsync(RootGrid, bottomCapture);
+                await AssertCapturedActivityInkAsync(bottomCapture);
                 SetPresentation(ClientPreview.Connected(), theme);
                 MoreWindowsFolders.IsExpanded = true;
                 await CapturePageAsync("backup", $"backup-all-folders-{width}{suffix}");
@@ -2491,6 +2651,8 @@ public sealed partial class MainWindow : Window
                     throw new InvalidOperationException("A nonempty Activity view must render at least one actual filename inside its viewport.");
             }
             await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"{fileName}.png"));
+            if (page == "activity" && _viewModel.HasActivityRows)
+                await AssertCapturedActivityInkAsync(Path.Combine(outputDirectory, $"{fileName}.png"));
         }
     }
 
@@ -2503,6 +2665,49 @@ public sealed partial class MainWindow : Window
             if (FindDescendant<T>(child, predicate) is { } descendant) return descendant;
         }
         return null;
+    }
+
+    private async Task AssertCapturedActivityInkAsync(string path)
+    {
+        var row = _viewModel.ActivityRows.FirstOrDefault(IsActivityRowVisible)
+            ?? throw new InvalidOperationException("The captured Activity view must have a visible row.");
+        var container = (FrameworkElement)ActivityList.ContainerFromItem(row);
+        var label = FindDescendant<TextBlock>(container, item => item.Name == "ActivityFileName")!;
+        var position = label.TransformToVisual(RootGrid).TransformPoint(new global::Windows.Foundation.Point());
+        var scale = RootGrid.XamlRoot.RasterizationScale;
+        var file = await global::Windows.Storage.StorageFile.GetFileFromPathAsync(Path.GetFullPath(path));
+        using var stream = await file.OpenAsync(global::Windows.Storage.FileAccessMode.Read);
+        var decoder = await global::Windows.Graphics.Imaging.BitmapDecoder.CreateAsync(stream);
+        var provider = await decoder.GetPixelDataAsync(global::Windows.Graphics.Imaging.BitmapPixelFormat.Bgra8,
+            global::Windows.Graphics.Imaging.BitmapAlphaMode.Straight, new global::Windows.Graphics.Imaging.BitmapTransform(),
+            global::Windows.Graphics.Imaging.ExifOrientationMode.IgnoreExifOrientation,
+            global::Windows.Graphics.Imaging.ColorManagementMode.DoNotColorManage);
+        var pixels = provider.DetachPixelData();
+        var left = Math.Clamp((int)Math.Floor(position.X * scale), 0, (int)decoder.PixelWidth);
+        var top = Math.Clamp((int)Math.Floor(position.Y * scale), 0, (int)decoder.PixelHeight);
+        var right = Math.Clamp((int)Math.Ceiling((position.X + label.ActualWidth) * scale), left, (int)decoder.PixelWidth);
+        var bottom = Math.Clamp((int)Math.Ceiling((position.Y + label.ActualHeight) * scale), top, (int)decoder.PixelHeight);
+        var lowest = 255;
+        var highest = 0;
+        var opaque = 0;
+        for (var y = top; y < bottom; y++)
+            for (var x = left; x < right; x++)
+            {
+                var index = checked((y * (int)decoder.PixelWidth + x) * 4);
+                if (pixels[index + 3] < 128) continue;
+                opaque++;
+                var tone = (pixels[index] + pixels[index + 1] + pixels[index + 2]) / 3;
+                lowest = Math.Min(lowest, tone);
+                highest = Math.Max(highest, tone);
+            }
+        if (_activityActionValidationPath is not null)
+            await File.AppendAllTextAsync(_activityActionValidationPath,
+                $"PIXELS: {Path.GetFileName(path)}; label={label.Text}; roi={left},{top}-{right},{bottom}; opaque={opaque}; tone={lowest}-{highest}{Environment.NewLine}");
+        // Geometry alone can stay valid while a native virtualized container
+        // loses its render state. Validate text ink in the saved PNG itself,
+        // against either light or dark backgrounds, before accepting it.
+        if (opaque < 16 || highest - lowest < 64)
+            throw new InvalidOperationException("The captured Activity row has layout bounds but its file name was not rendered into the image.");
     }
 
     private bool IsActivityRowVisible(object row)
@@ -2521,6 +2726,34 @@ public sealed partial class MainWindow : Window
     {
         if (!IsActivityRowVisible(row))
             throw new InvalidOperationException($"The Activity row '{row}' must render its filename inside the visible list viewport.");
+    }
+
+    private void AssertActivityActions(object row, bool openFolder, bool cloud)
+    {
+        var rendered = IsActivityRowVisible(row);
+        if (_activityActionValidationPath is not null)
+            File.AppendAllText(_activityActionValidationPath, $"ROW: {row}; visible={rendered}; folder={openFolder}; cloud={cloud}; target={(row as IActivityActionRow)?.Actions.Target}{Environment.NewLine}");
+        AssertVisibleActivityRow(row);
+        var container = (FrameworkElement)ActivityList.ContainerFromItem(row);
+        if (_activityActionValidationPath is not null)
+            File.AppendAllText(_activityActionValidationPath, $"CONTAINER: {container.ActualWidth}x{container.ActualHeight}; filename-width={FindDescendant<TextBlock>(container, item => item.Name == "ActivityFileName")?.ActualWidth}{Environment.NewLine}");
+        foreach (var (name, expected) in new[] { ("ActivityOpenFolder", openFolder), ("ActivityViewCloud", cloud) })
+        {
+            var button = FindDescendant<Button>(container, item => item.Name == name)
+                ?? throw new InvalidOperationException("The Activity row must contain its contextual action buttons.");
+            var position = button.TransformToVisual(container).TransformPoint(new global::Windows.Foundation.Point());
+            if (_activityActionValidationPath is not null)
+                File.AppendAllText(_activityActionValidationPath, $"BUTTON: {name}; expected={expected}; actual={button.Visibility}; size={button.ActualWidth}x{button.ActualHeight}; position={position.X},{position.Y}{Environment.NewLine}");
+            if ((button.Visibility == Visibility.Visible) != expected)
+                throw new InvalidOperationException("Activity actions must reflect the row's exact current backup and cloud identity.");
+            if (!expected) continue;
+            if (button.ActualWidth < 100 || button.ActualHeight < 32 || position.X < 0 || position.Y < 0 ||
+                position.X + button.ActualWidth > container.ActualWidth + 1 || position.Y + button.ActualHeight > container.ActualHeight + 1)
+                throw new InvalidOperationException("Activity actions must stay fully inside the row at narrow and wide window sizes.");
+        }
+        if (FindDescendant<TextBlock>(container, item => item.Name == "ActivityFileName") is not
+            { ActualWidth: > 0, Parent: FrameworkElement { ActualWidth: >= 80 } })
+            throw new InvalidOperationException("Activity actions must leave room for the file name.");
     }
 
     private static void ArrangeTiles(Grid grid, int columns)

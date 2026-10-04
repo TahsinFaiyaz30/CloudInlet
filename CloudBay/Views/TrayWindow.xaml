@@ -23,10 +23,11 @@
                 <Setter Property="Foreground" Value="{ThemeResource AccentTextFillColorPrimaryBrush}" />
             </Style>
             <DataTemplate x:Key="TrayRecentActivityTemplate">
-                <Grid Padding="0,12" ColumnSpacing="16">
+                <Grid Padding="0,12" ColumnSpacing="12" Loaded="ActivityRow_Loaded">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <FontIcon
                         Glyph="{Binding Glyph}"
@@ -42,20 +43,33 @@
                             ToolTipService.ToolTip="{Binding Path}" />
                         <TextBlock
                             Text="{Binding Summary}"
-                            Style="{StaticResource CloudBaySecondaryTextStyle}"
+                            Style="{StaticResource CloudBaySecondaryTextStyle}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
                             ToolTipService.ToolTip="{Binding TimeFullText}" />
                         <TextBlock
                             Text="{Binding Detail}"
                             Visibility="{Binding DetailVisibility}"
                             Style="{StaticResource CloudBaySecondaryTextStyle}" />
                     </StackPanel>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+                        <Button x:Name="TrayActivityOpenFolder" Width="32" Height="32" Padding="6" Style="{StaticResource SubtleButtonStyle}"
+                                Visibility="{Binding Actions.OpenFolderVisibility}" ToolTipService.ToolTip="{Binding Actions.OpenFolderToolTip}"
+                                AutomationProperties.Name="Open activity folder" Click="ActivityOpenFolder_Click">
+                            <FontIcon Glyph="&#xE8B7;" FontSize="16" />
+                        </Button>
+                        <Button x:Name="TrayActivityViewCloud" Width="32" Height="32" Padding="6" Style="{StaticResource SubtleButtonStyle}"
+                                Visibility="{Binding Actions.CloudVisibility}" ToolTipService.ToolTip="{Binding Actions.CloudToolTip}"
+                                AutomationProperties.Name="View activity file versions in Backblaze B2" Click="ActivityViewCloud_Click">
+                            <FontIcon Glyph="&#xE753;" FontSize="16" />
+                        </Button>
+                    </StackPanel>
                 </Grid>
             </DataTemplate>
             <DataTemplate x:Key="TrayTransferTemplate">
-                <Grid Padding="0,8" ColumnSpacing="12">
+                <Grid Padding="0,8" ColumnSpacing="12" Loaded="ActivityRow_Loaded">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <FontIcon Glyph="{Binding Glyph}" FontSize="18" Margin="0,2,0,0" VerticalAlignment="Top"
                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
@@ -64,11 +78,24 @@
                                    TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Location}" />
                         <TextBlock Text="{Binding Location}" Style="{StaticResource CloudBaySecondaryTextStyle}"
                                    TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" ToolTipService.ToolTip="{Binding Location}" />
-                        <TextBlock Text="{Binding Summary}" Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                        <TextBlock Text="{Binding Summary}" Style="{StaticResource CloudBaySecondaryTextStyle}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                                   ToolTipService.ToolTip="{Binding Summary}" />
                         <TextBlock x:Name="TrayFileSpeed" Text="{Binding SpeedText}" Visibility="{Binding SpeedVisibility}"
                                    Style="{StaticResource CloudBaySecondaryTextStyle}" />
                         <ProgressBar Value="{Binding Progress}" Maximum="100" IsIndeterminate="{Binding IsIndeterminate}"
                                      Visibility="{Binding ProgressVisibility}" AutomationProperties.Name="{Binding ProgressAccessibleName}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+                        <Button x:Name="TrayActivityOpenFolder" Width="32" Height="32" Padding="6" Style="{StaticResource SubtleButtonStyle}"
+                                Visibility="{Binding Actions.OpenFolderVisibility}" ToolTipService.ToolTip="{Binding Actions.OpenFolderToolTip}"
+                                AutomationProperties.Name="Open activity folder" Click="ActivityOpenFolder_Click">
+                            <FontIcon Glyph="&#xE8B7;" FontSize="16" />
+                        </Button>
+                        <Button x:Name="TrayActivityViewCloud" Width="32" Height="32" Padding="6" Style="{StaticResource SubtleButtonStyle}"
+                                Visibility="{Binding Actions.CloudVisibility}" ToolTipService.ToolTip="{Binding Actions.CloudToolTip}"
+                                AutomationProperties.Name="View activity file versions in Backblaze B2" Click="ActivityViewCloud_Click">
+                            <FontIcon Glyph="&#xE753;" FontSize="16" />
+                        </Button>
                     </StackPanel>
                 </Grid>
             </DataTemplate>
