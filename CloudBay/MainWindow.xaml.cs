@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using CloudBay.Application;
 using CloudBay.Core;
+using CloudBay.Core.Sync;
 using CloudBay.ViewModels;
 using CloudBay.Views;
 using CloudBay.Windows;
@@ -33,6 +34,19 @@ public sealed partial class MainWindow : Window
     private readonly Dictionary<string, string> _backupMetadataPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _backupDefaultPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, SettingsCard> _backupCards = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ProgressRing> _backupRings = new(StringComparer.OrdinalIgnoreCase);
+    private sealed record BackupUiOperation(bool Enabling, string Status);
+    private readonly Dictionary<string, BackupUiOperation> _backupJobs = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _backupResultWarnings = new(StringComparer.OrdinalIgnoreCase);
+    private const string CustomAddJobKey = "custom:add";
+    private static string CustomStopJobKey(string name) => "custom:stop:" + name;
+    private readonly SemaphoreSlim _modalQueue = new(1, 1);
+    private readonly CancellationTokenSource _backupUiLifetime = new();
+    private ContentDialog? _activeDialog;
+    private int _modalUsers, _cloudDiscoveryUsers;
+    private bool _backupUiDisposed;
+    private string _cloudImportRevision = "";
+    private int _cloudImportGeneration;
     private static readonly HashSet<string> CommonBackups = new(StringComparer.OrdinalIgnoreCase) { "Desktop", "Documents", "Pictures", "Downloads" };
     private bool _updatingCatalog;
     private AppSettings DisplaySettings => _viewModel.Preview?.Settings ?? _controller.Settings;
@@ -44,6 +58,8 @@ public sealed partial class MainWindow : Window
     private string _protectedFoldersRevision = "";
     private bool _refreshingFileScopes;
     private bool _busy;
+    private bool _importInProgress;
+    private string _importStatus = "";
     private bool _refreshingBackups;
     private bool _loadingPreferences;
     private bool _closed;
@@ -118,6 +134,9 @@ public sealed partial class MainWindow : Window
         Closed += (_, _) =>
         {
             _closed = true;
+            _backupUiLifetime.Cancel();
+            _activeDialog?.Hide();
+            DisposeBackupUiWhenIdle();
             _initialNavigationReady.TrySetCanceled();
             _controller.Changed -= Controller_Changed;
             _uiSettings.TextScaleFactorChanged -= TextScaleFactor_Changed;
@@ -500,6 +519,7 @@ public sealed partial class MainWindow : Window
         ArrangeTiles(BackupRows, backupColumns);
         ArrangeTiles(MoreBackupRows, backupColumns);
         ArrangeTiles(CustomBackupRows, backupWidth >= 760 * _uiSettings.TextScaleFactor ? 2 : 1);
+        ArrangeTiles(CloudImportRows, backupWidth >= 760 * _uiSettings.TextScaleFactor ? 2 : 1);
         UpdateOverviewLayout();
         if (_compactLayout == compact) return;
         _compactLayout = compact;
@@ -540,13 +560,17 @@ public sealed partial class MainWindow : Window
             var toggle = new ToggleSwitch { Tag = name, OnContent = "", OffContent = "", Width = 44, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudBayToggleStyle"] };
             AutomationProperties.SetName(toggle, $"Back up {name}");
             toggle.Toggled += Backup_Toggled;
+            var pendingRing = new ProgressRing { Width = 16, Height = 16, IsActive = false, Visibility = Visibility.Collapsed };
+            var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, VerticalAlignment = VerticalAlignment.Center };
+            actions.Children.Add(pendingRing);
+            actions.Children.Add(toggle);
             var folderIcon = GetKnownFolderVisual(name, IconPixels(40));
             var card = new SettingsCard
             {
                 Header = new TextBlock { Text = name, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["BodyStrongTextBlockStyle"], TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis },
                 Description = path,
                 HeaderIcon = folderIcon is not null ? new ImageIcon { Source = folderIcon, Width = 40, Height = 40 } : new FontIcon { Glyph = glyph, FontSize = 32 },
-                Content = toggle,
+                Content = actions,
                 MinHeight = 112,
                 CornerRadius = new CornerRadius(4),
                 Padding = new Thickness(20)
@@ -558,6 +582,7 @@ public sealed partial class MainWindow : Window
             _backupCards.Add(name, card);
             _backupSwitches.Add(name, toggle);
             _backupPaths.Add(name, path);
+            _backupRings.Add(name, pendingRing);
         }
     }
 
@@ -583,11 +608,18 @@ public sealed partial class MainWindow : Window
 
     private void RefreshBackups(bool refreshMetadata = false)
     {
-        if (refreshMetadata) RefreshBackupMetadata();
+        if (refreshMetadata)
+        {
+            RefreshBackupMetadata();
+            _cloudImportRevision = "";
+        }
         var settings = DisplaySettings;
         var revision = $"{settings.RootPath}|{settings.IsConfigured}|{_busy}|{_backupMetadataRevision}|" +
             string.Join('|', settings.Backups.Select(folder => $"{folder.Name}:{folder.DestinationPath}")) + "|" +
-            string.Join('|', _viewModel.Preview?.WindowsFolderPaths?.Select(folder => $"{folder.Key}:{folder.Value}") ?? []);
+            string.Join('|', _viewModel.Preview?.WindowsFolderPaths?.Select(folder => $"{folder.Key}:{folder.Value}") ?? []) + "|" +
+            string.Join('|', _backupJobs.Select(job => $"{job.Key}:{job.Value.Enabling}:{job.Value.Status}")) + "|" +
+            string.Join('|', _backupResultWarnings.Select(item => $"{item.Key}:{item.Value}"));
+        RefreshCloudImportSources();
         if (_backupPresentationRevision == revision) return;
         _backupPresentationRevision = revision;
         _refreshingBackups = true;
@@ -616,13 +648,19 @@ public sealed partial class MainWindow : Window
                 var externalMapping = backup is null && notice is null && !SameFolderPath(currentPath, _backupDefaultPaths[name]);
                 if (changedMapping) notice = "Windows folder location changed. CloudBay will not overwrite another app's mapping. Restore this folder to its CloudBay location before stopping backup.";
                 toggle.IsOn = ownsMapping;
-                toggle.IsEnabled = settings.IsConfigured && !_busy && notice is null;
+                var pending = _backupJobs.GetValueOrDefault(name);
+                toggle.IsEnabled = settings.IsConfigured && !_busy && pending is null && notice is null;
+                _backupRings[name].Visibility = pending is null ? Visibility.Collapsed : Visibility.Visible;
+                _backupRings[name].IsActive = pending is not null;
                 var caption = _backupPaths[name];
-                caption.Text = changedMapping ? "Windows folder location changed" : externalMapping ? "Review current Windows location" : notice is not null ? "Unavailable for backup" : "";
-                caption.Visibility = notice is null && !externalMapping ? Visibility.Collapsed : Visibility.Visible;
-                caption.Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudBayAttentionTextStyle"];
+                var resultWarning = _backupResultWarnings.GetValueOrDefault(name);
+                caption.Text = pending?.Status ?? (changedMapping ? "Windows folder location changed" : externalMapping ? "Review current Windows location" : notice is not null ? "Unavailable for backup" : resultWarning ?? "");
+                caption.Visibility = caption.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+                caption.Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources[pending is null ? "CloudBayAttentionTextStyle" : "CloudBaySecondaryTextStyle"];
                 var tooltip = currentPath + (notice is not null ? Environment.NewLine + notice : externalMapping
                     ? Environment.NewLine + "This Windows folder is redirected. Review its current files and new CloudBay location before enabling backup." : "");
+                if (pending is not null) tooltip += Environment.NewLine + pending.Status;
+                if (resultWarning is not null) tooltip += Environment.NewLine + resultWarning;
                 ToolTipService.SetToolTip(card, tooltip);
                 AutomationProperties.SetHelpText(toggle, tooltip);
                 if (GetKnownFolderVisual(name, IconPixels(40)) is { } folderIcon)
@@ -633,19 +671,96 @@ public sealed partial class MainWindow : Window
         UpdateResponsiveLayout();
     }
 
+    private void RefreshCloudImportSources()
+    {
+        foreach (var card in CloudImportRows.Children.OfType<SettingsCard>()) card.IsEnabled = DisplaySettings.IsConfigured && !_busy && !_importInProgress;
+        var settings = DisplaySettings;
+        var revision = $"{settings.IsConfigured}|{settings.RootPath}|{_viewModel.Preview is not null}|" +
+            string.Join('|', settings.CustomBackups.Select(folder => folder.SourcePath));
+        if (revision == _cloudImportRevision) return;
+        _cloudImportRevision = revision;
+        var generation = ++_cloudImportGeneration;
+        CloudImportRows.Children.Clear();
+        CloudImportSection.Visibility = Visibility.Collapsed;
+        if (!settings.IsConfigured) return;
+        if (_viewModel.Preview is not null)
+        {
+            // Presentation fixtures never inspect real accounts or cloud folders.
+            RenderCloudImportSources([
+                new("synthetic-personal", "OneDrive", "Microsoft OneDrive", @"C:\Users\Example\OneDrive", "Existing Windows folder"),
+                new("synthetic-work", "OneDrive · Work", "Microsoft OneDrive", @"D:\Personal files\OneDrive - Work", "Registered cloud folder")
+            ]);
+            return;
+        }
+        _ = DiscoverCloudImportSourcesAsync(settings, generation);
+    }
+
+    private async Task DiscoverCloudImportSourcesAsync(AppSettings settings, int generation)
+    {
+        _cloudDiscoveryUsers++;
+        var discovery = Task.Run(() => ImportSourceDiscovery.FindCandidates(settings));
+        // Discovery may continue after a timeout on an unavailable mounted drive.
+        // Observe its eventual error and retain manual browsing as the fallback.
+        _ = discovery.ContinueWith(task => { _ = task.Exception; }, CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        try
+        {
+            var candidates = await discovery.WaitAsync(TimeSpan.FromSeconds(8), _backupUiLifetime.Token);
+            if (_closed || generation != _cloudImportGeneration) return;
+            RenderCloudImportSources(candidates);
+        }
+        catch (Exception)
+        {
+            // This optional shortcut must never prevent the Windows folder
+            // switches or the explicit import chooser from being used.
+        }
+        finally { _cloudDiscoveryUsers--; DisposeBackupUiWhenIdle(); }
+    }
+
+    private void RenderCloudImportSources(IReadOnlyList<ImportSourceCandidate> candidates)
+    {
+        CloudImportRows.Children.Clear();
+        foreach (var candidate in candidates)
+        {
+            var source = candidate;
+            var card = new SettingsCard
+            {
+                Header = candidate.DisplayName,
+                Description = candidate.ProviderName,
+                HeaderIcon = new FontIcon { Glyph = "\uE753", FontSize = 28 },
+                IsClickEnabled = true,
+                IsEnabled = DisplaySettings.IsConfigured && !_busy && !_importInProgress,
+                MinHeight = 96,
+                Padding = new Thickness(20),
+                Tag = candidate.Path
+            };
+            AutomationProperties.SetName(card, $"Import from {candidate.DisplayName}");
+            AutomationProperties.SetHelpText(card, candidate.Path + ". Choose this whole cloud folder, then review what to copy into CloudBay.");
+            ToolTipService.SetToolTip(card, candidate.Path);
+            card.Click += async (_, _) => await OpenSourceImportAsync(source.Path);
+            CloudImportRows.Children.Add(card);
+        }
+        CloudImportSection.Visibility = candidates.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        UpdateResponsiveLayout();
+    }
+
     private void RefreshCustomBackups()
     {
         var settings = DisplaySettings;
-        var revision = string.Join("|", settings.CustomBackups.Select(folder => $"{folder.Name}:{folder.SourcePath}:{folder.Prefix}")) + $"|{_busy}";
-        AddCustomBackupButton.IsEnabled = settings.IsConfigured && !_busy;
-        ImportFilesCard.IsEnabled = settings.IsConfigured && !_busy;
+        var revision = string.Join("|", settings.CustomBackups.Select(folder => $"{folder.Name}:{folder.SourcePath}:{folder.Prefix}")) + $"|{_busy}|" +
+            string.Join('|', _backupJobs.Where(job => job.Key.StartsWith("custom:", StringComparison.Ordinal)).Select(job => $"{job.Key}:{job.Value.Status}"));
+        AddCustomBackupButton.IsEnabled = settings.IsConfigured && !_busy && !_backupJobs.ContainsKey(CustomAddJobKey);
+        CustomBackupExpander.Description = _backupJobs.GetValueOrDefault(CustomAddJobKey)?.Status ?? "Back up a personal folder from its current location.";
+        ImportFilesCard.IsEnabled = settings.IsConfigured && !_busy && !_importInProgress;
         CustomBackupSection.Visibility = settings.CustomBackups.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         if (_customBackupRevision == revision) return;
         _customBackupRevision = revision;
         CustomBackupRows.Children.Clear();
         foreach (var folder in settings.CustomBackups)
         {
+            var pending = _backupJobs.GetValueOrDefault(CustomStopJobKey(folder.Name));
             var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            if (pending is not null) actions.Children.Add(new ProgressRing { Width = 16, Height = 16, IsActive = true });
             var open = new Button { Content = "Open folder", Tag = folder.SourcePath };
             open.Click += (_, _) =>
             {
@@ -654,11 +769,11 @@ public sealed partial class MainWindow : Window
                 catch (Exception error) { ShowError(error); }
             };
             actions.Children.Add(open);
-            var stop = new MenuFlyoutItem { Text = "Stop backup", Tag = folder.Name, IsEnabled = !_busy, Icon = new FontIcon { Glyph = "\uE711" } };
+            var stop = new MenuFlyoutItem { Text = "Stop backup", Tag = folder.Name, IsEnabled = !_busy && pending is null, Icon = new FontIcon { Glyph = "\uE711" } };
             stop.Click += RemoveCustomBackup_Click;
             var menu = new MenuFlyout();
             menu.Items.Add(stop);
-            var more = new Button { Content = new FontIcon { Glyph = "\uE712" }, Flyout = menu, IsEnabled = !_busy };
+            var more = new Button { Content = new FontIcon { Glyph = "\uE712" }, Flyout = menu, IsEnabled = !_busy && pending is null };
             AutomationProperties.SetName(more, $"More options for {folder.Name}");
             ToolTipService.SetToolTip(more, "More options");
             actions.Children.Add(more);
@@ -668,11 +783,12 @@ public sealed partial class MainWindow : Window
                 HeaderIcon = GetFolderVisual(folder.SourcePath, IconPixels(40)) is { } folderIcon
                     ? new ImageIcon { Source = folderIcon, Width = 40, Height = 40 } : new FontIcon { Glyph = "\uE8B7" },
                 Tag = folder.SourcePath,
+                Description = pending is null ? string.Empty : (object)SourceImportDialog.Text(pending.Status, true),
                 Content = actions,
                 MinHeight = 112,
                 Padding = new Thickness(20)
             });
-            ToolTipService.SetToolTip(CustomBackupRows.Children[^1], folder.SourcePath);
+            ToolTipService.SetToolTip(CustomBackupRows.Children[^1], folder.SourcePath + (pending is null ? "" : Environment.NewLine + pending.Status));
             ((SettingsCard)CustomBackupRows.Children[^1]).Resources["SettingsCardHeaderIconMaxSize"] = 40d;
         }
         UpdateResponsiveLayout();
@@ -793,9 +909,9 @@ public sealed partial class MainWindow : Window
     private static extern uint GetDpiForWindow(nint window);
 
     private async void ChooseCustomBackup_Click(object sender, RoutedEventArgs args) =>
-        await RunAsync("Choose a personal folder to protect…", async () =>
+        await RunFolderJobAsync(CustomAddJobKey, true, "Choosing a personal folder…", async token =>
         {
-            var folder = await DesktopPickers.PickFolderAsync(WinRT.Interop.WindowNative.GetWindowHandle(this), "Choose backup folder");
+            var folder = await DesktopPickers.PickFolderAsync(WinRT.Interop.WindowNative.GetWindowHandle(this), "Choose backup folder", token);
             if (folder is not null && !_closed) CustomBackupSourceBox.Text = folder;
         });
 
@@ -852,25 +968,32 @@ public sealed partial class MainWindow : Window
     }
 
     private async void AddCustomBackup_Click(object sender, RoutedEventArgs args) =>
-        await RunAsync("Setting up folder backup…", async () =>
+        await RunFolderJobAsync(CustomAddJobKey, true, "Preparing backup; starts when ready…", async token =>
         {
             var source = CustomBackupSourceBox.Text.Trim();
             if (source.Length == 0) throw new InvalidOperationException("Choose the personal folder you want to back up.");
-            var name = CustomBackupNameBox.Text.Trim();
+            var submittedName = CustomBackupNameBox.Text.Trim();
+            var name = submittedName;
             if (name.Length == 0) name = new DirectoryInfo(source).Name;
             if (name.Length == 0 || name.Length > 64 || name is "." or ".." || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name.EndsWith('.') || name.EndsWith(' '))
                 throw new InvalidOperationException("Choose a backup name up to 64 characters without slashes or Windows filename symbols.");
-            await _controller.AddCustomBackupAsync(source, name);
-            CustomBackupSourceBox.Text = CustomBackupNameBox.Text = "";
-            ShowInfo($"{name} is now backed up. Its folder remains in its current location.");
+            await _controller.AddCustomBackupAsync(source, name, token);
+            if (!_closed)
+            {
+                // The user can prepare the next folder while this one waits.
+                // Completing this job must not erase a newer form draft.
+                if (CustomBackupSourceBox.Text.Trim() == source && CustomBackupNameBox.Text.Trim() == submittedName)
+                    CustomBackupSourceBox.Text = CustomBackupNameBox.Text = "";
+                ShowInfo($"{name} is now backed up. Its folder remains in its current location.");
+            }
         });
 
     private async void RemoveCustomBackup_Click(object sender, RoutedEventArgs args)
     {
-        if (_busy || sender is not FrameworkElement { Tag: string name }) return;
+        if (_busy || _closed || _viewModel.Preview is not null || sender is not FrameworkElement { Tag: string name } || _backupJobs.ContainsKey(CustomStopJobKey(name))) return;
         var folder = _controller.Settings.CustomBackups.SingleOrDefault(item => item.Name == name);
         if (folder is null) return;
-        await RunAsync($"Preparing {name} before stopping backup…", async () =>
+        await RunFolderJobAsync(CustomStopJobKey(name), false, "Waiting for stop review…", async token =>
         {
             var dialog = new ContentDialog
             {
@@ -882,66 +1005,225 @@ public sealed partial class MainWindow : Window
                 CloseButtonText = "Cancel",
                 DefaultButton = ContentDialogButton.Close
             };
-            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
-            await _controller.RemoveCustomBackupAsync(name);
-            ShowInfo($"{name} backup stopped. Your local files and B2 files were retained.");
+            if (await ShowModalAsync(dialog, () => SetFolderBackupStatus(CustomStopJobKey(name), "Reviewing the stop choice…")) != ContentDialogResult.Primary) return;
+            token.ThrowIfCancellationRequested();
+            SetFolderBackupStatus(CustomStopJobKey(name), "Preparing local files; starts when ready…");
+            await _controller.RemoveCustomBackupAsync(name, token);
+            if (!_closed) ShowInfo($"{name} backup stopped. Your local files and B2 files were retained.");
         });
+    }
+
+    private async Task RunFolderJobAsync(string key, bool enabling, string status, Func<CancellationToken, Task> operation)
+    {
+        if (_closed || _busy || _viewModel.Preview is not null || _backupJobs.ContainsKey(key)) return;
+        _backupJobs.Add(key, new(enabling, status));
+        RefreshBackups();
+        RefreshCustomBackups();
+        UpdateBackupBusyFooter();
+        try { await operation(_backupUiLifetime.Token); }
+        catch (OperationCanceledException) { }
+        catch (Exception error) { if (!_closed) ShowError(error); }
+        finally
+        {
+            _backupJobs.Remove(key);
+            if (!_closed)
+            {
+                RefreshBackups(refreshMetadata: true);
+                RefreshCustomBackups();
+                UpdateBackupBusyFooter();
+                Refresh();
+            }
+            DisposeBackupUiWhenIdle();
+        }
     }
 
     private async void Backup_Toggled(object sender, RoutedEventArgs args)
     {
-        if (_refreshingBackups || _busy || sender is not ToggleSwitch toggle) return;
+        if (_refreshingBackups || _busy || _viewModel.Preview is not null || sender is not ToggleSwitch toggle) return;
         var name = (string)toggle.Tag;
-        var enabled = toggle.IsOn;
-        await RunAsync(enabled ? $"Reviewing {name} backup…" : $"Restoring {name} to its original location…", async () =>
+        if (_backupJobs.ContainsKey(name)) return;
+        var enabling = toggle.IsOn;
+        var job = new BackupUiOperation(enabling, "Waiting for choices…");
+        _backupResultWarnings.Remove(name);
+        _backupJobs.Add(name, job);
+        RefreshBackups();
+        UpdateBackupBusyFooter();
+        var token = _backupUiLifetime.Token;
+        try
         {
-            if (!enabled)
+            // Only this folder is busy. Other folders can be selected while the
+            // controller serializes reviewed file transfers in the background.
+            var setup = new BackupSetupDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this), name, stopping: !enabling)
+            { XamlRoot = RootGrid.XamlRoot, RequestedTheme = RootGrid.RequestedTheme };
+            if (await ShowModalAsync(setup, () => SetFolderBackupStatus(name, "Choosing files and location…")) != ContentDialogResult.Primary) return;
+            token.ThrowIfCancellationRequested();
+            SetFolderBackupStatus(name, "Queued for review…");
+            if (enabling)
             {
-                await _controller.SetBackupAsync(name, false);
-                ShowInfo($"{name} backup is off.");
-                return;
-            }
-            string? additionalSource = null;
-            while (true)
-            {
-                var review = await _controller.PreviewBackupAsync(name, additionalSource);
+                var review = await _controller.PreviewBackupAsync(name, setup.SourcePath, setup.TransferMode, setup.IncludeCurrentFiles, token);
+                token.ThrowIfCancellationRequested();
                 var dialog = new BackupReviewDialog(review) { XamlRoot = RootGrid.XamlRoot, RequestedTheme = RootGrid.RequestedTheme };
-                var result = await dialog.ShowAsync();
-                if (dialog.RemoveSourceRequested) { additionalSource = null; continue; }
-                if (dialog.AddSourceRequested)
+                SetFolderBackupStatus(name, "Waiting for review…");
+                if (await ShowModalAsync(dialog, () => SetFolderBackupStatus(name, "Reviewing the backup choice…")) != ContentDialogResult.Primary) return;
+                SetFolderBackupStatus(name, "Queued to turn backup on…");
+                var warning = await _controller.EnableReviewedBackupAsync(review, token, BackupProgress(name));
+                if (!_closed)
                 {
-                    var chooser = new SourceImportDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this), chooseFolderOnly: true)
-                    { XamlRoot = RootGrid.XamlRoot, RequestedTheme = RootGrid.RequestedTheme };
-                    if (await chooser.ShowAsync() == ContentDialogResult.Primary && chooser.SelectedFolderPath is { } path)
-                        additionalSource = path;
-                    continue;
+                    if (warning is not null)
+                    {
+                        _backupResultWarnings[name] = warning;
+                        ShowWarning($"{name} backup is on", warning);
+                    }
+                    else ShowInfo($"{name} backup is on. Windows now opens it in CloudBay.");
                 }
-                if (result != ContentDialogResult.Primary) return;
-                FooterStatus.Text = $"Copying and verifying {name} before changing its Windows location…";
-                await _controller.EnableReviewedBackupAsync(review);
-                ShowInfo($"{name} backup is on. Windows now opens it in CloudBay.");
-                return;
             }
-        });
-        RefreshBackups(refreshMetadata: true);
+            else
+            {
+                var review = await _controller.PreviewStopBackupAsync(name, setup.DestinationPath, setup.TransferMode, token);
+                token.ThrowIfCancellationRequested();
+                var dialog = new BackupReviewDialog(review, setup.FreeLocalSpace) { XamlRoot = RootGrid.XamlRoot, RequestedTheme = RootGrid.RequestedTheme };
+                SetFolderBackupStatus(name, "Waiting for review…");
+                if (await ShowModalAsync(dialog, () => SetFolderBackupStatus(name, "Reviewing the stop choice…")) != ContentDialogResult.Primary) return;
+                SetFolderBackupStatus(name, "Queued to turn backup off…");
+                var warning = await _controller.DisableReviewedBackupAsync(review, token, BackupProgress(name), setup.FreeLocalSpace);
+                if (!_closed)
+                {
+                    if (warning is not null)
+                    {
+                        _backupResultWarnings[name] = warning;
+                        ShowWarning($"{name} backup is off", warning);
+                    }
+                    else ShowInfo($"{name} backup is off. Windows now uses the reviewed location.");
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception error) { if (!_closed) ShowError(error); }
+        finally
+        {
+            _backupJobs.Remove(name);
+            if (!_closed)
+            {
+                RefreshBackups(refreshMetadata: true);
+                UpdateBackupBusyFooter();
+                Refresh();
+            }
+            DisposeBackupUiWhenIdle();
+        }
     }
 
-    private async void ImportFiles_Click(object sender, RoutedEventArgs args) =>
-        await RunAsync("Reviewing files to import…", async () =>
+    private IProgress<string> BackupProgress(string name) => new Progress<string>(status =>
+        DispatcherQueue.TryEnqueue(() => { if (!_closed && _backupJobs.ContainsKey(name)) SetFolderBackupStatus(name, status); }));
+
+    private void SetFolderBackupStatus(string name, string status)
+    {
+        if (!_backupJobs.TryGetValue(name, out var job)) return;
+        _backupJobs[name] = job with { Status = status };
+        RefreshBackups();
+        if (name.StartsWith("custom:", StringComparison.Ordinal)) RefreshCustomBackups();
+        UpdateBackupBusyFooter();
+    }
+
+    private void UpdateBackupBusyFooter()
+    {
+        if (_closed) return;
+        ConnectButton.IsEnabled = DisconnectButton.IsEnabled = !_busy && _backupJobs.Count == 0 && !_importInProgress;
+        if (_busy) return;
+        var folders = _backupJobs.Count;
+        var pending = folders + (_importInProgress ? 1 : 0);
+        BusyFooter.Visibility = pending > 0 ? Visibility.Visible : Visibility.Collapsed;
+        BusyRing.IsActive = pending > 0;
+        BusyRing.Visibility = pending > 0 ? Visibility.Visible : Visibility.Collapsed;
+        FooterStatus.Text = _importInProgress
+            ? folders == 0 ? _importStatus + " You can choose another Windows folder." :
+                $"1 import and {folders:N0} folder {(folders == 1 ? "change" : "changes")} in progress. File transfers start in turn."
+            : pending == 1 ? "1 folder change in progress. You can choose another folder." :
+                pending > 1 ? $"{pending:N0} folder changes in progress. Choices and file transfers are queued safely." : "";
+    }
+
+    private async Task<ContentDialogResult> ShowModalAsync(ContentDialog dialog, Action? opening = null)
+    {
+        if (_closed) throw new OperationCanceledException();
+        _modalUsers++;
+        var entered = false;
+        try
         {
-            var dialog = new SourceImportDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this))
+            await _modalQueue.WaitAsync(_backupUiLifetime.Token);
+            entered = true;
+            _backupUiLifetime.Token.ThrowIfCancellationRequested();
+            _activeDialog = dialog;
+            opening?.Invoke();
+            return await dialog.ShowAsync();
+        }
+        finally
+        {
+            if (entered) { _activeDialog = null; _modalQueue.Release(); }
+            _modalUsers--;
+            DisposeBackupUiWhenIdle();
+        }
+    }
+
+    private void DisposeBackupUiWhenIdle()
+    {
+        if (!_closed || _backupUiDisposed || _backupJobs.Count > 0 || _importInProgress || _modalUsers > 0 || _cloudDiscoveryUsers > 0) return;
+        _backupUiDisposed = true;
+        _backupUiLifetime.Dispose();
+        _modalQueue.Dispose();
+    }
+
+    private async void ImportFiles_Click(object sender, RoutedEventArgs args) => await OpenSourceImportAsync();
+
+    private async Task OpenSourceImportAsync(string? sourcePath = null)
+    {
+        if (_closed || _busy || _importInProgress || _viewModel.Preview is not null) return;
+        _importInProgress = true;
+        _importStatus = "Waiting for import choices.";
+        RefreshBackups();
+        RefreshCustomBackups();
+        UpdateBackupBusyFooter();
+        var token = _backupUiLifetime.Token;
+        try
+        {
+            var dialog = new SourceImportDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this), initialSourcePath: sourcePath)
             { XamlRoot = RootGrid.XamlRoot, RequestedTheme = RootGrid.RequestedTheme };
-            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
-            FooterStatus.Text = "Importing and verifying your files…";
-            if (dialog.ResumeCloudId is { } id) await _controller.ResumeCloudImportAsync(id);
-            else if (dialog.CloudPlan is { } cloud) await _controller.ImportCloudAsync(cloud);
-            else if (dialog.FolderPlan is { } folder) await _controller.ImportFolderAsync(folder);
+            if (await ShowModalAsync(dialog, () =>
+            {
+                _importStatus = "Reviewing files to import.";
+                UpdateBackupBusyFooter();
+            }) != ContentDialogResult.Primary) return;
+            token.ThrowIfCancellationRequested();
+            _importStatus = "Import in progress; transfers start when ready.";
+            UpdateBackupBusyFooter();
+            if (dialog.ResumeCloudId is { } id) await _controller.ResumeCloudImportAsync(id, token);
+            else if (dialog.CloudPlan is { } cloud) await _controller.ImportCloudAsync(cloud, token);
+            else if (dialog.FolderPlan is { } folder) await _controller.ImportFolderAsync(folder, token);
             else return;
-            ShowInfo("Import completed. The original source files were retained.");
-        });
+            if (!_closed) ShowInfo("Import completed. The original source files were retained.");
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception error) { if (!_closed) ShowError(error); }
+        finally
+        {
+            _importInProgress = false;
+            _importStatus = "";
+            if (!_closed)
+            {
+                RefreshBackups();
+                RefreshCustomBackups();
+                UpdateBackupBusyFooter();
+                Refresh();
+            }
+            DisposeBackupUiWhenIdle();
+        }
+    }
 
     private async void Connect_Click(object sender, RoutedEventArgs args)
     {
+        if (_backupJobs.Count > 0 || _importInProgress)
+        {
+            ShowInfo("Finish or cancel the pending import and folder backup changes before updating this connection.");
+            return;
+        }
         await RunAsync("Connecting securely to Backblaze B2…", async () =>
         {
             if (string.IsNullOrWhiteSpace(ApplicationKeyBox.Password)) throw new InvalidOperationException("Enter your B2 application key to connect.");
@@ -1046,6 +1328,11 @@ public sealed partial class MainWindow : Window
     private async void Disconnect_Click(object sender, RoutedEventArgs args)
     {
         if (_busy) return;
+        if (_backupJobs.Count > 0 || _importInProgress)
+        {
+            ShowInfo("Finish or cancel the pending import and folder backup changes before disconnecting this account.");
+            return;
+        }
         await RunAsync("Preparing your files before disconnecting…", async () =>
         {
             var dialog = new ContentDialog
@@ -1058,7 +1345,7 @@ public sealed partial class MainWindow : Window
                 CloseButtonText = "Cancel",
                 DefaultButton = ContentDialogButton.Close
             };
-            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+            if (await ShowModalAsync(dialog) != ContentDialogResult.Primary) return;
             await _controller.DisconnectAsync();
             ApplicationKeyBox.Password = "";
             LoadSettings(reloadAccount: true, reloadPreferences: true);
@@ -1258,7 +1545,7 @@ public sealed partial class MainWindow : Window
                 DefaultButton = ContentDialogButton.Close,
                 RequestedTheme = RootGrid.RequestedTheme
             };
-            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+            if (await ShowModalAsync(dialog) != ContentDialogResult.Primary) return;
             await _controller.RestoreVersionAsync(version.File);
             ShowInfo("The selected version was restored.");
         });
@@ -1289,7 +1576,7 @@ public sealed partial class MainWindow : Window
                 CloseButtonText = "Keep paused",
                 DefaultButton = ContentDialogButton.Close
             };
-            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+            if (await ShowModalAsync(dialog) != ContentDialogResult.Primary) return;
             // Recheck after the dialog: a new scan may replace the pending set.
             if (_controller.Snapshot.Pending != count || !_controller.Snapshot.Message.Equals(snapshot.Message, StringComparison.Ordinal))
                 throw new InvalidOperationException("The pending deletions changed. Review them again before approving.");
@@ -1330,6 +1617,7 @@ public sealed partial class MainWindow : Window
             if (!_closed)
             {
                 SetBusy(false, "CloudBay continues working in the background");
+                UpdateBackupBusyFooter();
                 Refresh();
                 RestoreVersionButton.IsEnabled = VersionsList.SelectedItem is VersionItem { File.Action: "upload" };
             }
@@ -1338,6 +1626,7 @@ public sealed partial class MainWindow : Window
 
     private void SetBusy(bool busy, string message)
     {
+        _busy = busy;
         BusyFooter.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         BusyRing.IsActive = busy;
         BusyRing.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
@@ -1347,6 +1636,7 @@ public sealed partial class MainWindow : Window
         SyncNowButton.IsEnabled = DashboardPauseButton.IsEnabled = !busy && _controller.Settings.IsConfigured;
         RefreshBackups();
         RefreshCustomBackups();
+        UpdateBackupBusyFooter();
     }
 
 
@@ -1356,7 +1646,8 @@ public sealed partial class MainWindow : Window
         CatalogDialog.XamlRoot = RootGrid.XamlRoot;
         CatalogDialog.RequestedTheme = RootGrid.RequestedTheme;
         UpdateCatalog(resetCategories: true);
-        await CatalogDialog.ShowAsync();
+        try { await ShowModalAsync(CatalogDialog); }
+        catch (OperationCanceledException) { }
     }
 
     private void CatalogFilter_Changed(object sender, SelectionChangedEventArgs args)
@@ -1414,6 +1705,16 @@ public sealed partial class MainWindow : Window
         StatusInfoBar.Title = "CloudBay";
         StatusInfoBar.Message = message;
         StatusInfoBar.Severity = InfoBarSeverity.Success;
+        StatusInfoBar.ActionButton = null;
+        StatusInfoBar.Visibility = Visibility.Visible;
+        StatusInfoBar.IsOpen = true;
+    }
+
+    private void ShowWarning(string title, string message)
+    {
+        StatusInfoBar.Title = title;
+        StatusInfoBar.Message = message;
+        StatusInfoBar.Severity = InfoBarSeverity.Warning;
         StatusInfoBar.ActionButton = null;
         StatusInfoBar.Visibility = Visibility.Visible;
         StatusInfoBar.IsOpen = true;
@@ -1734,6 +2035,93 @@ public sealed partial class MainWindow : Window
                 AppWindow.Resize(new SizeInt32(importWidth, 840));
                 SetPresentation(ClientPreview.Connected(), theme);
                 await CapturePageAsync("backup", $"backup-import-entry-{importWidth}{suffix}");
+                if (CloudImportSection.Visibility != Visibility.Visible || CloudImportRows.Children.Count != 2 ||
+                    CloudImportRows.Children.OfType<SettingsCard>().Any(card => (card.Tag as string)?.EndsWith("Documents", StringComparison.Ordinal) == true))
+                    throw new InvalidOperationException("The quick import section must show distinct whole cloud accounts, separate from Windows folder choices.");
+                CloudImportSection.StartBringIntoView();
+                await Task.Delay(180);
+                await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"backup-cloud-accounts-{importWidth}{suffix}.png"));
+                // No controller operation or Windows mapping changes occur in
+                // these fixtures. They prove that a queued second folder and an
+                // active first folder do not disable unrelated folder switches.
+                _backupJobs["Desktop"] = new(false, "Copying and verifying files…");
+                _backupJobs["Documents"] = new(true, "Queued for review…");
+                try
+                {
+                    RefreshBackups();
+                    UpdateBackupBusyFooter();
+                    await CapturePageAsync("backup", $"backup-per-folder-queue-{importWidth}{suffix}");
+                    if (_backupSwitches["Desktop"].IsEnabled || _backupSwitches["Documents"].IsEnabled ||
+                        !_backupSwitches["Pictures"].IsEnabled || !_backupSwitches["Downloads"].IsEnabled ||
+                        !_backupSwitches["Desktop"].IsOn || _backupSwitches["Documents"].IsOn ||
+                        !_backupRings["Desktop"].IsActive || !_backupRings["Documents"].IsActive ||
+                        _backupPaths["Documents"].Text != "Queued for review…")
+                        throw new InvalidOperationException("Folder changes must keep effective backup state until committed and leave unrelated folders selectable.");
+                }
+                finally
+                {
+                    _backupJobs.Clear();
+                    RefreshBackups();
+                    UpdateBackupBusyFooter();
+                }
+                _importInProgress = true;
+                _importStatus = "Import in progress; transfers start when ready.";
+                try
+                {
+                    RefreshBackups();
+                    RefreshCustomBackups();
+                    UpdateBackupBusyFooter();
+                    await CapturePageAsync("backup", $"backup-import-does-not-block-folders-{importWidth}{suffix}");
+                    if (_busy || !_backupSwitches["Desktop"].IsEnabled || !_backupSwitches["Documents"].IsEnabled ||
+                        !_backupSwitches["Pictures"].IsEnabled || !_backupSwitches["Downloads"].IsEnabled ||
+                        ImportFilesCard.IsEnabled || CloudImportRows.Children.OfType<SettingsCard>().Any(card => card.IsEnabled) ||
+                        ConnectButton.IsEnabled || DisconnectButton.IsEnabled || BusyFooter.Visibility != Visibility.Visible)
+                        throw new InvalidOperationException("A background import must block duplicate imports and connection changes while leaving unrelated Windows folder choices available.");
+                }
+                finally
+                {
+                    _importInProgress = false;
+                    _importStatus = "";
+                    RefreshBackups();
+                    RefreshCustomBackups();
+                    UpdateBackupBusyFooter();
+                }
+                var customFixture = DisplaySettings.CustomBackups.Single();
+                var customFixtureKey = CustomStopJobKey(customFixture.Name);
+                _backupJobs[customFixtureKey] = new(false, "Preparing local files; starts when ready…");
+                try
+                {
+                    RefreshBackups();
+                    RefreshCustomBackups();
+                    UpdateBackupBusyFooter();
+                    await CapturePageAsync("backup", $"backup-custom-stop-does-not-block-folders-{importWidth}{suffix}");
+                    var customCard = CustomBackupRows.Children.OfType<SettingsCard>().Single(card =>
+                        card.Tag as string == customFixture.SourcePath);
+                    var actions = (StackPanel)customCard.Content;
+                    var more = actions.Children.OfType<Button>().Single(button => button.Flyout is MenuFlyout);
+                    if (_busy || !_backupSwitches["Desktop"].IsEnabled || !_backupSwitches["Documents"].IsEnabled ||
+                        !_backupSwitches["Pictures"].IsEnabled || !_backupSwitches["Downloads"].IsEnabled ||
+                        more.IsEnabled || ((MenuFlyout)more.Flyout).Items.OfType<MenuFlyoutItem>().Any(item => item.IsEnabled) ||
+                        !AddCustomBackupButton.IsEnabled || !ImportFilesCard.IsEnabled)
+                        throw new InvalidOperationException("A pending custom-folder stop must disable only that row's stop actions while unrelated folder and import choices remain available.");
+                    _backupJobs[CustomAddJobKey] = new(true, "Preparing backup; starts when ready…");
+                    RefreshBackups();
+                    RefreshCustomBackups();
+                    UpdateBackupBusyFooter();
+                    if (AddCustomBackupButton.IsEnabled || !_backupSwitches["Pictures"].IsEnabled || !ImportFilesCard.IsEnabled)
+                        throw new InvalidOperationException("A custom-folder setup must block duplicate adds without blocking unrelated Windows folders or imports.");
+                    CustomBackupSection.StartBringIntoView();
+                    await Task.Delay(180);
+                    await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"backup-custom-folder-queue-{importWidth}{suffix}.png"));
+                }
+                finally
+                {
+                    _backupJobs.Remove(customFixtureKey);
+                    _backupJobs.Remove(CustomAddJobKey);
+                    RefreshBackups();
+                    RefreshCustomBackups();
+                    UpdateBackupBusyFooter();
+                }
                 var candidates = new ImportSourceCandidate[]
                 {
                     new("synthetic-onedrive", "OneDrive · Documents", "Microsoft OneDrive", @"C:\Users\Example\OneDrive\Documents", "Registered cloud folder"),
@@ -1772,9 +2160,56 @@ public sealed partial class MainWindow : Window
                 if (review.FolderPlan != syntheticPlan || !review.IsPrimaryButtonEnabled)
                     throw new InvalidOperationException("An import review must retain the exact plan its user sees.");
                 await CaptureImportDialogAsync(review, $"import-folder-review-{importWidth}{suffix}");
-                var nativeReview = new BackupReviewDialog(new("Documents", syntheticPlan.SourcePath, syntheticPlan, null, true))
-                { XamlRoot = RootGrid.XamlRoot, RequestedTheme = theme };
-                await CaptureImportDialogAsync(nativeReview, $"backup-source-review-{importWidth}{suffix}");
+                var matchingCandidates = new ImportSourceCandidate[]
+                {
+                    new("synthetic-personal-documents", "OneDrive · Documents", "Microsoft OneDrive", @"C:\Users\Example\OneDrive\Documents", "Windows folder"),
+                    new("synthetic-work-documents", "OneDrive · Work · Documents", "Microsoft OneDrive", @"D:\Personal files\OneDrive - Work\Documents", "Windows folder")
+                };
+                var fixtureSettings = DisplaySettings with { RootPath = @"C:\Users\Example\CloudBay", Backups = [], CustomBackups = [] };
+                foreach (var mode in new[] { BackupTransferMode.Copy, BackupTransferMode.Move, BackupTransferMode.None })
+                {
+                    var modeName = mode.ToString().ToLowerInvariant();
+                    var setup = new BackupSetupDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this), "Documents",
+                        presentationSettings: fixtureSettings, presentationCandidates: matchingCandidates)
+                    { XamlRoot = RootGrid.XamlRoot, RequestedTheme = theme };
+                    setup.SetPresentationChoice(mode, mode == BackupTransferMode.None ? null : matchingCandidates[0].Path);
+                    if (setup.TransferMode != mode || (mode == BackupTransferMode.None ? setup.IncludeCurrentFiles :
+                        setup.SourcePath != matchingCandidates[0].Path || setup.IncludeCurrentFiles))
+                        throw new InvalidOperationException("Setup must keep the exact selected source separate from unselected current Windows files.");
+                    await CaptureImportDialogAsync(setup, $"backup-setup-{modeName}-{importWidth}{suffix}");
+                    setup.ValidateVisibleSelection();
+                    if (setup.TransferMode != mode || (mode == BackupTransferMode.None ? setup.IncludeCurrentFiles :
+                        setup.SourcePath != matchingCandidates[0].Path || setup.IncludeCurrentFiles))
+                        throw new InvalidOperationException("The rendered backup setup must preserve the source and mode that its controls visibly selected.");
+                    var nativeReview = new BackupReviewDialog(new BackupSourceReview("Documents", @"C:\Users\Example\Documents",
+                        syntheticPlan with { SourcePath = @"C:\Users\Example\Documents", FileCount = 0, TotalBytes = 0 },
+                        mode == BackupTransferMode.None ? null : syntheticPlan, false, mode, false))
+                    { XamlRoot = RootGrid.XamlRoot, RequestedTheme = theme };
+                    await CaptureImportDialogAsync(nativeReview, $"backup-source-review-{modeName}-{importWidth}{suffix}");
+                    var folder = new BackupFolder("Documents", @"C:\Users\Example\Documents", syntheticPlan.DestinationPath);
+                    var stopSetup = new BackupSetupDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this), "Documents", stopping: true,
+                        presentationSettings: fixtureSettings with { Backups = [folder] }, presentationCandidates: matchingCandidates)
+                    { XamlRoot = RootGrid.XamlRoot, RequestedTheme = theme };
+                    stopSetup.SetPresentationChoice(mode, mode == BackupTransferMode.None ? null : matchingCandidates[1].Path,
+                        freeLocalSpace: mode == BackupTransferMode.None);
+                    if (stopSetup.TransferMode != mode || stopSetup.DestinationPath !=
+                        (mode == BackupTransferMode.None ? folder.OriginalPath : matchingCandidates[1].Path) ||
+                        stopSetup.FreeLocalSpace != (mode == BackupTransferMode.None))
+                        throw new InvalidOperationException("Stopping backup must retain the chosen Windows destination, transfer mode, and optional local-space choice.");
+                    await CaptureImportDialogAsync(stopSetup, $"backup-stop-setup-{modeName}-{importWidth}{suffix}");
+                    stopSetup.ValidateVisibleSelection();
+                    if (stopSetup.TransferMode != mode || stopSetup.DestinationPath !=
+                        (mode == BackupTransferMode.None ? folder.OriginalPath : matchingCandidates[1].Path) ||
+                        stopSetup.FreeLocalSpace != (mode == BackupTransferMode.None))
+                        throw new InvalidOperationException("The rendered stop setup must preserve its visible Windows destination, transfer mode, and local-space choice.");
+                    var stopDestination = mode == BackupTransferMode.None ? folder.OriginalPath : matchingCandidates[1].Path;
+                    var restorePlan = mode == BackupTransferMode.None ? null : syntheticPlan with
+                    { SourcePath = folder.DestinationPath, DestinationPath = stopDestination };
+                    var stopReview = new BackupReviewDialog(new BackupRestoreReview(folder, stopDestination, mode, restorePlan),
+                        freeLocalSpace: mode == BackupTransferMode.None)
+                    { XamlRoot = RootGrid.XamlRoot, RequestedTheme = theme };
+                    await CaptureImportDialogAsync(stopReview, $"backup-stop-review-{modeName}-{importWidth}{suffix}");
+                }
                 await CaptureImportHistoryAsync(candidates, importWidth, theme, suffix);
             }
             AppWindow.Resize(new SizeInt32(600, 840));

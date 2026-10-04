@@ -1,52 +1,76 @@
+using CloudBay.Core.Sync;
 using CloudBay.Windows;
-using CloudBay.ViewModels;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
 namespace CloudBay.Views;
 
-/// <summary>Reviews the actual Windows mapping before copying or redirecting a known folder.</summary>
+/// <summary>Shows the exact reviewed transfer and Windows location before applying either.</summary>
 internal sealed class BackupReviewDialog : ContentDialog
 {
-    internal bool AddSourceRequested { get; private set; }
-    internal bool RemoveSourceRequested { get; private set; }
+    internal bool AddSourceRequested => false;
+    internal bool RemoveSourceRequested => false;
     internal FrameworkElement CaptureContent { get; }
 
     internal BackupReviewDialog(BackupSourceReview review)
     {
-        Title = "Back up " + review.Name;
-        PrimaryButtonText = "Back up " + review.Name;
-        CloseButtonText = "Cancel";
-        DefaultButton = ContentDialogButton.Primary;
-        Resources["ContentDialogMaxWidth"] = 640d;
-        var body = new StackPanel { Spacing = 16 };
-        CaptureContent = body;
-        body.Children.Add(SourceImportDialog.PathCard("Current Windows location", review.Name, review.OriginalWindowsPath));
-        body.Children.Add(SourceImportDialog.Text($"{review.CurrentFiles.FileCount:N0} {(review.CurrentFiles.FileCount == 1 ? "file" : "files")} · " +
-            ClientViewModel.FormatSize(review.CurrentFiles.TotalBytes) + (review.CurrentFiles.AvailableBytes is { } free
-                ? " · " + ClientViewModel.FormatSize(free) + " available on the destination drive" : ""), true));
-        if (review.AdditionalFiles is { } extra)
+        Title = "Review " + review.Name + " backup";
+        PrimaryButtonText = review.TransferMode == BackupTransferMode.None ? "Turn on without importing" :
+            review.TransferMode == BackupTransferMode.Move ? "Move files and turn on" : "Copy files and turn on";
+        var body = Begin(); CaptureContent = body;
+        if (review.IncludeCurrentFiles && review.TransferMode != BackupTransferMode.None)
+            AddPlan(body, "Source · Current Windows folder", review.CurrentFiles);
+        if (review.AdditionalFiles is { } extra) AddPlan(body, "Source · Chosen folder", extra);
+        body.Children.Add(SourceImportDialog.PathCard("Windows will open", "CloudBay · " + review.Name, review.DestinationPath));
+        if (review.TransferMode == BackupTransferMode.None)
+            body.Children.Add(SourceImportDialog.Text("No existing files are imported. Files in your previous Windows location stay there. Files already in this CloudBay folder remain available.", true));
+        else
         {
-            body.Children.Add(SourceImportDialog.PathCard("Additional copy source", Path.GetFileName(extra.SourcePath), extra.SourcePath));
-            body.Children.Add(SourceImportDialog.Text($"{extra.FileCount:N0} additional {(extra.FileCount == 1 ? "file" : "files")} · " + ClientViewModel.FormatSize(extra.TotalBytes), true));
+            var online = review.CurrentFiles.HasOnlineOnlyFiles && review.IncludeCurrentFiles || review.AdditionalFiles?.HasOnlineOnlyFiles == true;
+            if (online) body.Children.Add(Notice("Some files are online only. Keep the source cloud app signed in and running until verification finishes."));
+            body.Children.Add(SourceImportDialog.Text("Copies are verified before Windows changes its default location. Differing destination files are retained as separate copies.", true));
+            if (review.TransferMode == BackupTransferMode.Move)
+                body.Children.Add(Notice("Move removes verified originals after Windows changes its location. If the source belongs to another cloud app, those removals can delete its cloud files too. Changed or blocked originals are retained and reported."));
+            else body.Children.Add(SourceImportDialog.Text("Original files stay in the chosen source. CloudBay does not import other Windows or cloud folders automatically.", true));
         }
-        body.Children.Add(SourceImportDialog.PathCard("New Windows location", "CloudBay · " + review.Name, review.CurrentFiles.DestinationPath));
-        var online = review.CurrentFiles.HasOnlineOnlyFiles || review.AdditionalFiles?.HasOnlineOnlyFiles == true;
-        if (review.IsRedirected || online)
-            body.Children.Add(new InfoBar { IsOpen = true, IsClosable = false, Severity = InfoBarSeverity.Warning,
-                Message = (review.IsRedirected ? "Windows currently uses a redirected folder. Its original source folder and cloud app connection are retained." : "") +
-                    (review.IsRedirected && online ? " " : "") +
-                    (online ? "Some files are online only; keep the source app signed in and running until the copies finish." : "") });
-        body.Children.Add(SourceImportDialog.Text("CloudBay copies and verifies your files, then becomes this Windows folder's default location. Original files and differing destination files are retained. Turning backup off downloads its files and restores the reviewed original Windows location.", true));
-        var choose = new Button { Content = review.AdditionalFiles is null ? "Add files from another folder…" : "Remove additional source", HorizontalAlignment = HorizontalAlignment.Left };
-        choose.Click += (_, _) =>
-        {
-            if (review.AdditionalFiles is null) AddSourceRequested = true;
-            else RemoveSourceRequested = true;
-            Hide();
-        };
-        body.Children.Add(choose);
-        Content = new ScrollViewer { Content = body, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto, MaxHeight = 540, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+        Finish(body);
+    }
+
+    internal BackupReviewDialog(BackupRestoreReview review, bool freeLocalSpace = false)
+    {
+        Title = "Review stopping " + review.Folder.Name + " backup";
+        PrimaryButtonText = review.TransferMode == BackupTransferMode.None ? "Turn off without restoring" :
+            review.TransferMode == BackupTransferMode.Move ? "Move files and turn off" : "Copy files and turn off";
+        var body = Begin(); CaptureContent = body;
+        if (review.Files is { } files) AddPlan(body, "Source · CloudBay", files);
+        else body.Children.Add(SourceImportDialog.PathCard("Files stay in", "CloudBay · " + review.Folder.Name, review.Folder.DestinationPath));
+        body.Children.Add(SourceImportDialog.PathCard("Windows will open", review.Folder.Name, review.DestinationPath));
+        body.Children.Add(SourceImportDialog.Text(review.TransferMode == BackupTransferMode.None
+            ? "No files are restored, moved or deleted. Files already at the selected Windows location remain there. Your existing CloudBay files stay available."
+            : "CloudBay downloads online-only source files as needed, copies them, and verifies them before changing the Windows location. Differing destination files are retained.", true));
+        if (review.TransferMode == BackupTransferMode.Move)
+            body.Children.Add(Notice("Move removes verified originals from CloudBay. These removals also remove current B2 copies through sync; retained versions follow your bucket's version policy. Large batches can require a deletion review. Changed or blocked originals remain in CloudBay."));
+        else if (review.TransferMode == BackupTransferMode.Copy)
+            body.Children.Add(SourceImportDialog.Text("CloudBay and B2 copies are retained. If the destination is another cloud's Windows folder, that app handles its uploads.", true));
+        if (freeLocalSpace)
+            body.Children.Add(Notice("After backup is off, eligible downloaded CloudBay copies become online only. Files still waiting to upload remain on this PC. Your B2 files are kept."));
+        Finish(body);
+    }
+
+    private StackPanel Begin()
+    {
+        CloseButtonText = "Cancel"; DefaultButton = ContentDialogButton.Close;
+        Resources["ContentDialogMaxWidth"] = 680d;
+        return new() { Spacing = 16 };
+    }
+    private void Finish(StackPanel body) => Content = new ScrollViewer { Content = body,
+        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        MaxHeight = 580, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+    private static InfoBar Notice(string message) => new() { IsOpen = true, IsClosable = false,
+        Severity = InfoBarSeverity.Warning, Message = message };
+    private static void AddPlan(StackPanel body, string title, FolderImportPlan plan)
+    {
+        body.Children.Add(SourceImportDialog.PathCard(title, Path.GetFileName(Path.TrimEndingDirectorySeparator(plan.SourcePath)), plan.SourcePath));
+        body.Children.Add(SourceImportDialog.Summary(plan.FileCount, plan.TotalBytes, plan.AvailableBytes));
     }
 }

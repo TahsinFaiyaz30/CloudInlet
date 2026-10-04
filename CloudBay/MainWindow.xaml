@@ -426,6 +426,12 @@
                                     </settings:SettingsExpander.Items>
                                 </settings:SettingsExpander>
                             </StackPanel>
+                            <StackPanel x:Name="CloudImportSection" Spacing="12" Visibility="Collapsed">
+                                <TextBlock Text="Bring in a cloud folder" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                <TextBlock Text="Choose an entire cloud folder. You'll review the source and destination before any files are copied."
+                                           Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                                <Grid x:Name="CloudImportRows" ColumnSpacing="12" RowSpacing="12" />
+                            </StackPanel>
                             <StackPanel x:Name="CustomBackupSection" Spacing="8" Visibility="Collapsed">
                                 <TextBlock Text="Other folders" Style="{StaticResource BodyStrongTextBlockStyle}" />
                                 <Grid ColumnSpacing="12" RowSpacing="12" x:Name="CustomBackupRows" />
@@ -471,7 +477,7 @@
                                     </settings:SettingsCard>
                                 </settings:SettingsExpander.Items>
                             </settings:SettingsExpander>
-                            <settings:SettingsCard x:Name="ImportFilesCard" Header="Import files" Description="Copy existing files from another folder, cloud app, or Backblaze B2."
+                            <settings:SettingsCard x:Name="ImportFilesCard" Header="Import from another location" Description="Choose a local folder, mounted cloud drive, or Backblaze B2 bucket."
                                                    IsClickEnabled="True" Click="ImportFiles_Click">
                                 <settings:SettingsCard.HeaderIcon>
                                     <FontIcon Glyph="&#xE896;" />
@@ -493,7 +499,7 @@
                                         HorizontalContentAlignment="Stretch">
                                         <StackPanel Spacing="12">
                                             <TextBlock
-                                                Text="Review the current Windows location before enabling backup. CloudBay copies and verifies the files, then becomes this Windows folder's default location. Turning backup off downloads its files and restores the reviewed original location."
+                                                Text="Choose which files to bring in when you turn backup on, or start without importing. When you turn backup off, leave existing files in CloudBay or choose a location to copy or move them to. Windows uses the reviewed folder as its default save location."
                                                 Style="{StaticResource CloudBaySecondaryTextStyle}" />
                                             <TextBlock
                                                 Text="Changes and deletions sync between this PC and B2. Excluded files stay local. Previous versions are available while your bucket retains them."

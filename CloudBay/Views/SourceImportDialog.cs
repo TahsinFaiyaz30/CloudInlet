@@ -17,6 +17,7 @@ internal sealed class SourceImportDialog : ContentDialog
     private readonly ClientController _controller;
     private readonly nint _owner;
     private readonly bool _chooseFolderOnly;
+    private readonly string? _knownFolderName;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly StackPanel _body = new() { Spacing = 20 };
     private readonly ScrollViewer _scroll = new() { HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
@@ -53,11 +54,13 @@ internal sealed class SourceImportDialog : ContentDialog
     internal FrameworkElement CaptureContent => _body;
 
     internal SourceImportDialog(ClientController controller, nint owner, bool chooseFolderOnly = false,
-        IReadOnlyList<ImportSourceCandidate>? presentationCandidates = null)
+        IReadOnlyList<ImportSourceCandidate>? presentationCandidates = null, string? initialSourcePath = null,
+        string? knownFolderName = null)
     {
         _controller = controller;
         _owner = owner;
         _chooseFolderOnly = chooseFolderOnly;
+        _knownFolderName = knownFolderName;
         _presentationCandidates = presentationCandidates;
         Title = chooseFolderOnly ? "Choose an additional source" : "Import files";
         CloseButtonText = "Cancel";
@@ -75,7 +78,8 @@ internal sealed class SourceImportDialog : ContentDialog
         SecondaryButtonClick += (_, args) => { args.Cancel = true; if (!_working) ShowChoices(); };
         CloseButtonClick += (_, _) => CancelLifetime();
         Closed += (_, _) => { _closed = true; CancelLifetime(); DisposeLifetimeWhenIdle(); };
-        ShowChoices();
+        if (initialSourcePath is { Length: > 0 }) ShowFolder(initialSourcePath, Path.GetFileName(Path.TrimEndingDirectorySeparator(initialSourcePath)));
+        else ShowChoices();
     }
 
     private void BeginStage(string stage, string title, string primary = "")
@@ -98,9 +102,9 @@ internal sealed class SourceImportDialog : ContentDialog
 
     private void ShowChoices()
     {
-        BeginStage("choose", _chooseFolderOnly ? "Choose an additional source" : "Import files");
+        BeginStage("choose", _chooseFolderOnly ? "Choose a source" : "Import files");
         _body.Children.Add(Text(_chooseFolderOnly
-            ? "Choose files to copy into this Windows folder. Its current files are included in the backup too."
+            ? "Choose the folder whose files you want to bring into CloudBay. You will review the source and transfer choice before anything changes."
             : "Bring existing files into CloudBay. Your source files stay where they are.", secondary: true));
         AddAsyncChoice("Folder on this PC", "Choose a local folder, an external drive, or a mounted cloud drive.", "\uE8B7", BrowseAsync);
         AddAsyncChoice("Files from another app", "Choose an existing Windows cloud folder, including OneDrive.", "\uE753", ShowExistingFoldersAsync);
@@ -138,7 +142,7 @@ internal sealed class SourceImportDialog : ContentDialog
     internal async Task ShowExistingFoldersAsync()
     {
         if (_closed) return;
-        BeginStage("existing", "Existing cloud folders");
+        BeginStage("existing", _knownFolderName is null ? "Existing cloud folders" : _knownFolderName + " in other clouds");
         _body.Children.Add(Text("These are folders found in Windows. Choose the source yourself; CloudBay does not disconnect or remove another app.", true));
         var rows = new StackPanel { Spacing = 8 };
         _body.Children.Add(rows);
@@ -162,7 +166,7 @@ internal sealed class SourceImportDialog : ContentDialog
             // mounted provider must not block the dispatcher or prevent browsing manually.
             if (_discovery is null)
             {
-                _discovery = Task.Run(() => ImportSourceDiscovery.FindCandidates(settings));
+                _discovery = Task.Run(() => ImportSourceDiscovery.FindCandidates(settings, _knownFolderName));
                 _ = _discovery.ContinueWith(task => { _ = task.Exception; }, CancellationToken.None,
                     TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             }
@@ -201,11 +205,11 @@ internal sealed class SourceImportDialog : ContentDialog
     {
         _folder = path;
         _sourceName = label;
-        BeginStage("folder", _chooseFolderOnly ? "Use this additional source?" : "Import from a folder", _chooseFolderOnly ? "Use folder" : "Review import");
+        BeginStage("folder", _chooseFolderOnly ? "Use this source?" : "Import from a folder", _chooseFolderOnly ? "Use folder" : "Review import");
         _body.Children.Add(PathCard("Source", label, path));
         if (_chooseFolderOnly)
         {
-            _body.Children.Add(Text("This is an additional copy source. The backup review will show the current Windows folder and this folder before any files are copied.", true));
+            _body.Children.Add(Text("The backup review will show this exact source and your transfer choice before any files are copied or moved.", true));
         }
         else
         {
