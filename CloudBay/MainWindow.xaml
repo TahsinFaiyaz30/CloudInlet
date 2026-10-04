@@ -471,6 +471,12 @@
                                     </settings:SettingsCard>
                                 </settings:SettingsExpander.Items>
                             </settings:SettingsExpander>
+                            <settings:SettingsCard x:Name="ImportFilesCard" Header="Import files" Description="Copy existing files from another folder, cloud app, or Backblaze B2."
+                                                   IsClickEnabled="True" Click="ImportFiles_Click">
+                                <settings:SettingsCard.HeaderIcon>
+                                    <FontIcon Glyph="&#xE896;" />
+                                </settings:SettingsCard.HeaderIcon>
+                            </settings:SettingsCard>
                             <settings:SettingsCard Header="Exclusions" Description="Choose what to leave out of your backups."
                                                    IsClickEnabled="True" Click="ExclusionsSettings_Click">
                                 <settings:SettingsCard.HeaderIcon>
@@ -487,7 +493,7 @@
                                         HorizontalContentAlignment="Stretch">
                                         <StackPanel Spacing="12">
                                             <TextBlock
-                                                Text="Enabling a Windows folder makes CloudBay its default location. Turning backup off downloads its files and restores its original location. Folders protected by another provider must be restored locally first."
+                                                Text="Review the current Windows location before enabling backup. CloudBay copies and verifies the files, then becomes this Windows folder's default location. Turning backup off downloads its files and restores the reviewed original location."
                                                 Style="{StaticResource CloudBaySecondaryTextStyle}" />
                                             <TextBlock
                                                 Text="Changes and deletions sync between this PC and B2. Excluded files stay local. Previous versions are available while your bucket retains them."

@@ -16,7 +16,7 @@
     <LangVersion>latest</LangVersion>
     <PublishTrimmed>false</PublishTrimmed>
     <ApplicationIcon>Assets\CloudBay.ico</ApplicationIcon>
-    <Version>2.0.0</Version>
+    <Version>2.0.1</Version>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Description>Native Windows backup and Files On-Demand for Backblaze B2.</Description>
   </PropertyGroup>

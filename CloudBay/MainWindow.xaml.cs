@@ -616,14 +616,14 @@ public sealed partial class MainWindow : Window
                 var changedMapping = backup is not null && !ownsMapping;
                 var externalMapping = backup is null && notice is null && !SameFolderPath(currentPath, _backupDefaultPaths[name]);
                 if (changedMapping) notice = "Windows folder location changed. CloudBay will not overwrite another app's mapping. Restore this folder to its CloudBay location before stopping backup.";
-                else if (externalMapping) notice = "This folder is redirected by Windows, OneDrive, or another app. Restore it to its default location before enabling CloudBay backup.";
                 toggle.IsOn = ownsMapping;
                 toggle.IsEnabled = settings.IsConfigured && !_busy && notice is null;
                 var caption = _backupPaths[name];
-                caption.Text = changedMapping ? "Windows folder location changed" : externalMapping ? "Managed by another app" : notice is not null ? "Unavailable for backup" : "";
-                caption.Visibility = notice is null ? Visibility.Collapsed : Visibility.Visible;
+                caption.Text = changedMapping ? "Windows folder location changed" : externalMapping ? "Review current Windows location" : notice is not null ? "Unavailable for backup" : "";
+                caption.Visibility = notice is null && !externalMapping ? Visibility.Collapsed : Visibility.Visible;
                 caption.Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudBayAttentionTextStyle"];
-                var tooltip = currentPath + (notice is not null ? Environment.NewLine + notice : "");
+                var tooltip = currentPath + (notice is not null ? Environment.NewLine + notice : externalMapping
+                    ? Environment.NewLine + "This Windows folder is redirected. Review its current files and new CloudBay location before enabling backup." : "");
                 ToolTipService.SetToolTip(card, tooltip);
                 AutomationProperties.SetHelpText(toggle, tooltip);
                 if (GetKnownFolderVisual(name, IconPixels(40)) is { } folderIcon)
@@ -639,6 +639,7 @@ public sealed partial class MainWindow : Window
         var settings = DisplaySettings;
         var revision = string.Join("|", settings.CustomBackups.Select(folder => $"{folder.Name}:{folder.SourcePath}:{folder.Prefix}")) + $"|{_busy}";
         AddCustomBackupButton.IsEnabled = settings.IsConfigured && !_busy;
+        ImportFilesCard.IsEnabled = settings.IsConfigured && !_busy;
         CustomBackupSection.Visibility = settings.CustomBackups.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         if (_customBackupRevision == revision) return;
         _customBackupRevision = revision;
@@ -896,10 +897,52 @@ public sealed partial class MainWindow : Window
         if (_refreshingBackups || _busy || sender is not ToggleSwitch toggle) return;
         var name = (string)toggle.Tag;
         var enabled = toggle.IsOn;
-        await RunAsync(enabled ? $"Setting up {name} backup…" : $"Restoring {name} to its original location…",
-            () => _controller.SetBackupAsync(name, enabled), enabled ? $"{name} backup is on." : $"{name} backup is off.");
+        await RunAsync(enabled ? $"Reviewing {name} backup…" : $"Restoring {name} to its original location…", async () =>
+        {
+            if (!enabled)
+            {
+                await _controller.SetBackupAsync(name, false);
+                ShowInfo($"{name} backup is off.");
+                return;
+            }
+            string? additionalSource = null;
+            while (true)
+            {
+                var review = await _controller.PreviewBackupAsync(name, additionalSource);
+                var dialog = new BackupReviewDialog(review) { XamlRoot = RootGrid.XamlRoot, RequestedTheme = RootGrid.RequestedTheme };
+                var result = await dialog.ShowAsync();
+                if (dialog.RemoveSourceRequested) { additionalSource = null; continue; }
+                if (dialog.AddSourceRequested)
+                {
+                    var chooser = new SourceImportDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this), chooseFolderOnly: true)
+                    { XamlRoot = RootGrid.XamlRoot, RequestedTheme = RootGrid.RequestedTheme };
+                    if (await chooser.ShowAsync() == ContentDialogResult.Primary && chooser.SelectedFolderPath is { } path)
+                        additionalSource = path;
+                    continue;
+                }
+                if (result != ContentDialogResult.Primary) return;
+                FooterStatus.Text = $"Copying and verifying {name} before changing its Windows location…";
+                await _controller.EnableReviewedBackupAsync(review);
+                ShowInfo($"{name} backup is on. Windows now opens it in CloudBay.");
+                return;
+            }
+        });
         RefreshBackups(refreshMetadata: true);
     }
+
+    private async void ImportFiles_Click(object sender, RoutedEventArgs args) =>
+        await RunAsync("Reviewing files to import…", async () =>
+        {
+            var dialog = new SourceImportDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this))
+            { XamlRoot = RootGrid.XamlRoot, RequestedTheme = RootGrid.RequestedTheme };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+            FooterStatus.Text = "Importing and verifying your files…";
+            if (dialog.ResumeCloudId is { } id) await _controller.ResumeCloudImportAsync(id);
+            else if (dialog.CloudPlan is { } cloud) await _controller.ImportCloudAsync(cloud);
+            else if (dialog.FolderPlan is { } folder) await _controller.ImportFolderAsync(folder);
+            else return;
+            ShowInfo("Import completed. The original source files were retained.");
+        });
 
     private async void Connect_Click(object sender, RoutedEventArgs args)
     {
@@ -1685,10 +1728,58 @@ public sealed partial class MainWindow : Window
                 ["Documents"] = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Another provider", "Documents")
             } }, theme);
             await CapturePageAsync("backup", $"backup-location-attention-800{suffix}");
-            if (_backupSwitches["Desktop"].IsOn || _backupSwitches["Desktop"].IsEnabled || _backupSwitches["Documents"].IsEnabled ||
-                _backupPaths["Desktop"].Text != "Windows folder location changed" || _backupPaths["Documents"].Text != "Managed by another app" ||
+            if (_backupSwitches["Desktop"].IsOn || _backupSwitches["Desktop"].IsEnabled || !_backupSwitches["Documents"].IsEnabled ||
+                _backupPaths["Desktop"].Text != "Windows folder location changed" || _backupPaths["Documents"].Text != "Review current Windows location" ||
                 !AutomationProperties.GetHelpText(_backupSwitches["Desktop"]).Contains(externalPath, StringComparison.Ordinal))
-                throw new InvalidOperationException("Changed or externally managed Windows mappings must show their actual location and cannot advertise a protected mapping.");
+                throw new InvalidOperationException("Changed owned mappings must remain protected; external Windows mappings must expose their actual location for explicit review.");
+            foreach (var importWidth in new[] { 800, 1300 })
+            {
+                AppWindow.Resize(new SizeInt32(importWidth, 840));
+                SetPresentation(ClientPreview.Connected(), theme);
+                await CapturePageAsync("backup", $"backup-import-entry-{importWidth}{suffix}");
+                var candidates = new ImportSourceCandidate[]
+                {
+                    new("synthetic-onedrive", "OneDrive · Documents", "Microsoft OneDrive", @"C:\Users\Example\OneDrive\Documents", "Registered cloud folder"),
+                    new("synthetic-existing", "OneDrive - Work", "Microsoft OneDrive", @"D:\Personal files\OneDrive - Work", "Existing Windows folder")
+                };
+                var source = new SourceImportDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this), presentationCandidates: candidates)
+                { XamlRoot = RootGrid.XamlRoot, RequestedTheme = theme };
+                await CaptureImportDialogAsync(source, $"import-source-chooser-{importWidth}{suffix}");
+                var existing = new SourceImportDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this), presentationCandidates: candidates)
+                { XamlRoot = RootGrid.XamlRoot, RequestedTheme = theme };
+                await existing.ShowExistingFoldersAsync();
+                await CaptureImportDialogAsync(existing, $"import-existing-folders-{importWidth}{suffix}");
+                var providers = new SourceImportDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this), presentationCandidates: candidates)
+                { XamlRoot = RootGrid.XamlRoot, RequestedTheme = theme };
+                providers.ShowProviders();
+                await CaptureImportDialogAsync(providers, $"import-cloud-providers-{importWidth}{suffix}");
+                var buckets = new SourceImportDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this), presentationCandidates: candidates)
+                { XamlRoot = RootGrid.XamlRoot, RequestedTheme = theme };
+                buckets.ShowB2Configuration([new("synthetic-source-bucket", "Personal archive")]);
+                if (!buckets.IsPrimaryButtonEnabled) throw new InvalidOperationException("An accessible bucket and destination must allow cloud import review.");
+                await CaptureImportDialogAsync(buckets, $"import-b2-bucket-{importWidth}{suffix}");
+                var cloudPlan = new CloudBay.Core.Sync.CloudImportPlan(Guid.NewGuid().ToString("N"), "synthetic-source-bucket", "Documents/",
+                    @"C:\Users\Example\CloudBay\Imported B2 files", [new("report.pdf", new("immutable-source-version", "Documents/report.pdf", 42_017,
+                        "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3", DateTimeOffset.UtcNow))], 1, 42_017);
+                var cloudReview = new SourceImportDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this), presentationCandidates: candidates)
+                { XamlRoot = RootGrid.XamlRoot, RequestedTheme = theme };
+                cloudReview.ShowCloudReview(cloudPlan, bucketName: "Personal archive");
+                if (cloudReview.CloudPlan != cloudPlan || !cloudReview.IsPrimaryButtonEnabled)
+                    throw new InvalidOperationException("A cloud review must retain its immutable source versions and exact destination plan.");
+                await CaptureImportDialogAsync(cloudReview, $"import-b2-review-{importWidth}{suffix}");
+                var syntheticPlan = new CloudBay.Core.Sync.FolderImportPlan(@"C:\Users\Example\OneDrive\Documents",
+                    @"C:\Users\Example\CloudBay\Documents", "presentation-only", 1248, 2_742_910_976L, 128_849_018_880L, true);
+                var review = new SourceImportDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this), presentationCandidates: candidates)
+                { XamlRoot = RootGrid.XamlRoot, RequestedTheme = theme };
+                review.ShowFolderReview(syntheticPlan, "Documents");
+                if (review.FolderPlan != syntheticPlan || !review.IsPrimaryButtonEnabled)
+                    throw new InvalidOperationException("An import review must retain the exact plan its user sees.");
+                await CaptureImportDialogAsync(review, $"import-folder-review-{importWidth}{suffix}");
+                var nativeReview = new BackupReviewDialog(new("Documents", syntheticPlan.SourcePath, syntheticPlan, null, true))
+                { XamlRoot = RootGrid.XamlRoot, RequestedTheme = theme };
+                await CaptureImportDialogAsync(nativeReview, $"backup-source-review-{importWidth}{suffix}");
+                await CaptureImportHistoryAsync(candidates, importWidth, theme, suffix);
+            }
             AppWindow.Resize(new SizeInt32(600, 840));
             SetPresentation(ClientPreview.Connected(), theme);
             await CapturePageAsync("overview", $"overview-minimal-600{suffix}");
@@ -1754,6 +1845,105 @@ public sealed partial class MainWindow : Window
         {
             await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"), $"{fileName}: in-place dialog rendering{Environment.NewLine}");
             await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"{fileName}.png"));
+        }
+
+        async Task CaptureImportDialogAsync(ContentDialog dialog, string name)
+        {
+            var showing = dialog.ShowAsync();
+            try
+            {
+                await Task.Delay(350);
+                dialog.UpdateLayout();
+                if (dialog.ActualWidth <= 0 || dialog.ActualHeight <= 0 || dialog.ActualWidth > RootGrid.ActualWidth + 1)
+                    throw new InvalidOperationException("The import dialog must fit the live window and expose visible bounds.");
+                await UiSmokeCapture.SaveAsync(dialog, Path.Combine(outputDirectory, name + ".png"));
+            }
+            finally { dialog.Hide(); await showing; }
+        }
+
+        async Task CaptureImportHistoryAsync(IReadOnlyList<ImportSourceCandidate> candidates, int width, ElementTheme theme, string suffix)
+        {
+            // Presentation records never read a checkpoint, touch a source folder,
+            // or call a provider. Mixed timestamps prove that interrupted work
+            // remains reachable even when newer completed work spans several pages.
+            var now = DateTimeOffset.UtcNow;
+            const string fixtureRoot = @"C:\Users\Example\CloudBay";
+            var folders = Enumerable.Range(0, 12).Select(index =>
+            {
+                var destination = Path.Combine(fixtureRoot, $"Local import {index + 1:00}");
+                var plan = new CloudBay.Core.Sync.FolderImportPlan(@"D:\Previous cloud\Archive " + index,
+                    destination, new string('a', 64), 120 + index, 2_742_910_976L, 128_849_018_880L, index == 0);
+                return new FolderImportRecord(Guid.NewGuid().ToString("N"), index == 11 ? now.AddDays(-120) : now.AddHours(-index),
+                    plan, "presentation-only", index < 3 ? "Needs review" : "Completed",
+                    index < 3 ? "The copy was interrupted. The source and verified destination files were retained." : null);
+            }).ToArray();
+            var clouds = Enumerable.Range(0, 12).Select(index =>
+            {
+                var id = Guid.NewGuid().ToString("N");
+                var plan = new CloudBay.Core.Sync.CloudImportPlan(id, "synthetic-source-bucket", "Previous files/",
+                    Path.Combine(fixtureRoot, $"Cloud import {index + 1:00}"),
+                    [new("report.pdf", new("immutable-source-" + index, "Previous files/report.pdf", 42_017,
+                        "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3", now))], 1, 42_017);
+                return new CloudBay.Core.Sync.CloudImportRecord(id, index == 0 ? now.AddDays(-90) : now.AddHours(-index - 12),
+                    plan, "presentation-only", index == 0 ? "Needs review" : "Completed", new Dictionary<string, CloudObject>(),
+                    index == 0 ? "The cloud import was interrupted. Completed versions were retained." : null);
+            }).ToArray();
+            var history = new SourceImportDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this), presentationCandidates: candidates)
+            { XamlRoot = RootGrid.XamlRoot, RequestedTheme = theme };
+            history.ShowHistoryPresentation(folders, clouds, issues: 1);
+            var oldestPending = clouds[0].Plan.DestinationPath;
+            var oldestCompleted = folders[^1].Plan.DestinationPath;
+            if (!history.IsHistoryDestinationDisplayed(oldestPending) ||
+                folders.Take(3).Any(item => !history.IsHistoryDestinationDisplayed(item.Plan.DestinationPath)) ||
+                history.IsHistoryDestinationDisplayed(oldestCompleted) || !history.CanAdvanceHistoryPage)
+                throw new InvalidOperationException("Import history must merge source kinds, prioritize every interrupted fixture job, and expose paging for completed work.");
+            var showing = history.ShowAsync();
+            try
+            {
+                await Task.Delay(350);
+                history.UpdateLayout();
+                if (history.ActualWidth <= 0 || history.ActualWidth > RootGrid.ActualWidth + 1)
+                    throw new InvalidOperationException("Import history must fit the live window.");
+                if (FindDescendant<InfoBar>(history, item => item.IsOpen && item.Message?.Contains("damaged or unreadable", StringComparison.Ordinal) == true) is null)
+                    throw new InvalidOperationException("Unreadable import checkpoints must expose a visible review warning.");
+                history.ShowHistoryDestinationInViewport(oldestPending);
+                await Task.Delay(250);
+                AssertHistoryDestinationVisible(oldestPending);
+                await UiSmokeCapture.SaveAsync(history, Path.Combine(outputDirectory, $"import-history-first-{width}{suffix}.png"));
+                var pages = 1;
+                while (history.CanAdvanceHistoryPage)
+                {
+                    if (++pages > 4) throw new InvalidOperationException("Synthetic import history paging failed to terminate.");
+                    history.NavigateHistoryPage(1);
+                    await Task.Delay(100);
+                }
+                if (pages != 3 || !history.IsHistoryDestinationDisplayed(oldestCompleted) || history.IsHistoryDestinationDisplayed(oldestPending))
+                    throw new InvalidOperationException("Every mixed import history page must be reachable, including its oldest completed record.");
+                history.ShowHistoryDestinationInViewport(oldestCompleted);
+                await Task.Delay(250);
+                AssertHistoryDestinationVisible(oldestCompleted);
+                await UiSmokeCapture.SaveAsync(history, Path.Combine(outputDirectory, $"import-history-last-{width}{suffix}.png"));
+                for (var page = 1; page < pages; page++) history.NavigateHistoryPage(-1);
+                await Task.Delay(100);
+                if (!history.IsHistoryDestinationDisplayed(oldestPending) || !history.CanAdvanceHistoryPage)
+                    throw new InvalidOperationException("Previous must return from the oldest import page to interrupted work.");
+                await File.AppendAllTextAsync(Path.Combine(outputDirectory, "imports-validation.txt"),
+                    $"PASS: {theme} {width}px import history merges 24 local/cloud records across {pages} reachable pages; old interrupted cloud work remains on page one; damaged checkpoints are visible; oldest completed record intersects the scroll viewport; Previous returns to pending work.{Environment.NewLine}");
+            }
+            finally { history.Hide(); await showing; }
+
+            void AssertHistoryDestinationVisible(string destination)
+            {
+                history.UpdateLayout();
+                var row = FindDescendant<SettingsCard>(history, item => item.Tag as string == destination) ??
+                    throw new InvalidOperationException("The selected history record has no rendered row.");
+                var viewer = FindDescendant<ScrollViewer>(history, item => ReferenceEquals(item.Content, history.CaptureContent)) ??
+                    throw new InvalidOperationException("Import history must retain its scroll viewport.");
+                var position = row.TransformToVisual(viewer).TransformPoint(new global::Windows.Foundation.Point());
+                if (row.ActualWidth <= 0 || row.ActualHeight <= 0 || position.X + row.ActualWidth <= 0 || position.X >= viewer.ActualWidth ||
+                    position.Y + row.ActualHeight <= 0 || position.Y >= viewer.ActualHeight)
+                    throw new InvalidOperationException("The selected import record must intersect the visible scroll viewport.");
+            }
         }
 
         static async Task WaitForUiAsync(Func<bool> condition, string message)

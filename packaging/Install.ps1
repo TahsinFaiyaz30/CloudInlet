@@ -3,6 +3,10 @@ $ErrorActionPreference = 'Stop'
 $source = Join-Path $PSScriptRoot 'App'
 $sourceExe = Join-Path $source 'CloudBay.exe'
 if (!(Test-Path -LiteralPath $sourceExe)) { throw 'Run this script from the complete CloudBay release folder.' }
+if ((Get-Item -LiteralPath $source -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'The release App folder cannot be a linked directory.' }
+if (Get-ChildItem -LiteralPath $source -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) {
+    throw 'The release contains a linked item. Use the complete original release archive.'
+}
 if (![Environment]::Is64BitOperatingSystem) { throw 'CloudBay requires 64-bit Windows.' }
 $version = ([Diagnostics.FileVersionInfo]::GetVersionInfo($sourceExe)).ProductVersion.Split('+')[0]
 if ($version -notmatch '^\d+\.\d+\.\d+([-.][a-zA-Z0-9.]+)?$') { throw 'Unexpected package version.' }
@@ -14,7 +18,61 @@ for ($ancestor = [IO.DirectoryInfo]$destination; $null -ne $ancestor; $ancestor 
         throw 'The installation path contains a directory link. Choose a normal per-user installation location.'
     }
 }
-$running = @(Get-Process -Name CloudBay -ErrorAction SilentlyContinue)
+# Use Windows' argument parser, with the same exact flags as App.OnLaunched.
+# Text matching can mistake a flag-shaped path for an isolated instance or miss
+# a quoted flag, leaving the real client running during an upgrade.
+if ($null -eq ('CloudBay.Packaging.CommandLine' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
+namespace CloudBay.Packaging
+{
+    public static class CommandLine
+    {
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr CommandLineToArgvW(string commandLine, out int argumentCount);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr LocalFree(IntPtr memory);
+
+        public static string[] Parse(string commandLine)
+        {
+            if (String.IsNullOrWhiteSpace(commandLine)) return new string[0];
+            int count;
+            IntPtr arguments = CommandLineToArgvW(commandLine, out count);
+            if (arguments == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+            try
+            {
+                string[] result = new string[count];
+                for (int index = 0; index < count; index++)
+                    result[index] = Marshal.PtrToStringUni(Marshal.ReadIntPtr(arguments, index * IntPtr.Size));
+                return result;
+            }
+            finally { LocalFree(arguments); }
+        }
+
+        public static bool IsIsolated(string commandLine)
+        {
+            foreach (string argument in Parse(commandLine))
+            {
+                if (String.Equals(argument, "--ui-live", StringComparison.Ordinal) ||
+                    String.Equals(argument, "--ui-smoke", StringComparison.Ordinal)) return true;
+            }
+            return false;
+        }
+    }
+}
+'@
+}
+$running = @(Get-Process -Name CloudBay -ErrorAction SilentlyContinue | Where-Object {
+    $candidate = $_
+    $native = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $candidate.Id)
+    # Preview and smoke instances use separate named pipes and state. The main
+    # client's shutdown request cannot stop them, so they must not block upgrade.
+    $native -and ![CloudBay.Packaging.CommandLine]::IsIsolated([string]$native.CommandLine)
+})
 if ($running.Count -gt 0) {
     $shutdownProcess = Start-Process -FilePath $sourceExe -ArgumentList '--shutdown' -WindowStyle Hidden -PassThru
     $shutdownProcess.WaitForExit(10000) | Out-Null
