@@ -241,7 +241,7 @@ public sealed class SyncEngine : IAsyncDisposable
                 }
                 if (last is null)
                 {
-                    if (disk.Hydrated && await TryAdoptRemoteAsync(relative, path, cloud, ct))
+                    if (disk.Hydrated && await TryAdoptRemoteAsync(relative, path, cloud, settings, ct))
                     {
                         // A completed B2 upload followed by a crash can leave no local baseline.
                         // Matching the locked bytes safely adopts the already uploaded cloud version.
@@ -259,18 +259,29 @@ public sealed class SyncEngine : IAsyncDisposable
                 {
                     if (changed)
                     {
-                        if (disk.Hydrated && await TryAdoptRemoteAsync(relative, path, cloud, ct)) continue;
+                        if (disk.Hydrated && await TryAdoptRemoteAsync(relative, path, cloud, settings, ct)) continue;
                         uploads.Add(PreserveConflict(path, settings.RootPath));
                         Record(ActivityKind.Conflict, relative, "Local and cloud edits overlapped. Both copies were preserved.");
                     }
                     downloads.Add((relative, cloud));
+                }
+                else if (last.NativeMarkPending)
+                {
+                    // A completed, independently verified upload must not become a new B2
+                    // version merely because Explorer metadata could not be committed.
+                    if (!await TryFinishPendingNativeMarkAsync(last, settings, ct)) uploads.Add(relative);
                 }
                 else if (changed) uploads.Add(relative);
                 else if (!settings.FilesOnDemand && !disk.Hydrated)
                     await _placeholders.SetPinAsync(path, PinMode.AlwaysAvailable, ct);
             }
             catch (OperationCanceledException) { throw; }
-            catch (Exception error) { errors++; Record(ActivityKind.Error, relative, error.Message); }
+            catch (Exception error)
+            {
+                errors++;
+                _transfers.Phase(relative, ActivityKind.Upload, TransferPhase.Retrying);
+                Record(ActivityKind.Error, relative, error.Message);
+            }
         }
 
         uploads = uploads.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
@@ -531,12 +542,18 @@ public sealed class SyncEngine : IAsyncDisposable
         await TransferResources.Verification.WaitAsync(ct);
         try { await _cloud.VerifyUploadAsync(file, settings.BucketId, ct); }
         finally { TransferResources.Verification.Release(); }
+        // The cloud snapshot survives failure, cancellation, or a process exit during local
+        // marking. It describes the locked uploaded bytes, never a newer user's save.
+        var baseline = new SyncEntry(relative, file, size, modified) { NativeMarkPending = true };
+        _manifest.Put(baseline);
+        Record(ActivityKind.Upload, relative, "Uploaded and verified in Backblaze B2", file.Size);
         var after = new FileInfo(path);
         // A save immediately after upload remains dirty and will be sent by the next scan.
         if (after.Exists && after.Length == size && after.LastWriteTimeUtc == modified.UtcDateTime)
-            await _placeholders.MarkInSyncAsync(path, file with { ModifiedUtc = modified }, ct);
-        _manifest.Put(new(relative, file, size, modified));
-        Record(ActivityKind.Upload, relative, "Uploaded to Backblaze B2", file.Size);
+        {
+            ShowPendingNativeMark(baseline, ActivityKind.Upload);
+            await FinishNativeMarkAsync(baseline, settings, ct);
+        }
     }
 
     private async Task ApplyRemoteAsync(string relative, CloudObject cloud, AppSettings settings, CancellationToken ct)
@@ -579,7 +596,10 @@ public sealed class SyncEngine : IAsyncDisposable
                 // Never overwrite: a file created after the atomic preservation remains intact.
                 File.Move(temporary, path, overwrite: false);
                 staging.ForgetCheckpoint();
-                await _placeholders.MarkInSyncAsync(path, cloud, ct);
+                var baseline = new SyncEntry(relative, cloud, cloud.Size, cloud.ModifiedUtc) { NativeMarkPending = true };
+                _manifest.Put(baseline);
+                ShowPendingNativeMark(baseline, ActivityKind.Download);
+                await FinishNativeMarkAsync(baseline, settings, ct);
             }
             catch (InvalidDataException) { if (staging.Stream.CanWrite) staging.DiscardCorruptBytes(); throw; }
         }
@@ -600,8 +620,8 @@ public sealed class SyncEngine : IAsyncDisposable
     private string PreserveConflict(string path, string root)
     {
         if (!File.Exists(path)) throw new IOException("The conflicting local file disappeared.");
-        var name = Path.GetFileNameWithoutExtension(path);
-        var conflict = Path.Combine(Path.GetDirectoryName(path)!, $"{name} (conflict {DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}){Path.GetExtension(path)}");
+        var suffix = $" (conflict {DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]})";
+        var conflict = Path.Combine(Path.GetDirectoryName(path)!, PathRules.ConflictFileName(Path.GetFileName(path), suffix));
         // Same-directory rename is atomic and preserves edits made through an open handle. A
         // copy-then-delete sequence could discard a save which arrived after the copy finished.
         File.Move(path, conflict, overwrite: false);
@@ -620,7 +640,7 @@ public sealed class SyncEngine : IAsyncDisposable
         File.Move(path, destination, overwrite: false);
     }
 
-    private async Task<bool> TryAdoptRemoteAsync(string relative, string path, CloudObject cloud, CancellationToken ct)
+    private async Task<bool> TryAdoptRemoteAsync(string relative, string path, CloudObject cloud, AppSettings settings, CancellationToken ct)
     {
         if (cloud.Sha1 is not { Length: > 0 } || cloud.Sha1.Equals("none", StringComparison.OrdinalIgnoreCase)) return false;
         await TransferResources.Hashing.WaitAsync(ct);
@@ -634,9 +654,67 @@ public sealed class SyncEngine : IAsyncDisposable
             File.SetLastWriteTimeUtc(path, cloud.ModifiedUtc.UtcDateTime);
         }
         finally { TransferResources.Hashing.Release(); }
-        await _placeholders.MarkInSyncAsync(path, cloud, ct);
-        SaveBaseline(relative, cloud);
+        var baseline = new SyncEntry(relative, cloud, cloud.Size, cloud.ModifiedUtc) { NativeMarkPending = true };
+        _manifest.Put(baseline);
+        ShowPendingNativeMark(baseline, ActivityKind.Upload);
+        await FinishNativeMarkAsync(baseline, settings, ct);
+        _transfers.Complete(relative, ActivityKind.Upload);
         return true;
+    }
+
+    private async Task<bool> TryFinishPendingNativeMarkAsync(SyncEntry baseline, AppSettings settings, CancellationToken ct)
+    {
+        var path = PathRules.FullPath(settings.RootPath, baseline.RelativePath);
+        if (!File.Exists(path)) return false;
+        if (_placeholders.IsPlaceholder(path) && !_placeholders.IsHydrated(path))
+            await _placeholders.HydrateAsync(path, ct);
+        if (baseline.Remote.Sha1 is not { Length: 40 } expected || !expected.All(Uri.IsHexDigit)) return false;
+        await TransferResources.Hashing.WaitAsync(ct);
+        try
+        {
+            await using var source = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            // Timestamp equality is not enough: editors and restore tools can retain it while
+            // replacing same-size bytes. A pending metadata operation must recheck the source.
+            if (source.Length != baseline.LocalSize || File.GetLastWriteTimeUtc(path) != baseline.LocalWriteUtc.UtcDateTime)
+                return false;
+            var actual = Convert.ToHexString(await SHA1.HashDataAsync(source, ct));
+            if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase)) return false;
+        }
+        finally { TransferResources.Hashing.Release(); }
+        // The source handle and shared hash slot are released before native marking, which
+        // obtains its own protected handle and rechecks bytes atomically before marking clean.
+        ShowPendingNativeMark(baseline, ActivityKind.Upload);
+        await FinishNativeMarkAsync(baseline, settings, ct);
+        _transfers.Complete(baseline.RelativePath, ActivityKind.Upload);
+        Record(ActivityKind.Information, baseline.RelativePath, "Windows file sync status updated; the verified B2 copy was retained.");
+        return true;
+    }
+
+    private void ShowPendingNativeMark(SyncEntry baseline, ActivityKind kind)
+    {
+        _transfers.Queue([(baseline.RelativePath, kind, baseline.LocalSize)]);
+        SetPhase(baseline.RelativePath, kind, TransferPhase.Verifying);
+        UpdateProgress(baseline.RelativePath, kind,
+            new(baseline.LocalSize, baseline.LocalSize) { IsBaseline = true });
+        SetStatus(_snapshot with { Message = "Completing Windows file sync status" });
+    }
+
+    private async Task FinishNativeMarkAsync(SyncEntry baseline, AppSettings settings, CancellationToken ct)
+    {
+        var path = PathRules.FullPath(settings.RootPath, baseline.RelativePath);
+        try
+        {
+            await _placeholders.MarkInSyncAsync(path, baseline.Remote with { ModifiedUtc = baseline.LocalWriteUtc }, ct);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or
+            System.Runtime.InteropServices.COMException)
+        {
+            throw new IOException("Your file is verified in Backblaze B2. Windows could not update its sync status; " +
+                "CloudBay will retry without uploading the same bytes again. " + error.Message, error);
+        }
+        _manifest.Put(baseline with { NativeMarkPending = false });
     }
 
     private static async Task<string> HashAsync(string path, CancellationToken ct)

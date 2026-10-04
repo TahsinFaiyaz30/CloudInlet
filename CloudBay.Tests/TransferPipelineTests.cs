@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using CloudBay.Core;
 using CloudBay.Core.Sync;
@@ -169,6 +170,204 @@ public sealed class TransferPipelineTests
         Assert.AreEqual(5, h.Cloud.UploadedCount);
         Assert.AreEqual(5, h.Latest.Transfers.Count(item => item.Phase == TransferPhase.Retrying));
         for (var i = 0; i < 5; i++) Assert.AreEqual("keep this", await File.ReadAllTextAsync(h.Path($"important-{i}.txt")));
+    }
+
+    [DataTestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task VerifiedUploadSurvivesMarkFailureAndRestartsWithoutCreatingAnotherCloudVersion(bool cloudFilesHresult)
+    {
+        await using var h = new Harness(1);
+        await File.WriteAllTextAsync(h.Path("document.txt"), "a verified cloud snapshot");
+        h.Placeholders.FailMarks = 1;
+        if (cloudFilesHresult)
+            h.Placeholders.MarkFailure = new System.Runtime.InteropServices.COMException("The requested Cloud Files operation is unsupported.", unchecked((int)0x8007017C));
+        h.Placeholders.OnMark = _ =>
+        {
+            h.Placeholders.OnMark = null;
+            Assert.IsTrue(h.Manifest.ReadAll()["document.txt"].NativeMarkPending,
+                "The verified immutable version and pending local status must be durable before marking begins.");
+        };
+        await h.Engine.SyncNowAsync();
+        var verified = h.Manifest.ReadAll()["document.txt"];
+        Assert.IsTrue(verified.NativeMarkPending);
+        Assert.AreEqual(1, h.Cloud.UploadedCount);
+        Assert.AreEqual(0, h.Placeholders.Marked);
+        Assert.AreEqual(ClientState.Attention, h.Latest.State);
+        Assert.AreEqual(TransferPhase.Retrying, h.Latest.Transfers.Single().Phase);
+        var firstHistory = h.Activity.ToArray();
+        Assert.AreEqual(1, firstHistory.Count(item => item.Kind == ActivityKind.Upload));
+        Assert.IsTrue(firstHistory.Single(item => item.Kind == ActivityKind.Upload).Message.Contains("verified", StringComparison.Ordinal));
+        Assert.IsTrue(firstHistory.Single(item => item.Kind == ActivityKind.Error).Message.Contains("Windows could not update", StringComparison.Ordinal));
+
+        await h.RestartAsync();
+        Assert.IsTrue(h.Manifest.ReadAll()["document.txt"].NativeMarkPending);
+        await h.Engine.SyncNowAsync();
+        Assert.AreEqual(1, h.Cloud.UploadedCount, "A Windows marking retry must reuse the same verified B2 version.");
+        Assert.AreEqual(verified.Remote.FileId, h.Manifest.ReadAll()["document.txt"].Remote.FileId);
+        Assert.IsFalse(h.Manifest.ReadAll()["document.txt"].NativeMarkPending);
+        Assert.AreEqual(2, h.Placeholders.MarkAttempts);
+        Assert.AreEqual(1, h.Placeholders.Marked);
+        Assert.AreEqual(ClientState.UpToDate, h.Latest.State);
+        Assert.AreEqual(0, h.Latest.Transfers.Count);
+        Assert.IsTrue(h.Snapshots.Any(value => value.Message == "Completing Windows file sync status" &&
+            value.Transfers.Any(item => item.Phase == TransferPhase.Verifying)));
+        await h.Engine.SyncNowAsync();
+        Assert.AreEqual(1, h.Cloud.UploadedCount);
+        Assert.AreEqual(2, h.Placeholders.MarkAttempts, "Completed native metadata must not stay permanently pending.");
+        Assert.AreEqual(1, h.Activity.Count(item => item.Kind == ActivityKind.Upload), "Metadata retries must not fabricate uploaded-file history.");
+    }
+
+    [DataTestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task PendingMarkHashCheckKeepsLaterLocalEditsDirtyEvenWhenMetadataMatches(bool preserveTimestamp)
+    {
+        await using var h = new Harness(1);
+        var path = h.Path("document.txt");
+        await File.WriteAllTextAsync(path, "original");
+        h.Placeholders.FailMarks = 1;
+        await h.Engine.SyncNowAsync();
+        var previous = h.Manifest.ReadAll()["document.txt"];
+        await File.WriteAllTextAsync(path, "modified"); // Same length; a timestamp-preserving save requires the SHA1 check.
+        if (preserveTimestamp) File.SetLastWriteTimeUtc(path, previous.LocalWriteUtc.UtcDateTime);
+        await h.Engine.SyncNowAsync();
+        Assert.AreEqual("modified", await File.ReadAllTextAsync(path));
+        Assert.AreEqual(2, h.Cloud.UploadedCount, "Changed bytes must be uploaded before they can be marked clean.");
+        var current = h.Manifest.ReadAll()["document.txt"];
+        Assert.AreNotEqual(previous.Remote.FileId, current.Remote.FileId);
+        Assert.AreNotEqual(previous.Remote.Sha1, current.Remote.Sha1);
+        Assert.IsFalse(current.NativeMarkPending);
+        Assert.AreEqual(1, h.Placeholders.Marked);
+        Assert.AreEqual(ClientState.UpToDate, h.Latest.State);
+    }
+
+    [TestMethod]
+    public async Task EditDuringPendingMarkFailureKeepsTheVerifiedVersionAndUploadsOnlyTheNewSave()
+    {
+        await using var h = new Harness(1);
+        var path = h.Path("document.txt");
+        await File.WriteAllTextAsync(path, "old snapshot");
+        h.Placeholders.FailMarks = 1;
+        await h.Engine.SyncNowAsync();
+        var previous = h.Manifest.ReadAll()["document.txt"];
+        h.Placeholders.OnMark = marked =>
+        {
+            h.Placeholders.OnMark = null;
+            File.WriteAllText(marked, "a later user save remains dirty");
+            throw new IOException("The protected source changed before native marking finished.");
+        };
+        await h.Engine.SyncNowAsync();
+        Assert.AreEqual(1, h.Cloud.UploadedCount, "Retrying unchanged uploaded bytes must perform metadata work only.");
+        Assert.AreEqual("a later user save remains dirty", await File.ReadAllTextAsync(path));
+        Assert.AreEqual(previous.Remote.FileId, h.Manifest.ReadAll()["document.txt"].Remote.FileId);
+        Assert.IsTrue(h.Manifest.ReadAll()["document.txt"].NativeMarkPending);
+        Assert.AreEqual(ClientState.Attention, h.Latest.State);
+        await h.Engine.SyncNowAsync();
+        Assert.AreEqual(2, h.Cloud.UploadedCount);
+        Assert.AreEqual("a later user save remains dirty", await File.ReadAllTextAsync(path));
+        Assert.IsFalse(h.Manifest.ReadAll()["document.txt"].NativeMarkPending);
+        Assert.AreEqual(ClientState.UpToDate, h.Latest.State);
+    }
+
+    [TestMethod]
+    public async Task ReadOnlySourceRetainsItsAttributeAcrossVerifiedUploadAndMetadataRetry()
+    {
+        await using var h = new Harness(1);
+        var path = h.Path("read-only.txt");
+        await File.WriteAllTextAsync(path, "important read-only source");
+        File.SetAttributes(path, File.GetAttributes(path) | FileAttributes.ReadOnly);
+        try
+        {
+            h.Placeholders.FailMarks = 1;
+            await h.Engine.SyncNowAsync();
+            await h.Engine.SyncNowAsync();
+            Assert.AreEqual(1, h.Cloud.UploadedCount);
+            Assert.IsTrue((File.GetAttributes(path) & FileAttributes.ReadOnly) != 0);
+            Assert.AreEqual("important read-only source", await File.ReadAllTextAsync(path));
+            Assert.IsFalse(h.Manifest.ReadAll()["read-only.txt"].NativeMarkPending);
+        }
+        finally { File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.ReadOnly); }
+    }
+
+    [TestMethod]
+    public async Task LockedLocalEditCannotBecomeACloudDeletionOrACommittedOlderSnapshot()
+    {
+        await using var h = new Harness(1);
+        var path = h.Path("locked.txt");
+        await File.WriteAllTextAsync(path, "original content");
+        await h.Engine.SyncNowAsync();
+        var previous = h.Manifest.ReadAll()["locked.txt"];
+        await File.WriteAllTextAsync(path, "a later locked local edit");
+        using (var locked = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            await h.Engine.SyncNowAsync();
+            Assert.AreEqual(ClientState.Attention, h.Latest.State);
+            Assert.AreEqual(1, h.Cloud.UploadedCount);
+            Assert.AreEqual(0, h.Cloud.Hidden.Count);
+            Assert.AreEqual(previous.Remote.FileId, h.Manifest.ReadAll()["locked.txt"].Remote.FileId);
+        }
+        await h.Engine.SyncNowAsync();
+        Assert.AreEqual(2, h.Cloud.UploadedCount);
+        Assert.AreEqual("a later locked local edit", await File.ReadAllTextAsync(path));
+        Assert.AreEqual(ClientState.UpToDate, h.Latest.State);
+    }
+
+    [TestMethod]
+    public async Task NearMaximumLengthFileNamePreservesBothCopiesWhenCloudAndLocalChangesConflict()
+    {
+        await using var h = new Harness(1);
+        var name = new string('a', 246) + ".txt";
+        var path = h.Path(name);
+        await File.WriteAllTextAsync(path, "original local snapshot");
+        await h.Engine.SyncNowAsync();
+        await File.WriteAllTextAsync(path, "newer local content");
+        h.Cloud.Seed(name, "newer cloud content");
+        await h.Engine.SyncNowAsync();
+        Assert.AreEqual("newer cloud content", await File.ReadAllTextAsync(path));
+        var conflict = Directory.GetFiles(h.Root, "* (conflict *).txt").Single();
+        Assert.IsTrue(System.IO.Path.GetFileName(conflict).Length <= 255);
+        Assert.AreEqual("newer local content", await File.ReadAllTextAsync(conflict));
+        Assert.AreEqual(ClientState.UpToDate, h.Latest.State);
+    }
+
+    [TestMethod]
+    public void LegacyManifestAddsPendingMetadataStateWithoutChangingExistingBaselines()
+    {
+        var folder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "CloudBay.LegacyManifest", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        var database = System.IO.Path.Combine(folder, "legacy.sqlite");
+        var remote = new CloudObject("verified-version", "CloudBay/legacy.txt", 17,
+            new string('a', 40), DateTimeOffset.UnixEpoch);
+        try
+        {
+            using (var connection = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=" + database))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "CREATE TABLE files(path TEXT PRIMARY KEY COLLATE NOCASE,remote TEXT NOT NULL,local_size INTEGER NOT NULL,local_write TEXT NOT NULL);" +
+                    " CREATE TABLE directories(path TEXT PRIMARY KEY COLLATE NOCASE,remote TEXT NOT NULL);" +
+                    " INSERT INTO files(path,remote,local_size,local_write) VALUES('legacy.txt',$remote,17,$write);";
+                command.Parameters.AddWithValue("$remote", JsonSerializer.Serialize(remote));
+                command.Parameters.AddWithValue("$write", DateTimeOffset.UnixEpoch.ToString("O"));
+                command.ExecuteNonQuery();
+            }
+            var migrated = new SyncManifest(database);
+            var original = migrated.ReadAll()["legacy.txt"];
+            Assert.AreEqual(remote, original.Remote);
+            Assert.IsFalse(original.NativeMarkPending, "Older baselines have no unfinished native status operation.");
+            migrated.Put(original with { NativeMarkPending = true });
+            var reopened = new SyncManifest(database);
+            Assert.IsTrue(reopened.ReadAll()["legacy.txt"].NativeMarkPending);
+            reopened.Put(original);
+            Assert.IsFalse(new SyncManifest(database).ReadAll()["legacy.txt"].NativeMarkPending);
+            reopened.Put(original with { NativeMarkPending = true });
+            reopened.Remove("LEGACY.TXT");
+            reopened.Put(original);
+            Assert.IsFalse(new SyncManifest(database).ReadAll()["legacy.txt"].NativeMarkPending,
+                "Deleting a file baseline must also remove its old case-insensitive pending mark.");
+        }
+        finally { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); Directory.Delete(folder, recursive: true); }
     }
 
     [TestMethod]
@@ -363,22 +562,34 @@ public sealed class TransferPipelineTests
     private sealed class Harness : IAsyncDisposable
     {
         private readonly string _directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "CloudBay.Pipeline", Guid.NewGuid().ToString("N"));
+        private readonly int _concurrency;
         public string Root => System.IO.Path.Combine(_directory, "Root");
         public FakeCloud Cloud { get; } = new();
         public FakePlaceholders Placeholders { get; } = new();
         public string? PolicyReason;
-        public SyncManifest Manifest { get; }
-        public SyncEngine Engine { get; }
+        public SyncManifest Manifest { get; private set; }
+        public SyncEngine Engine { get; private set; }
+        public ConcurrentQueue<ActivityEvent> Activity { get; } = new();
         private readonly ConcurrentQueue<SyncSnapshot> _snapshots = new();
         public SyncSnapshot Latest => _snapshots.Last();
+        public IEnumerable<SyncSnapshot> Snapshots => _snapshots.ToArray();
         public Harness(int concurrency)
         {
+            _concurrency = concurrency;
             Directory.CreateDirectory(Root);
             Manifest = new(System.IO.Path.Combine(_directory, "state.sqlite"));
-            Engine = new(Cloud, Placeholders, Manifest, new AppSettings { RootPath = Root, KeyId = "key", BucketId = "bucket",
-                FilesOnDemand = false, UploadMode = UploadMode.Manual, UploadConcurrency = concurrency, DownloadConcurrency = concurrency },
-                System.IO.Path.Combine(_directory, "Recovery"), _ => { }, _snapshots.Enqueue,
+            Engine = CreateEngine();
+        }
+        private SyncEngine CreateEngine() => new(Cloud, Placeholders, Manifest,
+                new AppSettings { RootPath = Root, KeyId = "key", BucketId = "bucket", FilesOnDemand = false,
+                    UploadMode = UploadMode.Manual, UploadConcurrency = _concurrency, DownloadConcurrency = _concurrency },
+                System.IO.Path.Combine(_directory, "Recovery"), Activity.Enqueue, _snapshots.Enqueue,
                 policy: () => PolicyReason, rootDisplayName: "Personal backup");
+        public async Task RestartAsync()
+        {
+            await Engine.DisposeAsync();
+            Manifest = new(System.IO.Path.Combine(_directory, "state.sqlite"));
+            Engine = CreateEngine();
         }
         public string Path(string name) => System.IO.Path.Combine(Root, name.Replace('/', System.IO.Path.DirectorySeparatorChar));
         public async Task<SyncSnapshot> WaitSnapshotAsync(Func<SyncSnapshot, bool> predicate)
@@ -396,7 +607,8 @@ public sealed class TransferPipelineTests
 
     private sealed class FakePlaceholders : IPlaceholderService
     {
-        public int Marked;
+        public int Marked, MarkAttempts, FailMarks;
+        public Exception? MarkFailure;
         public Action<string>? OnMark;
         public bool IsPlaceholder(string path) => false;
         public bool IsHydrated(string path) => true;
@@ -404,7 +616,17 @@ public sealed class TransferPipelineTests
         public Task ConnectAsync(string root, string identity, HydrationHandler hydrate, CancellationToken ct = default) => Task.CompletedTask;
         public Task CreateOrUpdateAsync(string path, CloudObject file, bool inSync, CancellationToken ct = default) => Task.CompletedTask;
         public Task MarkInSyncAsync(string path, CloudObject file, CancellationToken ct = default)
-        { Interlocked.Increment(ref Marked); OnMark?.Invoke(path); return Task.CompletedTask; }
+        {
+            Interlocked.Increment(ref MarkAttempts);
+            OnMark?.Invoke(path);
+            if (FailMarks > 0)
+            {
+                Interlocked.Decrement(ref FailMarks);
+                throw MarkFailure ?? new IOException("Windows file metadata is temporarily locked.");
+            }
+            Interlocked.Increment(ref Marked);
+            return Task.CompletedTask;
+        }
         public Task SetPinAsync(string path, PinMode mode, CancellationToken ct = default) => Task.CompletedTask;
         public Task FreeSpaceAsync(string path, CancellationToken ct = default) => Task.CompletedTask;
         public Task DisconnectAsync() => Task.CompletedTask;
@@ -417,6 +639,7 @@ public sealed class TransferPipelineTests
         private int _verifying, _uploaded, _pendingVerification, _maximumPendingVerification;
         public bool HoldVerification, FailVerification, CorruptAcknowledgment, InterruptDownload;
         public int ResumedChunks;
+        public ConcurrentBag<string> Hidden { get; } = [];
         public int UploadedCount => Volatile.Read(ref _uploaded);
         public int MaximumPendingVerification => Volatile.Read(ref _maximumPendingVerification);
         public TimeSpan VerificationDelay;
@@ -479,7 +702,8 @@ public sealed class TransferPipelineTests
             destination.SetLength(bytes.Length); destination.Flush(true);
             progress?.Report(new(bytes.Length, bytes.Length));
         }
-        public Task HideAsync(string bucket, string key, CancellationToken ct = default) => Task.CompletedTask;
+        public Task HideAsync(string bucket, string key, CancellationToken ct = default)
+        { Hidden.Add(key); _files.TryRemove(key, out _); return Task.CompletedTask; }
         public Task<CloudAccount> ConnectAsync(B2Credentials credentials, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<CloudBucket>> ListBucketsAsync(CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<CloudObject>> VersionsAsync(string bucket, string key, CancellationToken ct = default) => throw new NotSupportedException();

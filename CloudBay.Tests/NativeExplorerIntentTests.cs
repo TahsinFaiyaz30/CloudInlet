@@ -1,7 +1,9 @@
 using System.ComponentModel;
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
+using System.Security.Principal;
 using CloudBay.Core;
 using CloudBay.Windows;
 using CloudBay.Windows.CloudFiles;
@@ -117,6 +119,147 @@ public sealed class NativeExplorerIntentTests
                 Convert.ToHexString(SHA1.HashData(content)), DateTimeOffset.UtcNow), true, token);
             Assert.IsNull(FolderAppearance.GetIconResource(folder));
             Assert.IsFalse(service.IsHydrated(path), "Refreshing a folder card must not download an online-only INI.");
+        });
+    }
+
+    [TestMethod]
+    [Timeout(90_000)]
+    public async Task ReadOnlyRegularFilesAndPlaceholdersCanBeMarkedSyncedWithoutChangingAttributes()
+    {
+        await RunIsolatedAsync(async (service, root, versions, token) =>
+        {
+            var path = Path.Combine(root, "readonly-object.bin");
+            var bytes = RandomNumberGenerator.GetBytes(65_031);
+            versions["readonly-object-v1"] = bytes;
+            versions["readonly-object-v2"] = bytes;
+            await File.WriteAllBytesAsync(path, bytes, token);
+            const FileAttributes retained = FileAttributes.ReadOnly | FileAttributes.Hidden | FileAttributes.System;
+            File.SetAttributes(path, File.GetAttributes(path) | retained);
+            try
+            {
+                var cloud = new CloudObject("readonly-object-v1", "readonly-object.bin", bytes.Length,
+                    Convert.ToHexString(SHA1.HashData(bytes)), new DateTimeOffset(File.GetLastWriteTimeUtc(path)));
+                await service.MarkInSyncAsync(path, cloud, token);
+                Assert.IsTrue(service.IsPlaceholder(path), "A readable read-only upload must convert to a native placeholder.");
+                Assert.IsFalse(service.HasLocalChanges(path));
+                Assert.AreEqual(retained, File.GetAttributes(path) & retained);
+                CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(path, token));
+
+                await service.MarkInSyncAsync(path, cloud with { FileId = "readonly-object-v2" }, token);
+                Assert.IsFalse(service.HasLocalChanges(path), "Existing read-only identity metadata must be marked in sync.");
+                Assert.AreEqual(retained, File.GetAttributes(path) & retained);
+                await service.FreeSpaceAsync(path, token);
+                Assert.IsFalse(service.IsHydrated(path));
+                CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(path, token),
+                    "Eviction must hydrate from the newly marked read-only identity.");
+                Assert.AreEqual(retained, File.GetAttributes(path) & retained);
+            }
+            finally { ClearGeneratedFixtureReadOnly(path); }
+        });
+    }
+
+    [TestMethod]
+    [Timeout(90_000)]
+    public async Task ReadOnlyPlaceholdersKeepAttributesThroughShellPinningAndRemoteUpdates()
+    {
+        await RunIsolatedAsync(async (service, root, versions, token) =>
+        {
+            var path = Path.Combine(root, "readonly-cloud.bin");
+            var original = RandomNumberGenerator.GetBytes(128_029);
+            var replacement = RandomNumberGenerator.GetBytes(256_017);
+            versions["readonly-cloud-v1"] = original;
+            versions["readonly-cloud-v2"] = replacement;
+            var cloud = new CloudObject("readonly-cloud-v1", "readonly-cloud.bin", original.Length,
+                Convert.ToHexString(SHA1.HashData(original)), DateTimeOffset.UtcNow);
+            await service.CreateOrUpdateAsync(path, cloud, true, token);
+            const FileAttributes retained = FileAttributes.ReadOnly | FileAttributes.Hidden | FileAttributes.System;
+            File.SetAttributes(path, File.GetAttributes(path) | retained);
+            try
+            {
+                SetWindowsPin(path, 1);
+                await UntilAsync(() => service.IsHydrated(path), token);
+                Assert.AreEqual(retained, File.GetAttributes(path) & retained);
+                SetWindowsPin(path, 2);
+                await UntilAsync(() => !service.IsHydrated(path), token);
+                Assert.AreEqual(retained, File.GetAttributes(path) & retained);
+                await service.HydrateAsync(path, token);
+                CollectionAssert.AreEqual(original, await File.ReadAllBytesAsync(path, token));
+                await service.SetPinAsync(path, PinMode.AlwaysAvailable, token);
+                await service.CreateOrUpdateAsync(path, cloud with { FileId = "readonly-cloud-v2", Size = replacement.Length,
+                    Sha1 = Convert.ToHexString(SHA1.HashData(replacement)), ModifiedUtc = DateTimeOffset.UtcNow }, true, token);
+                CollectionAssert.AreEqual(replacement, await File.ReadAllBytesAsync(path, token));
+                Assert.AreEqual(retained, File.GetAttributes(path) & retained,
+                    "A remote version must change its bytes without replacing existing Windows attributes.");
+            }
+            finally { ClearGeneratedFixtureReadOnly(path); }
+        });
+    }
+
+    [TestMethod]
+    [Timeout(90_000)]
+    public async Task ReadOnlyFilesRemainResidentAndOrdinaryAfterUnregisterPreparation()
+    {
+        await RunIsolatedAsync(async (service, root, versions, token) =>
+        {
+            var path = Path.Combine(root, "readonly-disconnect.bin");
+            var bytes = RandomNumberGenerator.GetBytes(65_019);
+            versions["readonly-disconnect"] = bytes;
+            await File.WriteAllBytesAsync(path, bytes, token);
+            File.SetAttributes(path, File.GetAttributes(path) | FileAttributes.ReadOnly);
+            try
+            {
+                await service.MarkInSyncAsync(path, new("readonly-disconnect", "readonly-disconnect.bin", bytes.Length,
+                    Convert.ToHexString(SHA1.HashData(bytes)), new DateTimeOffset(File.GetLastWriteTimeUtc(path))), token);
+                await service.FreeSpaceAsync(path, token);
+                Assert.IsFalse(service.IsHydrated(path));
+                await service.PrepareForUnregisterAsync(token);
+                Assert.IsFalse(service.IsPlaceholder(path), "Explicit disconnect preparation must safely revert read-only content.");
+                CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(path, token));
+                Assert.IsTrue((File.GetAttributes(path) & FileAttributes.ReadOnly) != 0,
+                    "Disconnect must preserve the original read-only attribute.");
+            }
+            finally { ClearGeneratedFixtureReadOnly(path); }
+        });
+    }
+
+    [TestMethod]
+    [Timeout(90_000)]
+    public async Task GenuineNativeMetadataPermissionDenialPreservesReadableLocalBytes()
+    {
+        await RunIsolatedAsync(async (service, root, versions, token) =>
+        {
+            var path = Path.Combine(root, "metadata-denied.bin");
+            var bytes = RandomNumberGenerator.GetBytes(8_017);
+            await File.WriteAllBytesAsync(path, bytes, token);
+            var cloud = new CloudObject("metadata-denied", "metadata-denied.bin", bytes.Length,
+                Convert.ToHexString(SHA1.HashData(bytes)), new DateTimeOffset(File.GetLastWriteTimeUtc(path)));
+            var original = new FileInfo(path).GetAccessControl(AccessControlSections.Access);
+            using var restore = CreateFileW(path, 0x60000, 7, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
+            if (restore.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+            var denied = new FileSecurity();
+            denied.SetSecurityDescriptorBinaryForm(original.GetSecurityDescriptorBinaryForm());
+            denied.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.WorldSid, null),
+                FileSystemRights.WriteData | FileSystemRights.AppendData | FileSystemRights.ChangePermissions, AccessControlType.Deny));
+            // OWNER RIGHTS suppresses the owner's implicit WRITE_DAC permission, making this
+            // a genuine metadata denial instead of only a read-only content attribute.
+            denied.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier("S-1-3-4"),
+                FileSystemRights.ChangePermissions, AccessControlType.Deny));
+            if (!SetKernelObjectSecurity(restore, 4, denied.GetSecurityDescriptorBinaryForm()))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            try
+            {
+                var error = await Assert.ThrowsExceptionAsync<COMException>(() => service.MarkInSyncAsync(path, cloud, token));
+                Assert.IsTrue(error.HResult < 0, "Real ACL denial must remain explicit rather than be reported as native success.");
+                Assert.IsFalse(service.IsPlaceholder(path));
+                CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(path, token));
+            }
+            finally
+            {
+                // Restore through the already-authorized handle: never elevate or rewrite
+                // user ACLs, and never leave a locked-down generated test fixture behind.
+                if (!SetKernelObjectSecurity(restore, 4, original.GetSecurityDescriptorBinaryForm()))
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
         });
     }
 
@@ -540,6 +683,18 @@ public sealed class NativeExplorerIntentTests
         return !handle.IsInvalid && CfGetPlaceholderRangeInfo(handle, 1, 0, size, out var range, 16, out var returned) == 0 &&
             returned == 16 && range.Offset == 0 && range.Length >= size;
     }
+
+    private static void ClearGeneratedFixtureReadOnly(string path)
+    {
+        // These paths live only under RunIsolatedAsync's guarded GUID test root. Production
+        // code never clears attributes; this merely permits disposal of the test fixture.
+        if (File.Exists(path)) File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.ReadOnly);
+    }
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetKernelObjectSecurity(Microsoft.Win32.SafeHandles.SafeFileHandle handle,
+        uint securityInformation, byte[] securityDescriptor);
 
     private static async Task UntilAsync(Func<bool> condition, CancellationToken token)
     {

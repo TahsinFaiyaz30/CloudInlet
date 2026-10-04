@@ -200,7 +200,7 @@ public sealed class WindowsPlaceholderService : IPlaceholderService
                 return;
             }
             if (!IsPlaceholder(path)) throw new IOException($"Local data already exists at '{path}'. It must be uploaded or resolved before adding a cloud version.");
-            using var handle = Open(path, exclusive: true, writable: true);
+            using var handle = Open(path, exclusive: true);
             var current = ReadPlaceholder(handle);
             if (current.File?.FileId == file.FileId) return;
             if (current.Info.InSyncState != 1 || current.Info.ModifiedDataSize != 0)
@@ -211,6 +211,10 @@ public sealed class WindowsPlaceholderService : IPlaceholderService
             try
             {
                 var metadata = GetMetadata(file);
+                // Remote identity/size/timestamps do not replace Windows' local attributes.
+                // In particular Git objects and customized metadata must retain READONLY,
+                // HIDDEN and SYSTEM rather than inherit the new-file Archive default.
+                metadata.BasicInfo.FileAttributes = 0;
                 Check(CfUpdatePlaceholder(handle, metadata, identity, (uint)identity.Length, IntPtr.Zero, 0,
                     UpdateVerifyInSync | UpdateDehydrate | (inSync ? UpdateMarkInSync : 0x40u), IntPtr.Zero, IntPtr.Zero));
             }
@@ -232,7 +236,10 @@ public sealed class WindowsPlaceholderService : IPlaceholderService
             {
             cancellationToken.ThrowIfCancellationRequested();
             var identity = Serialize(file);
-            using var handle = Open(path, exclusive: true, writable: true);
+            // Conversion and in-sync metadata accept caller WRITE_DAC authorization.
+            // Requesting FILE_WRITE_DATA needlessly rejects readable READONLY files;
+            // the exclusive read oplock still protects the final hash and native marking.
+            using var handle = Open(path, exclusive: true);
             if (IsPlaceholder(path))
             {
                 var beforeUpload = ReadPlaceholder(handle).Info;
@@ -465,7 +472,7 @@ public sealed class WindowsPlaceholderService : IPlaceholderService
                 if (!IsPlaceholder(path)) continue;
                 try
                 {
-                    using var handle = Open(path, exclusive: true, writable: true);
+                    using var handle = Open(path, exclusive: true);
                     Check(CfRevertPlaceholder(handle, 0, IntPtr.Zero));
                     if (IsPlaceholder(path)) throw new IOException("Windows did not remove the cloud file state.");
                 }
@@ -478,7 +485,7 @@ public sealed class WindowsPlaceholderService : IPlaceholderService
                 if (!IsPlaceholder(path)) continue;
                 try
                 {
-                    using var handle = Open(path, exclusive: true, writable: true);
+                    using var handle = Open(path, exclusive: true);
                     Check(CfRevertPlaceholder(handle, 0, IntPtr.Zero));
                     if (IsPlaceholder(path)) throw new IOException("Windows did not remove the cloud folder state.");
                 }
@@ -509,7 +516,7 @@ public sealed class WindowsPlaceholderService : IPlaceholderService
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!IsPlaceholder(item)) continue;
-            using var handle = Open(item, exclusive: true, writable: true);
+            using var handle = Open(item, exclusive: true);
             var current = ReadPlaceholder(handle);
             if (current.Info.InSyncState != 1 || current.Info.ModifiedDataSize != 0 || current.File is null)
                 throw new IOException($"'{item}' has changes that are not backed up. It cannot be made online only.");
@@ -970,7 +977,7 @@ public sealed class WindowsPlaceholderService : IPlaceholderService
         {
             // The exclusive oplock plus a second dirty check protects edits racing a
             // Shell unpin notification. Never dehydrate an unuploaded or anonymous file.
-            using var handle = Open(item, exclusive: true, writable: true);
+            using var handle = Open(item, exclusive: true);
             var current = ReadPlaceholder(handle);
             if (current.Info.FileId != information.FileId || current.Info.PinState != 2 || current.Info.InSyncState != 1 ||
                 current.Info.ModifiedDataSize != 0 || current.File is null) return;

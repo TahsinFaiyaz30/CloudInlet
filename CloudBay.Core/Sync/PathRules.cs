@@ -6,7 +6,35 @@ public static class PathRules
 {
     private static readonly HashSet<string> Reserved = new(StringComparer.OrdinalIgnoreCase)
     { "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-      "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9" };
+      "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+      "COM¹", "COM²", "COM³", "LPT¹", "LPT²", "LPT³" };
+
+    /// <summary>Retains a unique conflict suffix without exceeding NTFS's component limit.</summary>
+    public static string ConflictFileName(string originalFileName, string suffix)
+    {
+        ValidateRelative(originalFileName);
+        if (originalFileName.Contains('/') || string.IsNullOrWhiteSpace(suffix) || suffix.Length > 253)
+            throw new ArgumentException("A conflict name needs one file name and a bounded unique suffix.");
+        ValidateRelative("x" + suffix);
+        if (suffix.Contains('/')) throw new ArgumentException("A conflict suffix cannot contain directory separators.");
+        var extension = Path.GetExtension(originalFileName);
+        var stem = Path.GetFileNameWithoutExtension(originalFileName);
+        var available = 255 - suffix.Length;
+        // An unusually long extension must leave at least one character for the stem.
+        extension = TruncateComponent(extension, Math.Min(extension.Length, available - 1));
+        stem = TruncateComponent(stem, available - extension.Length);
+        if (stem.Length == 0) stem = "x";
+        var result = stem + suffix + extension;
+        ValidateRelative(result);
+        return result;
+    }
+
+    private static string TruncateComponent(string value, int maximum)
+    {
+        var length = Math.Min(value.Length, maximum);
+        if (length > 0 && length < value.Length && char.IsHighSurrogate(value[length - 1]) && char.IsLowSurrogate(value[length])) length--;
+        return value[..length];
+    }
 
     public static string NormalizePrefix(string prefix)
     {
