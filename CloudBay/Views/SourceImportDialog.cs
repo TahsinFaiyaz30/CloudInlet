@@ -7,7 +7,6 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using Windows.Storage.Pickers;
 using SettingsCard = CommunityToolkit.WinUI.Controls.SettingsCard;
 
 namespace CloudBay.Views;
@@ -121,16 +120,19 @@ internal sealed class SourceImportDialog : ContentDialog
 
     private async Task BrowseAsync()
     {
-        if (_working || _presentationCandidates is not null) return;
+        if (_working || _closed || _presentationCandidates is not null) return;
+        var generation = _stageGeneration;
+        SetWorking(true);
+        var token = EnterOperation();
         try
         {
-            var picker = new FolderPicker { SuggestedStartLocation = PickerLocationId.ComputerFolder };
-            picker.FileTypeFilter.Add("*");
-            WinRT.Interop.InitializeWithWindow.Initialize(picker, _owner);
-            var folder = await picker.PickSingleFolderAsync();
-            if (folder is not null && !_closed) ShowFolder(folder.Path, folder.Name);
+            var folder = await DesktopPickers.PickFolderAsync(_owner, "Choose source folder", token);
+            if (folder is not null && !_closed && generation == _stageGeneration)
+                ShowFolder(folder, Path.GetFileName(Path.TrimEndingDirectorySeparator(folder)) is { Length: > 0 } name ? name : folder);
         }
-        catch (Exception error) { if (!_closed) ShowError(error); }
+        catch (OperationCanceledException) { }
+        catch (Exception error) { if (!_closed && generation == _stageGeneration) ShowError(error); }
+        finally { SetWorking(false); LeaveOperation(); }
     }
 
     internal async Task ShowExistingFoldersAsync()
@@ -476,7 +478,13 @@ internal sealed class SourceImportDialog : ContentDialog
         _stage == "folder" && (_chooseFolderOnly || !string.IsNullOrWhiteSpace(_destination.Text)) ||
         _stage == "cloud" && _bucket.SelectedItem is CloudBucket && !string.IsNullOrWhiteSpace(_destination.Text));
 
-    private void ShowError(Exception error) { _error.Message = error.Message; _error.IsOpen = true; }
+    private void ShowError(Exception error)
+    {
+        _error.Message = string.IsNullOrWhiteSpace(error.Message)
+            ? "Windows could not complete this step. Try again. Your original files have been kept."
+            : error.Message;
+        _error.IsOpen = true;
+    }
 
     private void DisableControls(DependencyObject node)
     {

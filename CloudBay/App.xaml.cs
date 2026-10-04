@@ -68,6 +68,23 @@ public partial class App : Microsoft.UI.Xaml.Application
             Exit();
             return;
         }
+        if (isSmoke && commandLine.Contains("--picker-smoke"))
+        {
+            try
+            {
+                var passed = await NativePickerValidation.RunAsync(Path.Combine(Environment.CurrentDirectory, "artifacts", "picker-smoke"));
+                Environment.ExitCode = passed ? 0 : 1;
+            }
+            catch (Exception error)
+            {
+                var output = Path.Combine(Environment.CurrentDirectory, "artifacts", "picker-smoke");
+                Directory.CreateDirectory(output);
+                await File.WriteAllTextAsync(Path.Combine(output, "failure.txt"), DescribeIsolatedFailure(error, "Validate native chooser"));
+                Environment.ExitCode = 1;
+            }
+            Exit();
+            return;
+        }
         if (isSmoke && smokeTheme is null)
         {
             await RunUiSmokeSuiteAsync(commandLine.Contains("--ui-smoke-tray"));

@@ -1,11 +1,11 @@
 using CloudBay.Application;
 using CloudBay.Core;
 using CloudBay.Core.Sync;
+using CloudBay.Windows;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using Windows.Storage.Pickers;
 
 namespace CloudBay.Views;
 
@@ -39,12 +39,14 @@ public sealed partial class ExclusionEditor : UserControl
     private bool _presentationOnly;
     private bool _refreshing;
     private bool _saving;
+    private bool _picking;
     private EditorKind _kind;
     private RuleReference? _editing;
     private readonly List<PatternToken> _tokens = [];
     private List<SelectedExclusion> _selections = [];
     private bool _selectionIsFolder;
     private readonly List<(Control Control, bool WasEnabled)> _disabledBuilderControls = [];
+    private readonly List<(Control Control, bool WasEnabled)> _disabledPickerControls = [];
     private readonly List<StackPanel> _tokenActions = [];
     private readonly List<(RuleReference Reference, ToggleSwitch Toggle, Button More)> _rowActions = [];
     private int _builderGeneration;
@@ -56,6 +58,9 @@ public sealed partial class ExclusionEditor : UserControl
     public ExclusionEditor()
     {
         InitializeComponent();
+        // A chooser can outlive navigation away from this view. Its result must
+        // never land in a subsequently reopened or different exclusion draft.
+        Unloaded += (_, _) => _builderGeneration++;
         foreach (var bar in new[] { ErrorBar, BuilderError })
             bar.RegisterPropertyChangedCallback(InfoBar.IsOpenProperty, (sender, _) =>
             {
@@ -121,12 +126,12 @@ public sealed partial class ExclusionEditor : UserControl
         Grid.SetColumn(copy, 1);
         row.Children.Add(copy);
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, VerticalAlignment = VerticalAlignment.Center };
-        var canChange = !_saving && BuilderPanel.Visibility != Visibility.Visible;
+        var canChange = !_saving && !_picking && BuilderPanel.Visibility != Visibility.Visible;
         var toggle = new ToggleSwitch { IsOn = enabled, OnContent = "", OffContent = "", MinWidth = 0, IsEnabled = canChange };
         AutomationProperties.SetName(toggle, $"Exclude {title}");
         toggle.Toggled += async (_, _) =>
         {
-            if (_saving) return;
+            if (_saving || _picking) return;
             await ChangeEnabledAsync(reference, toggle.IsOn);
         };
         actions.Children.Add(toggle);
@@ -198,7 +203,7 @@ public sealed partial class ExclusionEditor : UserControl
 
     private void StartBuilder(EditorKind kind, RuleReference? editing = null)
     {
-        if (_saving || BuilderPanel.Visibility == Visibility.Visible) return;
+        if (_saving || _picking || BuilderPanel.Visibility == Visibility.Visible) return;
         var generation = ++_builderGeneration;
         _refreshing = true;
         try
@@ -262,7 +267,7 @@ public sealed partial class ExclusionEditor : UserControl
 
     private void OpenExisting(RuleReference reference)
     {
-        if (_saving || BuilderPanel.Visibility == Visibility.Visible) return;
+        if (_saving || _picking || BuilderPanel.Visibility == Visibility.Visible) return;
         if (reference.Kind == RuleKind.Selected)
         {
             StartBuilder(EditorKind.Selection, reference);
@@ -375,6 +380,7 @@ public sealed partial class ExclusionEditor : UserControl
 
     private void AddLiteral_Click(object sender, RoutedEventArgs args)
     {
+        if (_saving || _picking) return;
         try
         {
             ValidateLiteral(LiteralBox.Text);
@@ -389,6 +395,7 @@ public sealed partial class ExclusionEditor : UserControl
 
     private void AddToken_Click(object sender, RoutedEventArgs args)
     {
+        if (_saving || _picking) return;
         if (sender is not MenuFlyoutItem { Tag: string kind }) return;
         _tokens.Add(new(kind switch { "text" => TokenKind.AnyText, "character" => TokenKind.AnyCharacter,
             "subfolders" => TokenKind.Subfolders, _ => TokenKind.Separator }));
@@ -434,6 +441,7 @@ public sealed partial class ExclusionEditor : UserControl
     private string BuildExtensionPattern()
     {
         var extension = ExtensionBox.Text.Trim().TrimStart('.');
+        if (extension.Length == 0) throw new InvalidDataException("Choose an example file, or enter a file extension such as jpg.");
         ValidateLiteral(extension);
         return "*." + extension;
     }
@@ -455,7 +463,7 @@ public sealed partial class ExclusionEditor : UserControl
             PreviewSummary.Text = _selections.Count == 0 ? "No items selected." :
                 $"Exclude {_selections.Count} selected {(_selections.Count == 1 ? (_selections[0].IsFolder ? "folder and everything inside" : "file") : "files")} in their current backup folders.";
             PreviewPattern.Text = "Selections are literal paths. Similar names in other folders stay included.";
-            SaveButton.IsEnabled = !_saving && _selections.Count > 0;
+            SaveButton.IsEnabled = !_saving && !_picking && _selections.Count > 0;
             return;
         }
         var scope = ScopeBox.SelectedItem as RuleScope;
@@ -477,7 +485,7 @@ public sealed partial class ExclusionEditor : UserControl
                 ? $"Exclude {TargetDescription(rule.Target).ToLowerInvariant()} in {ScopeDescription(rule.RootPath, rule.RelativeDirectory)}. Match these parts in order: {string.Join(" → ", _tokens.Select(token => token.Description))}."
                 : $"Exclude {target} {condition} in {ScopeDescription(rule.RootPath, rule.RelativeDirectory)}.{contents}";
             PreviewPattern.Text = "Generated pattern: " + rule.Pattern;
-            SaveButton.IsEnabled = !_saving;
+            SaveButton.IsEnabled = !_saving && !_picking;
             UpdateTest(rule);
         }
         catch (Exception error)
@@ -513,13 +521,13 @@ public sealed partial class ExclusionEditor : UserControl
     private void AddAdvanced_Click(object sender, RoutedEventArgs args) => StartBuilder(EditorKind.Advanced);
     private async void AddFiles_Click(object sender, RoutedEventArgs args)
     {
-        if (_saving || BuilderPanel.Visibility == Visibility.Visible) return;
+        if (_saving || _picking || BuilderPanel.Visibility == Visibility.Visible) return;
         StartBuilder(EditorKind.Selection);
         await ChooseSelectionsAsync(false);
     }
     private async void AddFolder_Click(object sender, RoutedEventArgs args)
     {
-        if (_saving || BuilderPanel.Visibility == Visibility.Visible) return;
+        if (_saving || _picking || BuilderPanel.Visibility == Visibility.Visible) return;
         StartBuilder(EditorKind.Selection);
         await ChooseSelectionsAsync(true);
     }
@@ -527,34 +535,79 @@ public sealed partial class ExclusionEditor : UserControl
 
     private void EnsurePickerAvailable()
     {
-        if (_presentationOnly) throw new InvalidOperationException("File and folder selection is unavailable in this isolated preview.");
         if (OwnerWindowHandle == 0) throw new InvalidOperationException("The window is not ready to open a file picker. Try again after the window opens.");
+    }
+
+    private bool TryBeginPicker(out int generation)
+    {
+        generation = _builderGeneration;
+        if (_saving || _picking || BuilderPanel.Visibility != Visibility.Visible) return false;
+        EnsurePickerAvailable();
+        _picking = true;
+        _disabledPickerControls.Clear();
+        CollectBuilderControlStates(BuilderPanel, _disabledPickerControls);
+        foreach (var (control, _) in _disabledPickerControls)
+            if (!ReferenceEquals(control, CancelButton)) control.IsEnabled = false;
+        BuilderError.IsOpen = false;
+        UpdatePickerControls();
+        UpdatePreview();
+        return true;
+    }
+
+    private bool IsCurrentDraft(int generation) => generation == _builderGeneration && IsLoaded &&
+        BuilderPanel.Visibility == Visibility.Visible;
+
+    private void EndPicker(int generation, Control focus)
+    {
+        _picking = false;
+        foreach (var (control, wasEnabled) in _disabledPickerControls) control.IsEnabled = wasEnabled;
+        _disabledPickerControls.Clear();
+        UpdatePickerControls();
+        UpdatePreview();
+        if (IsCurrentDraft(generation)) focus.Focus(FocusState.Programmatic);
+    }
+
+    private void UpdatePickerControls()
+    {
+        var available = !_saving && !_picking;
+        ChangeSelectionButton.IsEnabled = available;
+        ExampleFileButton.IsEnabled = available;
+        ScopeFolderButton.IsEnabled = available;
+        AddButton.IsEnabled = available && BuilderPanel.Visibility != Visibility.Visible;
+        RenderRows();
     }
 
     private async Task ChooseSelectionsAsync(bool folder)
     {
-        _selectionIsFolder = folder;
+        var generation = _builderGeneration;
+        var opened = false;
         try
         {
-            EnsurePickerAvailable();
+            if (!TryBeginPicker(out generation)) return;
+            opened = true;
+            _selectionIsFolder = folder;
             List<SelectedExclusion> chosen = [];
             if (folder)
             {
-                var picker = NewFolderPicker();
-                var selected = await picker.PickSingleFolderAsync();
-                if (selected is null) return;
-                chosen.Add(PathRules.CreateSelectedExclusion(_settings, selected.Path, true));
+                var selected = await DesktopPickers.PickFolderAsync(OwnerWindowHandle, "Choose folder");
+                if (!IsCurrentDraft(generation) || selected is null) return;
+                chosen.Add(PathRules.CreateSelectedExclusion(_settings, selected, true));
             }
             else
             {
-                var picker = NewFilePicker();
-                var selected = await picker.PickMultipleFilesAsync();
-                if (selected.Count == 0) return;
-                foreach (var file in selected) chosen.Add(PathRules.CreateSelectedExclusion(_settings, file.Path, false));
+                var selected = await DesktopPickers.PickFilesAsync(OwnerWindowHandle, "Choose files");
+                if (!IsCurrentDraft(generation) || selected.Count == 0) return;
+                foreach (var file in selected) chosen.Add(PathRules.CreateSelectedExclusion(_settings, file, false));
             }
+            _selectionIsFolder = folder;
             ApplyPickedSelections(chosen);
         }
-        catch (Exception error) { ShowError(error.Message, builder: true); }
+        catch (OperationCanceledException) { }
+        catch (Exception error)
+        {
+            if (IsCurrentDraft(generation)) ShowPickerError(error, folder ? "folder" : "files");
+        }
+        finally { if (opened) EndPicker(generation, ChangeSelectionButton); }
     }
 
     private void ApplyPickedSelections(List<SelectedExclusion> chosen)
@@ -565,62 +618,103 @@ public sealed partial class ExclusionEditor : UserControl
         UpdatePreview();
     }
 
-    private FileOpenPicker NewFilePicker()
-    {
-        var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.ComputerFolder };
-        picker.FileTypeFilter.Add("*");
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, OwnerWindowHandle);
-        return picker;
-    }
-
-    private FolderPicker NewFolderPicker()
-    {
-        var picker = new FolderPicker { SuggestedStartLocation = PickerLocationId.ComputerFolder };
-        picker.FileTypeFilter.Add("*");
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, OwnerWindowHandle);
-        return picker;
-    }
-
     private async void ExampleFile_Click(object sender, RoutedEventArgs args)
     {
+        var generation = _builderGeneration;
+        var opened = false;
         try
         {
-            EnsurePickerAvailable();
-            var file = await NewFilePicker().PickSingleFileAsync();
-            if (file is null) return;
-            var extension = Path.GetExtension(file.Name).TrimStart('.');
-            if (extension.Length == 0) throw new InvalidDataException("This file has no extension. Use a name rule or select the file itself.");
-            ExtensionBox.Text = extension;
-            BuilderError.IsOpen = false;
+            if (!TryBeginPicker(out generation)) return;
+            opened = true;
+            var file = await DesktopPickers.PickFileAsync(OwnerWindowHandle, "Use this file type");
+            ApplyPickedExample(file, generation);
         }
-        catch (Exception error) { ShowError(error.Message, builder: true); }
+        catch (OperationCanceledException) { }
+        catch (Exception error)
+        {
+            if (IsCurrentDraft(generation)) ShowPickerError(error, "example file");
+        }
+        finally { if (opened) EndPicker(generation, ExampleFileButton); }
+    }
+
+    private void ApplyPickedExample(string? file, int generation)
+    {
+        if (!IsCurrentDraft(generation) || file is null) return;
+        var extension = Path.GetExtension(file).TrimStart('.');
+        if (extension.Length == 0)
+        {
+            ShowError("Choose a file with an extension, such as photo.jpg. To skip a file with no extension, use Choose files or a Name rule instead. Your current rule has been kept.",
+                builder: true, title: "This file has no extension", severity: InfoBarSeverity.Warning);
+            return;
+        }
+        ExtensionBox.Text = extension;
+        BuilderError.IsOpen = false;
+        UpdatePreview();
     }
 
     private async void ScopeFolder_Click(object sender, RoutedEventArgs args)
     {
+        var generation = _builderGeneration;
+        var opened = false;
         try
         {
-            EnsurePickerAvailable();
-            var folder = await NewFolderPicker().PickSingleFolderAsync();
-            if (folder is null) return;
-            var root = ScopeBox.Items.OfType<RuleScope>().FirstOrDefault(scope => scope.Root is not null && PathEquals(scope.Root, folder.Path));
-            if (root is not null) SelectScope(root);
-            else
-            {
-                var selection = PathRules.CreateSelectedExclusion(_settings, folder.Path, true);
-                SelectScope(new(ScopeDescription(selection.RootPath, selection.RelativePath), selection.RootPath, selection.RelativePath));
-            }
-            BuilderError.IsOpen = false;
-            UpdatePreview();
+            if (!TryBeginPicker(out generation)) return;
+            opened = true;
+            var folder = await DesktopPickers.PickFolderAsync(OwnerWindowHandle, "Apply to this folder");
+            ApplyPickedScope(folder, generation);
         }
-        catch (Exception error) { ShowError(error.Message, builder: true); }
+        catch (OperationCanceledException) { }
+        catch (Exception error)
+        {
+            if (IsCurrentDraft(generation)) ShowPickerError(error, "folder");
+        }
+        finally { if (opened) EndPicker(generation, ScopeFolderButton); }
+    }
+
+    private void ApplyPickedScope(string? folder, int generation)
+    {
+        if (!IsCurrentDraft(generation) || folder is null) return;
+        // ComboBox items belong to the retained draft, not necessarily the
+        // latest backup configuration. Validate against current roots, and
+        // selecting a root means its whole tree rather than an existing sub-scope.
+        var root = _settings.CustomBackups.Select(backup => backup.SourcePath).Prepend(_settings.RootPath)
+            .Select(NormalizeRoot).FirstOrDefault(path => PathEquals(path, folder));
+        if (root is not null) SelectScope(new(ScopeDescription(root, null), root));
+        else
+        {
+            var selection = PathRules.CreateSelectedExclusion(_settings, folder, true);
+            SelectScope(new(ScopeDescription(selection.RootPath, selection.RelativePath), selection.RootPath, selection.RelativePath));
+        }
+        BuilderError.IsOpen = false;
+        UpdatePreview();
+    }
+
+    private void ShowPickerError(Exception error, string selection)
+    {
+        // Native COM failures can have an empty Message. Never show an empty
+        // red banner or echo an arbitrary filesystem path from an exception.
+        var message = error switch
+        {
+            InvalidDataException => error.Message,
+            InvalidOperationException => error.Message,
+            UnauthorizedAccessException => "Windows could not access this selection. Choose a file or folder your Windows account can access.",
+            IOException when error.InnerException is null && error.Message is
+                "Linked files and folders cannot be selected for backup exclusions." or
+                "Linked directories inside the sync folder cannot be synchronized." =>
+                "This selection points to a linked file or folder. Choose its original location inside a configured backup instead.",
+            _ => $"Windows could not open or use the {selection} chooser (0x{unchecked((uint)error.GetBaseException().HResult):X8}). Try again. Your current rule has been kept."
+        };
+        if (selection == "example file" && error is not InvalidDataException)
+            message += " You can also enter the file extension above, such as jpg.";
+        var label = selection switch { "files" => "files", "example file" => "an example file", _ => "a " + selection };
+        ShowError(message, builder: true, title: "Could not choose " + label);
     }
 
     private async void Save_Click(object sender, RoutedEventArgs args) => await SaveDraftAsync();
 
     private async Task SaveDraftAsync()
     {
-        if (_saving) return;
+        if (_saving || _picking) return;
         _builderGeneration++;
         try
         {
@@ -732,7 +826,7 @@ public sealed partial class ExclusionEditor : UserControl
 
     private async Task<bool> PersistAsync(AppSettings candidate, bool builder)
     {
-        if (_saving) return false;
+        if (_saving || _picking) return false;
         if (_presentationOnly) { ShowError("Changes are unavailable in this isolated preview.", builder); RenderRows(); return false; }
         if (SaveChangesAsync is null) { ShowError("Exclusions are not ready to save. Try again after the app finishes starting.", builder); RenderRows(); return false; }
         PathRules.ValidateSettings(candidate);
@@ -766,7 +860,7 @@ public sealed partial class ExclusionEditor : UserControl
         if (saving)
         {
             _disabledBuilderControls.Clear();
-            CollectBuilderControlStates(BuilderPanel);
+            CollectBuilderControlStates(BuilderPanel, _disabledBuilderControls);
             // Snapshot every effective state before disabling an Expander or other parent;
             // otherwise inherited false values would be mistaken for the original child state.
             foreach (var (control, _) in _disabledBuilderControls) control.IsEnabled = false;
@@ -781,23 +875,25 @@ public sealed partial class ExclusionEditor : UserControl
         BusyRing.Visibility = saving ? Visibility.Visible : Visibility.Collapsed;
         RenderRows();
         UpdatePreview();
+        UpdatePickerControls();
     }
 
-    private void CollectBuilderControlStates(DependencyObject parent)
+    private static void CollectBuilderControlStates(DependencyObject parent, List<(Control Control, bool WasEnabled)> states)
     {
         if (parent is Control control)
         {
-            _disabledBuilderControls.Add((control, control.IsEnabled));
+            states.Add((control, control.IsEnabled));
         }
         for (var index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
-            CollectBuilderControlStates(VisualTreeHelper.GetChild(parent, index));
+            CollectBuilderControlStates(VisualTreeHelper.GetChild(parent, index), states);
     }
 
-    private void ShowError(string message, bool builder)
+    private void ShowError(string message, bool builder, string title = "Exclusion was not changed", InfoBarSeverity severity = InfoBarSeverity.Error)
     {
         var bar = builder ? BuilderError : ErrorBar;
-        bar.Title = "Exclusion was not changed";
-        bar.Message = message;
+        bar.Title = title;
+        bar.Message = string.IsNullOrWhiteSpace(message) ? "The change could not be completed. Your existing exclusions and current rule have been kept. Try again." : message;
+        bar.Severity = severity;
         bar.IsOpen = true;
     }
 
@@ -811,7 +907,7 @@ public sealed partial class ExclusionEditor : UserControl
         _tokens.Clear();
         _selections = [];
         BuilderError.IsOpen = false;
-        AddButton.IsEnabled = true;
+        AddButton.IsEnabled = !_picking;
         RenderRows();
         AddButton.Focus(FocusState.Programmatic);
     }
@@ -822,6 +918,7 @@ public sealed partial class ExclusionEditor : UserControl
         var originalSettings = CloneExclusions(_settings);
         var originalPresentation = _presentationOnly;
         var originalSave = SaveChangesAsync;
+        var originalWindowHandle = OwnerWindowHandle;
         var suffix = ActualTheme == ElementTheme.Light ? "light" : "dark";
         var log = Path.Combine(outputDirectory, "exclusions-validation.txt");
         var fixtureRoot = Path.Combine(Path.GetTempPath(), "CloudBay-exclusion-presentation");
@@ -883,11 +980,75 @@ public sealed partial class ExclusionEditor : UserControl
             await ChangeEnabledAsync(new(RuleKind.Legacy, "~$*"), true);
             Assert(!_settings.DisabledLegacyExclusions.Contains("~$*"), "legacy rules can be re-enabled without conversion");
             StartBuilder(EditorKind.Type);
+            Assert(PreviewSummary.Text.Contains("Choose an example file", StringComparison.Ordinal) && !BuilderError.IsOpen,
+                "a new file-type rule invites file selection without treating empty input as a failed action");
             ExtensionBox.Text = ".jpg";
             Assert(BuildGuidedRule() is { Pattern: "*.jpg", Target: ExclusionTarget.Files }, "file extension builder targets files rather than similarly named folders");
             ExtensionBox.Text = "tar.gz";
             Assert(BuildGuidedRule().Pattern == "*.tar.gz", "compound file endings can be entered through the file-type builder");
+            SelectScope(new("Projects", fixtureRoot, "Projects"));
+            var typeDraft = BuildGuidedRule();
+            ApplyPickedExample(null, _builderGeneration);
+            ApplyPickedScope(null, _builderGeneration);
+            Assert(BuildGuidedRule() == typeDraft && !BuilderError.IsOpen,
+                "cancelling an example-file or scope chooser preserves the entire draft without an error banner");
+            var directoryScope = ScopeBox.SelectedItem as RuleScope ?? throw new InvalidOperationException("The fixture folder scope is missing.");
+            ScopeBox.Items.Remove(directoryScope);
+            ScopeBox.Items.Insert(0, directoryScope);
+            ApplyPickedScope(fixtureRoot, _builderGeneration);
+            Assert(BuildGuidedRule() is { RelativeDirectory: null } wholeRootRule && wholeRootRule.RootPath == fixtureRoot,
+                "choosing a backup root applies to its whole tree even when a matching subfolder scope appears first");
+            SelectScope(directoryScope);
+            var pickerSettings = CloneExclusions(_settings);
+            SetSettings(pickerSettings with { RootPath = fixtureRoot + "-changed", CustomBackups = [] }, _presentationOnly);
+            var staleRootRejected = false;
+            try { ApplyPickedScope(fixtureRoot, _builderGeneration); }
+            catch (InvalidDataException) { staleRootRejected = true; }
+            Assert(staleRootRejected && BuildGuidedRule() == typeDraft && ReferenceEquals(ScopeBox.SelectedItem, directoryScope),
+                "a root removed while choosing a scope is rejected without silently replacing the retained draft");
+            SetSettings(pickerSettings, _presentationOnly);
+            ApplyPickedExample(Path.Combine(fixtureRoot, "README"), _builderGeneration);
+            Assert(BuildGuidedRule() == typeDraft && BuilderError.IsOpen && BuilderError.Severity == InfoBarSeverity.Warning &&
+                BuilderError.Message.Contains("Name rule", StringComparison.Ordinal),
+                "an extensionless example explains name and selected-file alternatives while retaining the existing type and scope");
+            ShowPickerError(new IOException("Could not open file chooser.",
+                new System.Runtime.InteropServices.COMException("", unchecked((int)0x80004005))), "example file");
+            Assert(BuildGuidedRule() == typeDraft && BuilderError.IsOpen && BuilderError.Severity == InfoBarSeverity.Error &&
+                BuilderError.Message.Contains("0x80004005", StringComparison.Ordinal) && BuilderError.Message.Contains("file extension", StringComparison.Ordinal),
+                "a native chooser failure with no exception message has actionable text and retains the draft");
+            await Capture("exclusion-picker-failure");
+            ShowPickerError(new IOException(Path.Combine(fixtureRoot, "private-name.txt")), "folder");
+            Assert(!BuilderError.Message.Contains("private-name", StringComparison.Ordinal),
+                "arbitrary native failure text does not expose a selected filesystem path");
+            ShowError("  ", builder: true);
+            Assert(!string.IsNullOrWhiteSpace(BuilderError.Message), "every exclusion error has a useful message even when its exception text is empty");
+            BuilderError.IsOpen = false;
+            var originalOwner = OwnerWindowHandle;
+            OwnerWindowHandle = 0;
+            ExampleFile_Click(ExampleFileButton, new RoutedEventArgs());
+            Assert(!_picking && BuilderError.IsOpen && BuilderError.Message.Contains("window", StringComparison.OrdinalIgnoreCase) &&
+                BuildGuidedRule() == typeDraft, "a chooser requested before window readiness gives useful feedback without changing the draft");
+            OwnerWindowHandle = originalOwner;
+            _presentationOnly = true;
+            Assert(TryBeginPicker(out var pendingGeneration), "a read-only chooser can start in the isolated preview without permitting persistence");
+            Assert(!TryBeginPicker(out _) && !SaveButton.IsEnabled && !ExampleFileButton.IsEnabled && !ScopeFolderButton.IsEnabled &&
+                !ExtensionBox.IsEnabled && CancelButton.IsEnabled,
+                "an outstanding chooser prevents duplicate selection and saving while retaining the ability to cancel the draft");
+            await SaveDraftAsync();
+            Assert(BuildGuidedRule() == typeDraft && _picking && pendingGeneration == _builderGeneration,
+                "saving cannot race an outstanding chooser or invalidate its retained draft");
             CloseBuilder();
+            ApplyPickedExample(Path.Combine(fixtureRoot, "later.png"), pendingGeneration);
+            ApplyPickedScope(fixtureRoot, pendingGeneration);
+            EndPicker(pendingGeneration, ExampleFileButton);
+            Assert(BuilderPanel.Visibility == Visibility.Collapsed && ExtensionBox.Text == "tar.gz" && AddButton.IsEnabled && !BuilderError.IsOpen,
+                "a chooser result arriving after draft cancellation cannot overwrite the next editor state");
+            StartBuilder(EditorKind.Type);
+            ApplyPickedExample(Path.Combine(fixtureRoot, "example.JPG"), _builderGeneration);
+            Assert(BuildGuidedRule().Pattern == "*.JPG" && SaveButton.IsEnabled && !BuilderError.IsOpen,
+                "an example file sets its extension directly and enables saving without opening or reading that file");
+            CloseBuilder();
+            _presentationOnly = false;
             const string legacyPath = "Projects/*/cache";
             SetSettings(_settings with { Exclusions = [.. _settings.Exclusions, legacyPath], DisabledLegacyExclusions = [.. _settings.DisabledLegacyExclusions, legacyPath] });
             OpenExisting(new(RuleKind.Legacy, legacyPath));
@@ -911,7 +1072,9 @@ public sealed partial class ExclusionEditor : UserControl
         finally
         {
             SaveChangesAsync = originalSave;
+            OwnerWindowHandle = originalWindowHandle;
             _saving = false;
+            if (_picking) EndPicker(_builderGeneration, ExampleFileButton);
             CloseBuilder();
             SetSettings(originalSettings, originalPresentation);
             SetBusy(false);

@@ -14,7 +14,6 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Input;
 using Windows.Graphics;
-using Windows.Storage.Pickers;
 using Windows.UI.ViewManagement;
 using SettingsCard = CommunityToolkit.WinUI.Controls.SettingsCard;
 using ActivityEvent = CloudBay.Core.ActivityEvent;
@@ -796,11 +795,8 @@ public sealed partial class MainWindow : Window
     private async void ChooseCustomBackup_Click(object sender, RoutedEventArgs args) =>
         await RunAsync("Choose a personal folder to protect…", async () =>
         {
-            var picker = new FolderPicker { SuggestedStartLocation = PickerLocationId.ComputerFolder };
-            picker.FileTypeFilter.Add("*");
-            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
-            var folder = await picker.PickSingleFolderAsync();
-            if (folder is not null) CustomBackupSourceBox.Text = folder.Path;
+            var folder = await DesktopPickers.PickFolderAsync(WinRT.Interop.WindowNative.GetWindowHandle(this), "Choose backup folder");
+            if (folder is not null && !_closed) CustomBackupSourceBox.Text = folder;
         });
 
     private string? SelectedBackupName => (FileScopeBox.SelectedItem as SyncFolderItem)?.BackupName;
@@ -1195,23 +1191,18 @@ public sealed partial class MainWindow : Window
         }
         await RunAsync("Choose a CloudBay folder…", async () =>
         {
-            var picker = new FolderPicker { SuggestedStartLocation = PickerLocationId.ComputerFolder };
-            picker.FileTypeFilter.Add("*");
-            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
-            var folder = await picker.PickSingleFolderAsync();
-            if (folder is not null) RootPathBox.Text = folder.Path;
+            var folder = await DesktopPickers.PickFolderAsync(WinRT.Interop.WindowNative.GetWindowHandle(this), "Choose CloudBay folder");
+            if (folder is not null && !_closed) RootPathBox.Text = folder;
         });
     }
 
     private async void BrowseFile_Click(object sender, RoutedEventArgs args) =>
         await RunAsync("Choose a file in CloudBay…", async () =>
         {
-            var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.DocumentsLibrary };
-            picker.FileTypeFilter.Add("*");
-            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
-            var file = await picker.PickSingleFileAsync();
-            if (file is null) return;
-            var relative = Path.GetRelativePath(SelectedFileRoot, file.Path);
+            var root = SelectedFileRoot;
+            var file = await DesktopPickers.PickFileAsync(WinRT.Interop.WindowNative.GetWindowHandle(this), "Choose file");
+            if (file is null || _closed || !SameFolderPath(root, SelectedFileRoot)) return;
+            var relative = Path.GetRelativePath(root, file);
             ValidateRelativePath(relative);
             FilePathBox.Text = relative;
         });
@@ -1329,16 +1320,19 @@ public sealed partial class MainWindow : Window
         try
         {
             await operation();
-            if (success is not null) ShowInfo(success);
+            if (success is not null && !_closed) ShowInfo(success);
         }
-        catch (OperationCanceledException) { ShowInfo("The operation was canceled."); }
-        catch (Exception error) { ShowError(error); }
+        catch (OperationCanceledException) { if (!_closed) ShowInfo("The operation was canceled."); }
+        catch (Exception error) { if (!_closed) ShowError(error); }
         finally
         {
             _busy = false;
-            SetBusy(false, "CloudBay continues working in the background");
-            Refresh();
-            RestoreVersionButton.IsEnabled = VersionsList.SelectedItem is VersionItem { File.Action: "upload" };
+            if (!_closed)
+            {
+                SetBusy(false, "CloudBay continues working in the background");
+                Refresh();
+                RestoreVersionButton.IsEnabled = VersionsList.SelectedItem is VersionItem { File.Action: "upload" };
+            }
         }
     }
 
@@ -1404,10 +1398,13 @@ public sealed partial class MainWindow : Window
 
     private void ShowError(Exception error)
     {
+        var message = string.IsNullOrWhiteSpace(error.Message)
+            ? "Windows could not complete this action. Try again or reopen CloudBay."
+            : error.Message;
         StatusInfoBar.Title = "CloudBay needs your attention";
-        StatusInfoBar.Message = error.Message;
+        StatusInfoBar.Message = message;
         StatusInfoBar.Severity = InfoBarSeverity.Error;
-        StatusInfoBar.ActionButton = error.Message.Contains("OneDrive", StringComparison.OrdinalIgnoreCase) ? CreateWindowsBackupSettingsButton() : null;
+        StatusInfoBar.ActionButton = message.Contains("OneDrive", StringComparison.OrdinalIgnoreCase) ? CreateWindowsBackupSettingsButton() : null;
         StatusInfoBar.Visibility = Visibility.Visible;
         StatusInfoBar.IsOpen = true;
     }
