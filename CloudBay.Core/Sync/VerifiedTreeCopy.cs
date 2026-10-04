@@ -9,8 +9,15 @@ using Microsoft.Win32.SafeHandles;
 namespace CloudBay.Core.Sync;
 
 /// <summary>Verified, restartable folder copy which preserves colliding destination content.</summary>
-public static class VerifiedTreeCopy
+public static partial class VerifiedTreeCopy
 {
+    /// <summary>Creates a reviewed destination without reading or importing its former source.</summary>
+    public static void EnsureDestinationDirectory(string path, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        CreateDirectory(Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)));
+    }
+
     public static async Task CopyAsync(string source, string destination, CancellationToken ct = default, IProgress<string>? progress = null)
     { await CopyVerifiedAsync(source, destination, ct, progress); }
 

@@ -24,6 +24,7 @@
     <Compile Include="../CloudBay/Application/ClientStorage.cs" Link="Application/ClientStorage.cs" />
     <Compile Include="../CloudBay/Windows/SystemIntegration.cs" Link="Native/SystemIntegration.cs" />
     <Compile Include="../CloudBay/Windows/KnownFolderBackup.cs" Link="Native/KnownFolderBackup.cs" />
+    <Compile Include="../CloudBay/Windows/ImportSourceDiscovery.cs" Link="Native/ImportSourceDiscovery.cs" />
     <Compile Include="../CloudBay/Windows/KnownFolderPolicy.cs" Link="Native/KnownFolderPolicy.cs" />
     <Compile Include="../CloudBay/Windows/FolderAppearance.cs" Link="Native/FolderAppearance.cs" />
     <Compile Include="../CloudBay/Windows/FolderIconResourceReader.cs" Link="Native/FolderIconResourceReader.cs" />

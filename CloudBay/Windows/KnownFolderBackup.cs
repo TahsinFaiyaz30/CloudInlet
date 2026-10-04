@@ -5,52 +5,121 @@ using CloudBay.Core.Sync;
 namespace CloudBay.Windows;
 
 public sealed record BackupSourceReview(string Name, string OriginalWindowsPath,
-    FolderImportPlan CurrentFiles, FolderImportPlan? AdditionalFiles, bool IsRedirected);
+    FolderImportPlan CurrentFiles, FolderImportPlan? AdditionalFiles, bool IsRedirected,
+    BackupTransferMode TransferMode = BackupTransferMode.Copy, bool IncludeCurrentFiles = true)
+{
+    public string DestinationPath => CurrentFiles.DestinationPath;
+}
 
-/// <summary>Opt-in Known Folder backup. Original data remains until the user removes it.</summary>
+public sealed record BackupRestoreReview(BackupFolder Folder, string DestinationPath,
+    BackupTransferMode TransferMode, FolderImportPlan? Files);
+
+public sealed record BackupApplyResult(BackupFolder Folder, string? RetentionWarning);
+
+/// <summary>Opt-in Windows folder redirection with explicit reviewed copy, move, or no-transfer choices.</summary>
 public static class KnownFolderBackup
 {
     public static BackupSourceReview Preview(string name, string root, string? additionalSource = null, CancellationToken ct = default)
+        => Preview(name, root, additionalSource, BackupTransferMode.Copy, true, ct);
+
+    public static BackupSourceReview Preview(string name, string root, string? additionalSource,
+        BackupTransferMode mode, bool includeCurrentFiles, CancellationToken ct = default)
     {
+        ValidateMode(mode);
+        ct.ThrowIfCancellationRequested();
         KnownFolderPolicy.EnsureRedirectable(GetId(name));
         var original = GetPath(name);
         var destination = PathRules.FullPath(root, name);
+        return PreviewForPaths(name, original, destination, GetDefaultPath(name), additionalSource, mode, includeCurrentFiles, ct);
+    }
+
+    // Isolated tests use resolved fixture paths; production resolves and checks Shell policy above.
+    internal static BackupSourceReview PreviewForPaths(string name, string original, string destination, string defaultPath,
+        string? additionalSource, BackupTransferMode mode, bool includeCurrentFiles, CancellationToken ct = default)
+    {
+        ValidateMode(mode);
+        ct.ThrowIfCancellationRequested();
         if (Path.GetFullPath(original).Equals(destination, StringComparison.OrdinalIgnoreCase))
             throw new IOException("This Windows folder already points at CloudBay. Recover its backup record before changing its location.");
-        var current = Directory.Exists(original) ? FolderImport.Preview(original, destination, ct) :
+        EnsureSeparatePaths(original, destination);
+        if (mode == BackupTransferMode.None) includeCurrentFiles = false;
+        var current = !includeCurrentFiles ? new FolderImportPlan(original, destination, "not-selected", 0, 0, null, false) :
+            Directory.Exists(original) ? FolderImport.Preview(original, destination, ct) :
             new FolderImportPlan(original, destination, "missing", 0, 0, null, false);
-        var extra = string.IsNullOrWhiteSpace(additionalSource) || Path.GetFullPath(additionalSource).Equals(Path.GetFullPath(original), StringComparison.OrdinalIgnoreCase)
+        var extra = mode == BackupTransferMode.None || string.IsNullOrWhiteSpace(additionalSource) ||
+            (includeCurrentFiles && Path.GetFullPath(additionalSource).Equals(Path.GetFullPath(original), StringComparison.OrdinalIgnoreCase))
             ? null : FolderImport.Preview(additionalSource, destination, ct);
+        if (mode != BackupTransferMode.None && !includeCurrentFiles && extra is null)
+            throw new IOException("Choose a folder to copy or move, or choose to start without importing files.");
         if (extra is not null && current.AvailableBytes is { } available && available < checked(current.TotalBytes + extra.TotalBytes))
             throw new IOException("The destination drive does not have enough space for both selected sources.");
         return new(name, original, current, extra,
-            !Path.GetFullPath(original).Equals(GetDefaultPath(name), StringComparison.OrdinalIgnoreCase));
+            !Path.GetFullPath(original).Equals(defaultPath, StringComparison.OrdinalIgnoreCase), mode, includeCurrentFiles);
     }
 
     public static async Task<BackupFolder> EnableReviewedAsync(BackupSourceReview reviewed, CancellationToken ct)
+        => (await ApplyEnableReviewedAsync(reviewed, ct)).Folder;
+
+    public static async Task<BackupApplyResult> ApplyEnableReviewedAsync(BackupSourceReview reviewed, CancellationToken ct)
     {
+        ValidateMode(reviewed.TransferMode);
         KnownFolderPolicy.EnsureRedirectable(GetId(reviewed.Name));
-        if (!GetPath(reviewed.Name).Equals(reviewed.OriginalWindowsPath, StringComparison.OrdinalIgnoreCase))
+        return await ApplyEnableForPathsAsync(reviewed, () => GetPath(reviewed.Name), path => SetPath(reviewed.Name, path), ct);
+    }
+
+    internal static async Task<BackupApplyResult> ApplyEnableForPathsAsync(BackupSourceReview reviewed,
+        Func<string> getCurrentPath, Action<string> setPath, CancellationToken ct = default)
+    {
+        ValidateMode(reviewed.TransferMode);
+        if (!getCurrentPath().Equals(reviewed.OriginalWindowsPath, StringComparison.OrdinalIgnoreCase))
             throw new IOException("Another app changed this Windows folder location. Review the source again; the mapping was retained.");
-        string verifiedOriginal;
-        if (reviewed.CurrentFiles.Fingerprint == "missing")
+        EnsureSeparatePaths(reviewed.OriginalWindowsPath, reviewed.DestinationPath);
+        if (reviewed.TransferMode != BackupTransferMode.None && reviewed.IncludeCurrentFiles &&
+            !reviewed.CurrentFiles.SourcePath.Equals(reviewed.OriginalWindowsPath, StringComparison.OrdinalIgnoreCase))
+            throw new IOException("The current Windows folder source changed. Review the backup again.");
+        if (reviewed.AdditionalFiles is { } selected && !selected.DestinationPath.Equals(reviewed.DestinationPath, StringComparison.OrdinalIgnoreCase))
+            throw new IOException("The selected source destination changed. Review the backup again.");
+        var verified = new List<(FolderImportPlan Plan, string Fingerprint)>();
+        if (reviewed.TransferMode == BackupTransferMode.None)
+            VerifiedTreeCopy.EnsureDestinationDirectory(reviewed.DestinationPath, ct);
+        else if (reviewed.IncludeCurrentFiles && reviewed.CurrentFiles.Fingerprint == "missing")
         {
             if (Directory.Exists(reviewed.OriginalWindowsPath))
                 throw new IOException("Files appeared in this Windows folder after review. Review its contents again.");
             Directory.CreateDirectory(reviewed.OriginalWindowsPath);
-            verifiedOriginal = await VerifiedTreeCopy.CopyVerifiedAsync(reviewed.OriginalWindowsPath, reviewed.CurrentFiles.DestinationPath, ct);
+            verified.Add((reviewed.CurrentFiles, await VerifiedTreeCopy.CopyVerifiedAsync(reviewed.OriginalWindowsPath, reviewed.DestinationPath, ct)));
         }
-        else verifiedOriginal = await FolderImport.ExecuteAsync(reviewed.CurrentFiles, ct);
-        // A second selected source is copied without abandoning current Windows files.
-        if (reviewed.AdditionalFiles is { } extra) await FolderImport.ExecuteAsync(extra, ct);
+        else if (reviewed.IncludeCurrentFiles)
+            verified.Add((reviewed.CurrentFiles, await FolderImport.ExecuteAsync(reviewed.CurrentFiles, ct)));
+        if (reviewed.TransferMode != BackupTransferMode.None && reviewed.AdditionalFiles is { } extra)
+        {
+            if (!extra.DestinationPath.Equals(reviewed.DestinationPath, StringComparison.OrdinalIgnoreCase))
+                throw new IOException("The selected source destination changed. Review the backup again.");
+            verified.Add((extra, await FolderImport.ExecuteAsync(extra, ct)));
+        }
+        if (reviewed.TransferMode != BackupTransferMode.None && verified.Count == 0)
+            throw new IOException("Choose the source files before changing this Windows folder location.");
         // The verified copy retained the source appearance, including desktop.ini.
         // The source may be a Windows folder redirected onto a network provider.
         await FolderAppearance.EnsureIconAsync(reviewed.CurrentFiles.DestinationPath, FolderAppearance.GetKnownFolderIcon(reviewed.Name), ct);
-        VerifiedTreeCopy.EnsureUnchanged(reviewed.OriginalWindowsPath, verifiedOriginal, ct);
-        if (!GetPath(reviewed.Name).Equals(reviewed.OriginalWindowsPath, StringComparison.OrdinalIgnoreCase))
+        foreach (var item in verified) VerifiedTreeCopy.EnsureUnchanged(item.Plan.SourcePath, item.Fingerprint, ct);
+        if (!getCurrentPath().Equals(reviewed.OriginalWindowsPath, StringComparison.OrdinalIgnoreCase))
             throw new IOException("The Windows folder changed before backup could finish. Original files and completed copies were retained; review it again.");
-        SetPath(reviewed.Name, reviewed.CurrentFiles.DestinationPath);
-        return new(reviewed.Name, reviewed.OriginalWindowsPath, reviewed.CurrentFiles.DestinationPath);
+        ct.ThrowIfCancellationRequested();
+        setPath(reviewed.DestinationPath);
+        string? warning = null;
+        if (reviewed.TransferMode == BackupTransferMode.Move)
+        {
+            // Redirection is committed first. An interruption can leave duplicate originals,
+            // but never removes the only copy or changes the mapping back to missing files.
+            foreach (var item in verified)
+            {
+                var outcome = await VerifiedTreeMove.RemoveCopiedSourcesAsync(item.Plan.SourcePath,
+                    item.Plan.DestinationPath, item.Fingerprint, item.Plan.FileCount, ct);
+                if (outcome.RetentionWarning is not null) warning = outcome.RetentionWarning;
+            }
+        }
+        return new(new(reviewed.Name, reviewed.OriginalWindowsPath, reviewed.DestinationPath), warning);
     }
 
     public static IReadOnlyDictionary<string, Guid> FolderIds { get; } = new Dictionary<string, Guid>
@@ -111,17 +180,81 @@ public static class KnownFolderBackup
         return new(name, source, destination);
     }
     public static async Task DisableAsync(BackupFolder folder, CancellationToken ct)
+        => await ApplyDisableReviewedAsync(PreviewDisable(folder, null, BackupTransferMode.Copy, ct), ct);
+
+    public static BackupRestoreReview PreviewDisable(BackupFolder folder, string? destination = null,
+        BackupTransferMode mode = BackupTransferMode.Copy, CancellationToken ct = default)
     {
+        ValidateMode(mode);
+        ct.ThrowIfCancellationRequested();
         KnownFolderPolicy.EnsureRedirectable(GetId(folder.Name));
         if (!GetPath(folder.Name).Equals(folder.DestinationPath, StringComparison.OrdinalIgnoreCase))
             throw new IOException("This folder's Windows location was changed by another app. CloudBay will not overwrite that mapping.");
-        // Reading the files hydrates online-only content before restoring the local folder.
-        var verifiedSource = await VerifiedTreeCopy.CopyVerifiedAsync(folder.DestinationPath, folder.OriginalPath, ct);
-        await FolderAppearance.PreserveAfterVerifiedCopyAsync(folder.DestinationPath, folder.OriginalPath, ct);
-        VerifiedTreeCopy.EnsureUnchanged(folder.DestinationPath, verifiedSource, ct);
-        if (!GetPath(folder.Name).Equals(folder.DestinationPath, StringComparison.OrdinalIgnoreCase))
+        return PreviewDisableForPaths(folder, destination, mode, ct);
+    }
+
+    internal static BackupRestoreReview PreviewDisableForPaths(BackupFolder folder, string? destination,
+        BackupTransferMode mode, CancellationToken ct = default)
+    {
+        ValidateMode(mode);
+        ct.ThrowIfCancellationRequested();
+        destination = Path.TrimEndingDirectorySeparator(Path.GetFullPath(string.IsNullOrWhiteSpace(destination) ? folder.OriginalPath : destination));
+        EnsureSeparatePaths(folder.DestinationPath, destination);
+        var files = mode == BackupTransferMode.None ? null : FolderImport.Preview(folder.DestinationPath, destination, ct);
+        return new(folder, destination, mode, files);
+    }
+
+    public static async Task<BackupTransferOutcome> ApplyDisableReviewedAsync(BackupRestoreReview reviewed, CancellationToken ct)
+    {
+        ValidateMode(reviewed.TransferMode);
+        var folder = reviewed.Folder;
+        KnownFolderPolicy.EnsureRedirectable(GetId(folder.Name));
+        return await ApplyDisableForPathsAsync(reviewed, () => GetPath(folder.Name), path => SetPath(folder.Name, path), ct);
+    }
+
+    internal static async Task<BackupTransferOutcome> ApplyDisableForPathsAsync(BackupRestoreReview reviewed,
+        Func<string> getCurrentPath, Action<string> setPath, CancellationToken ct = default)
+    {
+        ValidateMode(reviewed.TransferMode);
+        var folder = reviewed.Folder;
+        if (!getCurrentPath().Equals(folder.DestinationPath, StringComparison.OrdinalIgnoreCase))
+            throw new IOException("This folder's Windows location was changed by another app. CloudBay will not overwrite that mapping.");
+        EnsureSeparatePaths(folder.DestinationPath, reviewed.DestinationPath);
+        string? verifiedSource = null;
+        if (reviewed.TransferMode == BackupTransferMode.None)
+            VerifiedTreeCopy.EnsureDestinationDirectory(reviewed.DestinationPath, ct);
+        else
+        {
+            if (reviewed.Files is not { } files || !files.SourcePath.Equals(folder.DestinationPath, StringComparison.OrdinalIgnoreCase) ||
+                !files.DestinationPath.Equals(reviewed.DestinationPath, StringComparison.OrdinalIgnoreCase))
+                throw new IOException("The restore source or destination changed. Review this Windows folder change again.");
+            // Reading the files hydrates online-only content before restoring the local folder.
+            verifiedSource = await FolderImport.ExecuteAsync(files, ct);
+            await FolderAppearance.PreserveAfterVerifiedCopyAsync(folder.DestinationPath, reviewed.DestinationPath, ct);
+            VerifiedTreeCopy.EnsureUnchanged(folder.DestinationPath, verifiedSource, ct);
+        }
+        if (!getCurrentPath().Equals(folder.DestinationPath, StringComparison.OrdinalIgnoreCase))
             throw new IOException("Another application changed this system folder during restore. Copies were retained.");
-        SetPath(folder.Name, folder.OriginalPath);
+        ct.ThrowIfCancellationRequested();
+        setPath(reviewed.DestinationPath);
+        return reviewed.TransferMode == BackupTransferMode.Move && verifiedSource is not null ?
+            await VerifiedTreeMove.RemoveCopiedSourcesAsync(folder.DestinationPath, reviewed.DestinationPath,
+                verifiedSource, reviewed.Files!.FileCount, ct) : BackupTransferOutcome.NoRemoval;
+    }
+
+    private static void ValidateMode(BackupTransferMode mode)
+    {
+        if (!Enum.IsDefined(mode)) throw new ArgumentOutOfRangeException(nameof(mode), "Choose copy, move, or no file transfer.");
+    }
+
+    private static void EnsureSeparatePaths(string source, string destination)
+    {
+        source = Path.TrimEndingDirectorySeparator(Path.GetFullPath(source));
+        destination = Path.TrimEndingDirectorySeparator(Path.GetFullPath(destination));
+        if (source.Equals(destination, StringComparison.OrdinalIgnoreCase) ||
+            source.StartsWith(destination + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+            destination.StartsWith(source + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            throw new IOException("Choose separate Windows and CloudBay folders, with neither inside the other.");
     }
     private static Guid GetId(string name) => FolderIds.TryGetValue(name, out var id) ? id : throw new ArgumentException("Unsupported system folder.", nameof(name));
     private static void SetPath(string name, string path)

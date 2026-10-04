@@ -127,9 +127,12 @@ public sealed partial class ClientController : IAsyncDisposable
         if (!PathRules.FullPath(Settings.RootPath, folder.Name).Equals(folder.DestinationPath, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("The interrupted backup does not match this sync folder.");
         var livePath = KnownFolderBackup.GetPath(folder.Name);
+        var restorePath = pending.Enable ? folder.OriginalPath : pending.RestorePath ?? folder.OriginalPath;
+        if (!Path.IsPathFullyQualified(restorePath) || IsNested(restorePath, Settings.RootPath) || IsNested(Settings.RootPath, restorePath))
+            throw new InvalidDataException("The interrupted backup has an invalid restore location. Its journal was retained.");
         var backups = Settings.Backups.Where(b => b.Name != folder.Name).ToList();
         if (livePath.Equals(folder.DestinationPath, StringComparison.OrdinalIgnoreCase)) backups.Add(folder);
-        else if (!livePath.Equals(folder.OriginalPath, StringComparison.OrdinalIgnoreCase))
+        else if (!livePath.Equals(restorePath, StringComparison.OrdinalIgnoreCase))
             throw new IOException("Another app changed an interrupted system folder backup. Original journal retained for recovery.");
         Settings = Settings with { Backups = backups };
         _storage.SaveSettings(Settings); _storage.ClearBackupIntent();

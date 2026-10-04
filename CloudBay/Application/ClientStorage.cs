@@ -7,7 +7,7 @@ namespace CloudBay.Application;
 
 public sealed class ClientStorage
 {
-    public sealed record BackupIntent(BackupFolder Folder, bool Enable);
+    public sealed record BackupIntent(BackupFolder Folder, bool Enable, string? RestorePath = null);
     public string DirectoryPath { get; }
     public string DiagnosticsPath => Path.Combine(DirectoryPath, "activity.jsonl");
     private readonly object _logGate = new();
@@ -42,8 +42,8 @@ public sealed class ClientStorage
     }
     public void SaveSettings(AppSettings settings) => AtomicWrite(Path.Combine(DirectoryPath, "settings.json"),
         Encoding.UTF8.GetBytes(JsonSerializer.Serialize(settings, JsonOptions)));
-    public void SaveBackupIntent(BackupFolder folder, bool enable) => AtomicWrite(Path.Combine(DirectoryPath, "backup-pending.json"),
-        JsonSerializer.SerializeToUtf8Bytes(new BackupIntent(folder, enable)));
+    public void SaveBackupIntent(BackupFolder folder, bool enable, string? restorePath = null) => AtomicWrite(Path.Combine(DirectoryPath, "backup-pending.json"),
+        JsonSerializer.SerializeToUtf8Bytes(new BackupIntent(folder, enable, restorePath)));
     public BackupIntent? LoadBackupIntent()
     {
         var path = Path.Combine(DirectoryPath, "backup-pending.json");
