@@ -95,4 +95,5 @@ No finite test run proves correctness for every Windows installation, network in
 - [Backblaze: immutable downloads and ranges](https://www.backblaze.com/apidocs/b2-download-file-by-id)
 - [Microsoft: Windows compatibility junctions](https://learn.microsoft.com/en-us/windows/win32/vss/junction-points)
 - [Microsoft: folder customization and desktop.ini](https://learn.microsoft.com/en-us/windows/win32/shell/how-to-customize-folders-with-desktop-ini)
+- [Microsoft: desktop file and folder pickers, including elevated apps](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.windows.storage.pickers?view=windows-app-sdk-1.8)
 - [Microsoft: unregistering a Cloud Files root](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfunregistersyncroot)

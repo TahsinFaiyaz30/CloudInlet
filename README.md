@@ -53,6 +53,8 @@ Open **Folder backup → Exclusions** or **Settings → Files and storage → Ex
 
 Choose whether a rule matches files, folders and their contents, or both, then choose its scope. Exclusions skip backup and sync; existing local files and cloud copies are retained. Removing or disabling a rule resumes normal reconciliation. Previously saved patterns keep their original behavior until explicitly edited; disabling them preserves their exact pattern.
 
+**Choose an example file** opens the native Windows chooser and fills in its extension without opening the file. Cancelling keeps the current draft. For a file without an extension, choose that individual file or use a Name rule. Selecting an entire backup folder as the scope applies the rule to that whole backup, including its subfolders.
+
 ## Data and recovery
 
 State lives in `%LOCALAPPDATA%\CloudBay\Client`: settings and prior copies, DPAPI-protected credentials, root-specific SQLite sync baselines, backup intent, activity history, and Recovery. Some atomic recovery copies live under the sync root's excluded `.cloudbay\Recovery`. These copies are retained for review; CloudBay does not delete them automatically.
@@ -75,7 +77,7 @@ dotnet test CloudBay.Tests\CloudBay.Tests.csproj -c Release --no-build -v:minima
 .\scripts\build-release.ps1
 ```
 
-The release script creates `artifacts\release\CloudBay-2.0.1-win-x64.zip`, an extracted package, and its SHA256 checksum. `CloudBay.exe --ui-smoke` captures the UI into `artifacts\ui-smoke` using fresh processes for both themes, isolated storage, and presentation fixtures for all seven client states. It checks focused Settings routes, retained drafts, keyboard focus, activity scrolling, provider discovery, and tray action reachability. These fixtures do not connect to a provider or modify the controller's account. The [live validation CLI](tools/CloudBay.Validation/README.md) uses a separately provisioned bucket-restricted key and a generated test prefix; it never redirects real Windows personal folders.
+The release script creates `artifacts\release\CloudBay-2.0.2-win-x64.zip`, an extracted package, and its SHA256 checksum. `CloudBay.exe --ui-smoke` captures the UI into `artifacts\ui-smoke` using fresh processes for both themes, isolated storage, and presentation fixtures for all seven client states. It checks focused Settings routes, retained drafts, keyboard focus, activity scrolling, provider discovery, and tray action reachability. These fixtures do not connect to a provider or modify the controller's account. The [live validation CLI](tools/CloudBay.Validation/README.md) uses a separately provisioned bucket-restricted key and a generated test prefix; it never redirects real Windows personal folders.
 
 See [architecture and primary documentation](docs/ARCHITECTURE.md), [Windows 11 interface design](docs/UI-DESIGN.md), and [verified release scope](docs/VALIDATION.md). Public distribution needs the publisher's code-signing certificate; this local release is unsigned.
 

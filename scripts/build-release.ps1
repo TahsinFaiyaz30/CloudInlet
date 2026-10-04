@@ -1,4 +1,4 @@
-param([string]$Version = '2.0.1')
+param([string]$Version = '2.0.2')
 $ErrorActionPreference = 'Stop'
 $repository = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if ($Version -notmatch '^\d+\.\d+\.\d+([-.][a-zA-Z0-9.]+)?$') { throw 'Invalid release version.' }
