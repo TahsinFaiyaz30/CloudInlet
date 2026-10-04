@@ -18,6 +18,8 @@ public sealed record PreferenceUpdate
     public bool? PauseOnMetered { get; init; }
     public bool? PauseOnBatterySaver { get; init; }
     public int? UploadConcurrency { get; init; }
+    public int? DownloadConcurrency { get; init; }
+    public UploadMode? UploadMode { get; init; }
     public long? UploadBytesPerSecond { get; init; }
     public long? DownloadBytesPerSecond { get; init; }
     public int? PollSeconds { get; init; }
@@ -39,10 +41,18 @@ public sealed class ClientController : IAsyncDisposable
     private WindowsPlaceholderService? _placeholders;
     private SyncEngine? _engine;
     private readonly Task _reconnectLoop;
+    private readonly Task _transferPulse;
+    private CancellationTokenSource? _transferMaintenanceCancellation;
+    private Task? _transferMaintenance;
     private bool _disconnecting;
     private volatile bool _maintenance;
     private readonly ConcurrentDictionary<string, CustomRuntime> _customRoots = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SyncSnapshot> _customSnapshots = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, TransferSnapshot> _hydrations = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, TransferSpeedMeter> _hydrationSpeeds = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Task> _hydrationFinalizations = new(StringComparer.Ordinal);
+    private readonly TransferSpeedMeter _nativeDownloadSpeed = new();
+    private long _nativeDownloadPayload;
     private SyncSnapshot _rootSnapshot = new(ClientState.NotConnected, "Connect a Backblaze B2 bucket to get started");
     private readonly object _changedGate = new();
     private readonly object _aggregateGate = new();
@@ -69,6 +79,7 @@ public sealed class ClientController : IAsyncDisposable
             _storage.Log(new(DateTimeOffset.UtcNow, ActivityKind.Error, "", Snapshot.Message));
         }
         _reconnectLoop = Task.Run(ReconnectAsync);
+        _transferPulse = Task.Run(RefreshTransferSpeedsAsync);
     }
 
     public async Task StartAsync()
@@ -166,7 +177,8 @@ public sealed class ClientController : IAsyncDisposable
         WindowsPlaceholderService? placeholders = null;
         try
         {
-            cloud.Configure(settings.UploadBytesPerSecond, settings.DownloadBytesPerSecond, settings.UploadConcurrency);
+            ConfigureTransport(cloud, settings);
+            cloud.ConfigureResumableUploads(Path.Combine(_storage.DirectoryPath, "Uploads"));
             cloud.Diagnostic += (_, message) => AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Information, "", message));
             ValidatePersonalRoot(settings.RootPath);
             var account = await cloud.ConnectAsync(credentials, ct);
@@ -179,28 +191,30 @@ public sealed class ClientController : IAsyncDisposable
                 throw new IOException("The selected cloud folder is outside the application key's permitted file prefix.");
             settings = settings with { AccountId = account.AccountId, BucketId = bucket.Id };
             placeholders = new WindowsPlaceholderService();
+            placeholders.ConfigureTransferLimits(TransferLimits.For(settings).Downloads);
             await placeholders.ConnectAsync(settings.RootPath, account.AccountId + ":" + bucket.Id + ":" + settings.Prefix,
                 async (file, offset, length, destination, token) =>
                 {
-                    AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Download, file.Key, "Downloading on demand", file.Size, false));
-                    try
-                    {
-                        await cloud.DownloadAsync(file, destination, offset, length, cancellationToken: token);
-                        AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Download, file.Key, "Downloaded on demand", length));
-                    }
-                    catch (Exception error)
-                    {
-                        AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Error, file.Key, error.Message)); throw;
-                    }
+                    await HydrateTrackedAsync(cloud, file, settings.Prefix, "CloudBay", offset, length, destination, token);
                 }, ct);
             // Each account/root/prefix has independent state, so reconnecting never inherits a different baseline.
             var identity = account.AccountId + "|" + bucket.Id + "|" + settings.Prefix + "|" + settings.RootPath.ToUpperInvariant();
             var stateName = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..24];
             var manifest = new SyncManifest(Path.Combine(_storage.DirectoryPath, "State", stateName + ".sqlite"));
             _cloud = cloud; _placeholders = placeholders; Settings = settings;
+            foreach (var folder in settings.Backups)
+            {
+                try { await Task.Run(() => FolderAppearance.EnsureKnownFolderAsync(folder, ct), ct); }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception error) when (error is IOException or System.Runtime.InteropServices.COMException or System.ComponentModel.Win32Exception or UnauthorizedAccessException)
+                { AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Information, folder.Name, "Folder appearance could not be refreshed. Your backup data was retained.")); }
+            }
+            try { await cloud.CleanupAbandonedUploadsAsync(ct); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception) { AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Information, "", "Pending upload cleanup will retry when B2 is available.")); }
             _engine = new SyncEngine(cloud, placeholders, manifest, settings,
                 Path.Combine(_storage.DirectoryPath, "Recovery"), AddActivity, SetStatus,
-                () => SystemIntegration.GetPauseReason(Settings));
+                () => SystemIntegration.GetPauseReason(Settings), "CloudBay");
             foreach (var folder in settings.CustomBackups)
             {
                 try { await OpenCustomRootAsync(folder, ct); }
@@ -212,6 +226,8 @@ public sealed class ClientController : IAsyncDisposable
             }
             ApplyManualPause(_engine);
             _engine.Start();
+            _transferMaintenanceCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+            _transferMaintenance = Task.Run(() => MaintainUploadCheckpointsAsync(cloud, _transferMaintenanceCancellation.Token));
             Changed?.Invoke(this, EventArgs.Empty);
         }
         catch
@@ -242,6 +258,7 @@ public sealed class ClientController : IAsyncDisposable
                 StartAtSignIn = settings.StartAtSignIn, FilesOnDemand = settings.FilesOnDemand,
                 PauseOnMetered = settings.PauseOnMetered, PauseOnBatterySaver = settings.PauseOnBatterySaver,
                 UploadConcurrency = settings.UploadConcurrency, UploadBytesPerSecond = settings.UploadBytesPerSecond,
+                DownloadConcurrency = settings.DownloadConcurrency, UploadMode = settings.UploadMode,
                 DownloadBytesPerSecond = settings.DownloadBytesPerSecond, PollSeconds = settings.PollSeconds,
                 Theme = settings.Theme, Exclusions = settings.Exclusions.ToArray(),
                 DisabledLegacyExclusions = settings.DisabledLegacyExclusions.ToArray(),
@@ -280,6 +297,8 @@ public sealed class ClientController : IAsyncDisposable
             PauseOnMetered = update.PauseOnMetered ?? previous.PauseOnMetered,
             PauseOnBatterySaver = update.PauseOnBatterySaver ?? previous.PauseOnBatterySaver,
             UploadConcurrency = update.UploadConcurrency ?? previous.UploadConcurrency,
+            DownloadConcurrency = update.DownloadConcurrency ?? previous.DownloadConcurrency,
+            UploadMode = update.UploadMode ?? previous.UploadMode,
             UploadBytesPerSecond = update.UploadBytesPerSecond ?? previous.UploadBytesPerSecond,
             DownloadBytesPerSecond = update.DownloadBytesPerSecond ?? previous.DownloadBytesPerSecond,
             PollSeconds = update.PollSeconds ?? previous.PollSeconds,
@@ -290,11 +309,11 @@ public sealed class ClientController : IAsyncDisposable
             GuidedExclusions = update.GuidedExclusions?.ToList() ?? previous.GuidedExclusions
         };
         PathRules.ValidateSettings(settings);
-        var transferChanged = previous.UploadConcurrency != settings.UploadConcurrency ||
+        var transferChanged = previous.UploadConcurrency != settings.UploadConcurrency || previous.DownloadConcurrency != settings.DownloadConcurrency || previous.UploadMode != settings.UploadMode ||
             previous.UploadBytesPerSecond != settings.UploadBytesPerSecond || previous.DownloadBytesPerSecond != settings.DownloadBytesPerSecond;
         // Bandwidth is applied by the shared transport; changing it should not schedule another file scan.
         // Concurrency also changes the engine's parallel work scheduling.
-        var syncChanged = previous.UploadConcurrency != settings.UploadConcurrency || previous.FilesOnDemand != settings.FilesOnDemand ||
+        var syncChanged = previous.UploadConcurrency != settings.UploadConcurrency || previous.DownloadConcurrency != settings.DownloadConcurrency || previous.UploadMode != settings.UploadMode || previous.FilesOnDemand != settings.FilesOnDemand ||
             previous.PauseOnMetered != settings.PauseOnMetered || previous.PauseOnBatterySaver != settings.PauseOnBatterySaver ||
             previous.PollSeconds != settings.PollSeconds || !previous.Exclusions.SequenceEqual(settings.Exclusions) ||
             !previous.DisabledLegacyExclusions.SequenceEqual(settings.DisabledLegacyExclusions) ||
@@ -333,7 +352,13 @@ public sealed class ClientController : IAsyncDisposable
         else _storage.SaveSettings(settings);
 
         Settings = settings;
-        if (transferChanged) _cloud?.Configure(settings.UploadBytesPerSecond, settings.DownloadBytesPerSecond, settings.UploadConcurrency);
+        if (transferChanged)
+        {
+            if (_cloud is { } cloud) ConfigureTransport(cloud, settings);
+            var downloadWorkers = TransferLimits.For(settings).Downloads;
+            _placeholders?.ConfigureTransferLimits(downloadWorkers);
+            foreach (var runtime in _customRoots.Values) runtime.Placeholders.ConfigureTransferLimits(downloadWorkers);
+        }
         if (syncChanged)
         {
             _engine?.Configure(settings);
@@ -400,15 +425,14 @@ public sealed class ClientController : IAsyncDisposable
         var expectedPrefix = Settings.Prefix + ".cloudbay-backups/" + PathRules.ValidateRelative(folder.Name) + "/";
         if (!folder.Prefix.Equals(expectedPrefix, StringComparison.Ordinal)) throw new InvalidDataException("Custom backup settings contain an unexpected cloud prefix.");
         var placeholders = new WindowsPlaceholderService();
+        placeholders.ConfigureTransferLimits(TransferLimits.For(Settings).Downloads);
         try
         {
             var cloud = _cloud;
             await placeholders.ConnectAsync(folder.SourcePath, Settings.AccountId + ":" + Settings.BucketId + ":" + folder.Prefix,
                 async (file, offset, length, destination, token) =>
                 {
-                    AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Download, folder.Name + "/" + file.Key[folder.Prefix.Length..], "Downloading on demand", file.Size, false));
-                    await cloud.DownloadAsync(file, destination, offset, length, cancellationToken: token);
-                    AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Download, folder.Name + "/" + file.Key[folder.Prefix.Length..], "Downloaded on demand", length));
+                    await HydrateTrackedAsync(cloud, file, folder.Prefix, folder.Name, offset, length, destination, token);
                 }, ct);
             var identity = Settings.AccountId + "|" + Settings.BucketId + "|" + folder.Prefix + "|" + folder.SourcePath.ToUpperInvariant();
             var stateName = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..24];
@@ -417,7 +441,7 @@ public sealed class ClientController : IAsyncDisposable
                 Path.Combine(_storage.DirectoryPath, "Recovery", folder.Name),
                 value => AddActivity(value with { Path = folder.Name + "/" + value.Path }),
                 value => { _customSnapshots[folder.Name] = value; PublishAggregate(); },
-                () => SystemIntegration.GetPauseReason(Settings));
+                () => SystemIntegration.GetPauseReason(Settings), folder.Name);
             if (!_customRoots.TryAdd(folder.Name, new(folder, placeholders, engine)))
                 throw new IOException("A custom backup with this name is already active.");
             try { ApplyManualPause(engine); engine.Start(); }
@@ -521,6 +545,7 @@ public sealed class ClientController : IAsyncDisposable
                 await root.Placeholders.PrepareForUnregisterAsync(cancellationToken);
                 if (root.Placeholders.RegistrationId is { } customRegistration) customRegistrations.Add(customRegistration);
             }
+            await _cloud!.CancelPendingUploadsAsync(cancellationToken);
             await CloseConnectionAsync();
             if (registration is not null) _unregisterSyncRoot(registration);
             foreach (var customRegistration in customRegistrations) _unregisterSyncRoot(customRegistration);
@@ -622,6 +647,11 @@ public sealed class ClientController : IAsyncDisposable
     {
         lock (_aggregateGate)
         {
+        var hydrations = _hydrations.Values.Select(item => item with
+        {
+            BytesPerSecond = item.Phase == TransferPhase.Downloading && _hydrationSpeeds.TryGetValue(item.Id, out var speed)
+                ? speed.BytesPerSecond : 0
+        }).ToArray();
         var all = _customSnapshots.Select(pair => (Name: pair.Key, Snapshot: pair.Value)).Prepend((Name: "", Snapshot: _rootSnapshot)).ToArray();
         static int Rank(ClientState state) => state switch { ClientState.Attention => 6, ClientState.Offline => 5,
             ClientState.Connecting => 4, ClientState.Syncing => 3, ClientState.Paused => 2, _ => 1 };
@@ -638,8 +668,18 @@ public sealed class ClientController : IAsyncDisposable
         var previous = Snapshot;
         Snapshot = selected.Snapshot with { Message = message, Pending = pending,
             FileCount = all.Sum(item => item.Snapshot.FileCount), CloudBytes = all.Sum(item => item.Snapshot.CloudBytes),
-            LocalBytes = all.Sum(item => item.Snapshot.LocalBytes), TransferredBytes = all.Sum(item => item.Snapshot.TransferredBytes),
-            TransferTotalBytes = all.Sum(item => item.Snapshot.TransferTotalBytes) };
+            LocalBytes = all.Sum(item => item.Snapshot.LocalBytes),
+            TransferTotalBytes = all.Sum(item => item.Snapshot.TransferTotalBytes) + hydrations.Sum(item => item.TotalBytes),
+            TransferredBytes = all.Sum(item => item.Snapshot.TransferredBytes) + hydrations.Sum(item => item.Bytes),
+            UploadBytesPerSecond = all.Sum(item => item.Snapshot.UploadBytesPerSecond),
+            DownloadBytesPerSecond = all.Sum(item => item.Snapshot.DownloadBytesPerSecond) +
+                (hydrations.Any(item => item.Phase == TransferPhase.Downloading) ? _nativeDownloadSpeed.BytesPerSecond : 0),
+            Transfers = hydrations.Concat(all.SelectMany(item => item.Snapshot.Transfers))
+                .OrderBy(item => item.Phase is TransferPhase.Queued or TransferPhase.Paused or TransferPhase.Retrying ? 1 : 0).Take(256).ToArray(),
+            ActiveTransfers = all.Sum(item => item.Snapshot.ActiveTransfers) + hydrations.Count(item => item.Phase != TransferPhase.Queued),
+            QueuedTransfers = all.Sum(item => item.Snapshot.QueuedTransfers) + hydrations.Count(item => item.Phase == TransferPhase.Queued) };
+        if (_hydrations.Count > 0 && Snapshot.State is not (ClientState.Attention or ClientState.Offline or ClientState.Paused))
+            Snapshot = Snapshot with { State = ClientState.Syncing, Message = "Downloading your files" };
         NotifyChanged(previous.State != Snapshot.State || previous.Pending != Snapshot.Pending);
         }
     }
@@ -654,14 +694,166 @@ public sealed class ClientController : IAsyncDisposable
         Changed?.Invoke(this, EventArgs.Empty);
     }
     private void AddActivity(ActivityEvent value) { _storage.Log(value); NotifyChanged(); }
+    private static void ConfigureTransport(B2CloudStore cloud, AppSettings settings)
+    {
+        var limits = TransferLimits.For(settings);
+        cloud.Configure(settings.UploadBytesPerSecond, settings.DownloadBytesPerSecond, limits.Uploads);
+        cloud.ConfigureDownloads(limits.Downloads);
+    }
+
+    private async Task HydrateTrackedAsync(B2CloudStore cloud, CloudObject file, string prefix, string rootName,
+        long offset, long length, Stream destination, CancellationToken token)
+    {
+        var relative = file.Key.StartsWith(prefix, StringComparison.Ordinal) ? file.Key[prefix.Length..] : file.Key;
+        var id = "hydrate|" + rootName + "|" + file.FileId + "|" + Guid.NewGuid().ToString("N");
+        var speed = new TransferSpeedMeter();
+        long previousBytes = 0;
+        _hydrationSpeeds[id] = speed;
+        _hydrations[id] = new(id, rootName, relative, ActivityKind.Download, TransferPhase.Queued, 0, length);
+        PublishAggregate();
+        var admitted = false;
+        var awaitingValidation = destination is HydrationStream;
+        if (destination is HydrationStream native)
+        {
+            // Monitor before transport starts: a failed transport checksum can trigger
+            // a successful CFAPI restart. Only the service's final validation outcome
+            // decides whether this attempt is completed, cancelled, or a real error.
+            var completion = FinalizeNativeHydrationAsync(id, rootName, relative, length, native.ValidationCompletion);
+            _hydrationFinalizations[id] = completion;
+            _ = completion.ContinueWith(_ => _hydrationFinalizations.TryRemove(id, out var removed),
+                CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+        try
+        {
+            await TransferResources.NativeHydration.WaitAsync(token);
+            admitted = true;
+            await cloud.DownloadAsync(file, destination, offset, length, new HydrationProgress(value =>
+            {
+                var previous = Interlocked.Exchange(ref previousBytes, value.Bytes);
+                if (value.IsBaseline)
+                {
+                    speed.Reset(value.Bytes);
+                    lock (_aggregateGate)
+                        if (_nativeDownloadPayload == 0) _nativeDownloadSpeed.Reset(0);
+                }
+                else
+                {
+                    speed.Sample(value.Bytes);
+                    lock (_aggregateGate)
+                    {
+                        _nativeDownloadPayload += Math.Max(0, value.Bytes - previous);
+                        _nativeDownloadSpeed.Sample(_nativeDownloadPayload);
+                    }
+                }
+                _hydrations[id] = new(id, rootName, relative, ActivityKind.Download, TransferPhase.Downloading,
+                    value.Bytes, value.TotalBytes);
+                PublishAggregate();
+            }), token);
+            _hydrations[id] = new(id, rootName, relative, ActivityKind.Download, TransferPhase.Verifying, length, length);
+            PublishAggregate();
+            // Return to CFAPI so it can persist and validate the assembled cache; the
+            // independent monitor keeps its row visible through ACK without a deadlock.
+            if (!awaitingValidation)
+                AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Download, rootName + "/" + relative, "Downloaded on demand", length));
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch (Exception error)
+        {
+            if (!awaitingValidation)
+                AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Error, rootName + "/" + relative, error.Message));
+            throw;
+        }
+        finally
+        {
+            if (admitted) TransferResources.NativeHydration.Release();
+            if (!awaitingValidation)
+            {
+                _hydrationSpeeds.TryRemove(id, out _);
+                _hydrations.TryRemove(id, out _); PublishAggregate();
+            }
+        }
+    }
+    private async Task FinalizeNativeHydrationAsync(string id, string rootName, string relative, long length, Task validation)
+    {
+        try
+        {
+            await validation.ConfigureAwait(false);
+            AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Download, rootName + "/" + relative, "Downloaded on demand", length));
+        }
+        catch (OperationCanceledException) { /* Interruption or a bounded native restart has its own next live request. */ }
+        catch (Exception error)
+        {
+            AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Error, rootName + "/" + relative, error.Message));
+        }
+        finally
+        {
+            _hydrationSpeeds.TryRemove(id, out _);
+            _hydrations.TryRemove(id, out _);
+            PublishAggregate();
+        }
+    }
+    private sealed class HydrationProgress(Action<TransferProgress> report) : IProgress<TransferProgress>
+    {
+        private long _last;
+        public void Report(TransferProgress value)
+        {
+            var now = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (value.Bytes != 0 && value.Bytes != value.TotalBytes &&
+                System.Diagnostics.Stopwatch.GetElapsedTime(Interlocked.Read(ref _last), now) < TimeSpan.FromMilliseconds(250)) return;
+            Interlocked.Exchange(ref _last, now);
+            report(value);
+        }
+    }
+    private async Task MaintainUploadCheckpointsAsync(B2CloudStore cloud, CancellationToken token)
+    {
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(TimeSpan.FromHours(6), token);
+                using var operation = CancellationTokenSource.CreateLinkedTokenSource(token);
+                operation.CancelAfter(TimeSpan.FromMinutes(2));
+                try { await cloud.CleanupAbandonedUploadsAsync(operation.Token); }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+                catch (Exception)
+                { AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Information, "", "Pending upload cleanup will retry when B2 is available.")); }
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+    }
+
+    private async Task RefreshTransferSpeedsAsync()
+    {
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1), _lifetime.Token);
+                if (Snapshot.ActiveTransfers == 0) continue;
+                _engine?.RefreshTransferStatus();
+                foreach (var runtime in _customRoots.Values) runtime.Engine.RefreshTransferStatus();
+                if (!_hydrations.IsEmpty) PublishAggregate();
+            }
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+    }
+
     private async Task CloseConnectionAsync()
     {
+        _transferMaintenanceCancellation?.Cancel();
+        if (_transferMaintenance is not null) await _transferMaintenance;
+        _transferMaintenance = null;
+        _transferMaintenanceCancellation?.Dispose(); _transferMaintenanceCancellation = null;
         foreach (var runtime in _customRoots.Values)
         { await runtime.Engine.DisposeAsync(); await runtime.Placeholders.DisposeAsync(); }
         _customRoots.Clear(); _customSnapshots.Clear();
         if (_engine is not null) { await _engine.DisposeAsync(); _engine = null; }
         if (_placeholders is not null) { await _placeholders.DisposeAsync(); _placeholders = null; }
+        await Task.WhenAll(_hydrationFinalizations.Values);
+        _hydrationFinalizations.Clear();
         _cloud?.Dispose(); _cloud = null;
+        _hydrations.Clear(); _hydrationSpeeds.Clear();
+        Interlocked.Exchange(ref _nativeDownloadPayload, 0); _nativeDownloadSpeed.Reset(0);
     }
     public async ValueTask DisposeAsync()
     {
@@ -670,6 +862,7 @@ public sealed class ClientController : IAsyncDisposable
         foreach (var root in _customRoots.Values) { root.Engine.Pause(); await root.Placeholders.DisconnectAsync(); }
         if (_placeholders is not null) await _placeholders.DisconnectAsync();
         await _reconnectLoop;
+        await _transferPulse;
         await _operations.WaitAsync();
         try { await CloseConnectionAsync(); }
         finally { _operations.Release(); _operations.Dispose(); _lifetime.Dispose(); }

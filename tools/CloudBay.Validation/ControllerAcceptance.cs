@@ -164,6 +164,49 @@ internal static class ControllerAcceptance
                 await controller.FreeSpaceAsync("online.bin", "CustomA");
                 // Leave online-only files in all roots so removal/disconnection must hydrate before reverting.
             });
+            await check("controller_native_activity_waits_for_assembled_cache_validation", async () =>
+            {
+                const string name = "native-validation.bin";
+                var data = RandomNumberGenerator.GetBytes(256 * 1024 + 37);
+                await Upload(observer, bucket.Id, controller.Settings.Prefix + name, data, ct);
+                await Sync(controller, ct);
+                await controller.FreeSpaceAsync(name);
+                // Earlier sync/free-space work can legitimately read the file and leave
+                // completed history. Isolate the next read instead of rejecting its past.
+                var idleDeadline = DateTimeOffset.UtcNow.AddSeconds(10);
+                while (controller.Snapshot.Transfers.Any(item => item.RelativePath == name) &&
+                    DateTimeOffset.UtcNow < idleDeadline)
+                    await Task.Delay(50, ct);
+                Require(!controller.Snapshot.Transfers.Any(item => item.RelativePath == name),
+                    "Earlier native work did not finish before the validation-order check.");
+                int CompletedDownloads() => controller.Activity.Count(item =>
+                    item.Kind == ActivityKind.Download && item.Path == "CloudBay/" + name);
+                var completedBeforeRead = CompletedDownloads();
+                await TransferResources.NativeValidation.WaitAsync(ct);
+                Task<byte[]> read;
+                try
+                {
+                    read = Task.Run(() => File.ReadAllBytes(Path.Combine(main, name)), ct);
+                    var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+                    while (!controller.Snapshot.Transfers.Any(item => item.RelativePath == name && item.Phase == TransferPhase.Verifying) &&
+                        DateTimeOffset.UtcNow < deadline)
+                        await Task.Delay(50, ct);
+                    var row = controller.Snapshot.Transfers.SingleOrDefault(item => item.RelativePath == name && item.Phase == TransferPhase.Verifying);
+                    Require(row is not null && row.BytesPerSecond == 0, "The live native file must stay visible as verifying without an old wire rate.");
+                    Require(!read.IsCompleted, "Native user I/O must wait until assembled cache validation is acknowledged.");
+                    Require(CompletedDownloads() == completedBeforeRead,
+                        "Completed history must not precede native cache verification.");
+                }
+                finally { TransferResources.NativeValidation.Release(); }
+                Require((await read.WaitAsync(TimeSpan.FromMinutes(2), ct)).SequenceEqual(data), "Validated native bytes differ from their immutable cloud source.");
+                var historyDeadline = DateTimeOffset.UtcNow.AddSeconds(10);
+                while (CompletedDownloads() == completedBeforeRead &&
+                    DateTimeOffset.UtcNow < historyDeadline)
+                    await Task.Delay(50, ct);
+                Require(CompletedDownloads() > completedBeforeRead,
+                    "Completed native history must appear after validation succeeds.");
+                await controller.FreeSpaceAsync(name);
+            });
             await check("controller_pause_resume_covers_main_and_custom_backups", async () =>
             {
                 controller.Pause();

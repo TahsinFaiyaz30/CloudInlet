@@ -11,6 +11,8 @@ using Windows.Storage.Provider;
 using ActivityEvent = CloudBay.Core.ActivityEvent;
 using ActivityKind = CloudBay.Core.ActivityKind;
 
+if (args.Contains("--transfer-worker")) return await TransferAcceptance.RunWorkerAsync(args);
+if (args.Contains("--repair-folder-icons")) return await FolderIconRepair.RunAsync();
 return await Validation.RunAsync(args);
 
 internal static class Validation
@@ -53,6 +55,8 @@ internal static class Validation
             bucket = buckets[0]; BucketName = bucket.Name;
             Prefix = (account.AllowedNamePrefix ?? "") + Prefix;
             var type = transport.BucketTypes.GetValueOrDefault(bucket.Id);
+            if (args.Contains("--transfers") && type != "allPrivate")
+                throw new InvalidOperationException("Fresh-process transfer checks require the restricted test bucket to be private.");
             if (type != "allPrivate")
             {
                 var empty = true;
@@ -60,7 +64,12 @@ internal static class Validation
                 if (!empty) throw new InvalidOperationException("The restricted test bucket is not empty and its privacy could not be verified.");
             }
             Directory.CreateDirectory(temp);
-            if (args.Contains("--controller"))
+            if (args.Contains("--transfers"))
+            {
+                credentials = null!;
+                await TransferAcceptance.RunAsync(store, bucket, Prefix, Id, temp, CheckAsync, ct);
+            }
+            else if (args.Contains("--controller"))
             {
                 await ControllerAcceptance.RunAsync(store, bucket, credentials, Prefix, Id, temp, CheckAsync, ct);
             }
@@ -213,9 +222,10 @@ internal static class Validation
             Directory.CreateDirectory(Path.GetDirectoryName(ReportPath)!);
             await File.WriteAllTextAsync(ReportPath, JsonSerializer.Serialize(new
             {
-                timeUtc = DateTimeOffset.UtcNow, id = Id, bucketName = BucketName, prefix = Prefix, quick = args.Contains("--quick"), native = args.Contains("--native"), controller = args.Contains("--controller"),
+                timeUtc = DateTimeOffset.UtcNow, id = Id, bucketName = BucketName, prefix = Prefix, quick = args.Contains("--quick"), native = args.Contains("--native"), controller = args.Contains("--controller"), transfers = args.Contains("--transfers"),
                 passed = Checks.Count > 0 && Checks.All(c => c.Passed), checks = Checks, notes = Notes,
-                requestCounterScope = args.Contains("--controller") ? "Observer transport only; controller uses an independent transport." : "Complete validation transport.",
+                requestCounterScope = args.Contains("--transfers") ? "Observer transport only; fresh-process transfer worker counters are retained separately." :
+                    args.Contains("--controller") ? "Observer transport only; controller uses an independent transport." : "Complete validation transport.",
                 requestCounts = transport.Counts, successfulRequestCounts = transport.SuccessCounts,
                 concurrentTokenViolations = transport.ConcurrentTokenViolations, durationSeconds = Timer.Elapsed.TotalSeconds,
                 processPeakWorkingSetBytes = Process.GetCurrentProcess().PeakWorkingSet64

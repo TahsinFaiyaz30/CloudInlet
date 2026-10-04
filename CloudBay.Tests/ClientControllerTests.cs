@@ -1,6 +1,13 @@
+using System.Collections.Concurrent;
+using System.Net;
+using System.Reflection;
 using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using CloudBay.Application;
 using CloudBay.Core;
+using CloudBay.Core.B2;
+using CloudBay.Windows.CloudFiles;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Microsoft.Win32;
 
@@ -151,7 +158,8 @@ public sealed class ClientControllerTests
             var startup = ReadStartup();
             await using var controller = new ClientController(storage);
             var theme = new PreferenceUpdate { Theme = "Dark" };
-            var limits = new PreferenceUpdate { UploadBytesPerSecond = 120_000, DownloadBytesPerSecond = 240_000, UploadConcurrency = 3 };
+            var limits = new PreferenceUpdate { UploadBytesPerSecond = 120_000, DownloadBytesPerSecond = 240_000,
+                UploadMode = UploadMode.Manual, UploadConcurrency = 3, DownloadConcurrency = 5 };
             var policy = new PreferenceUpdate { PauseOnMetered = false, PauseOnBatterySaver = false };
             var selections = new List<SelectedExclusion> { new(root, "Documents/Private", true) };
             var guided = new List<GuidedExclusion> { new("**/*.tmp", ExclusionTarget.Files, Path.Combine(state, "Projects")) };
@@ -165,6 +173,8 @@ public sealed class ClientControllerTests
             Assert.AreEqual(120_000L, saved.UploadBytesPerSecond);
             Assert.AreEqual(240_000L, saved.DownloadBytesPerSecond);
             Assert.AreEqual(3, saved.UploadConcurrency);
+            Assert.AreEqual(5, saved.DownloadConcurrency);
+            Assert.AreEqual(UploadMode.Manual, saved.UploadMode);
             Assert.IsFalse(saved.PauseOnMetered);
             Assert.IsFalse(saved.PauseOnBatterySaver);
             Assert.AreEqual(original.KeyId, saved.KeyId);
@@ -401,6 +411,182 @@ public sealed class ClientControllerTests
             CollectionAssert.AreEqual(original, await File.ReadAllBytesAsync(Path.Combine(state, "settings.json")));
         }
         finally { Directory.Delete(state, true); }
+    }
+
+    [DataTestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task HydrationChecksumFailureWaitsForTheServiceOutcomeBeforeReportingHistory(bool retryCancelled)
+    {
+        await using var hydration = await HydrationFixture.CreateAsync(corruptPayload: true);
+        var error = await Assert.ThrowsExceptionAsync<InvalidDataException>(hydration.DownloadAsync);
+
+        Assert.AreEqual(1, hydration.DownloadRequests);
+        Assert.AreEqual(hydration.File.Size, hydration.Stream.Position,
+            "The small corrupt payload must reach the held final block before its whole-file checksum rejects it.");
+        Assert.AreEqual(0L, hydration.NativeTransferredBytes,
+            "A checksum failure must leave the final block unpublished to CFAPI.");
+        Assert.AreEqual(0, hydration.Controller.Activity.Count,
+            "Transport rejection is not a final native error: the service may restart this request.");
+        Assert.AreEqual(1, hydration.Controller.Snapshot.Transfers.Count,
+            "The validation monitor must already own the live row when transport fails.");
+        var completion = hydration.PendingCompletion;
+        Assert.IsFalse(completion.IsCompleted, "History must wait for the service's validation decision.");
+
+        if (retryCancelled)
+        {
+            using var interruption = new CancellationTokenSource();
+            interruption.Cancel();
+            hydration.Stream.MarkValidationFailed(new OperationCanceledException(interruption.Token));
+        }
+        else hydration.Stream.MarkValidationFailed(error);
+        await completion.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.AreEqual(0, hydration.Controller.Snapshot.Transfers.Count);
+        Assert.AreEqual(0, hydration.Controller.Snapshot.ActiveTransfers);
+        Assert.AreEqual(0, hydration.Controller.Snapshot.QueuedTransfers);
+        Assert.AreEqual(0d, hydration.Controller.Snapshot.DownloadBytesPerSecond);
+        Assert.AreEqual(0, hydration.Controller.Activity.Count(item => item.Kind == ActivityKind.Download),
+            "Rejected bytes must never produce completed-download history.");
+        if (retryCancelled)
+            Assert.AreEqual(0, hydration.Controller.Activity.Count,
+                "A cancelled native restart must not leave a false completed or Error history event.");
+        else
+        {
+            var recorded = hydration.Controller.Activity.Single();
+            Assert.AreEqual(ActivityKind.Error, recorded.Kind);
+            Assert.AreEqual("Projects/Documents/buffered.txt", recorded.Path);
+            Assert.AreEqual(error.Message, recorded.Message,
+                "Only the service's final checksum failure should be recorded, exactly once.");
+        }
+    }
+
+    [TestMethod]
+    public async Task HydrationWireSuccessRemainsVerifyingUntilTheServiceMarksItValidated()
+    {
+        await using var hydration = await HydrationFixture.CreateAsync(corruptPayload: false);
+        await hydration.DownloadAsync();
+
+        Assert.AreEqual(1, hydration.DownloadRequests);
+        Assert.AreEqual(hydration.File.Size, hydration.Stream.Position);
+        Assert.AreEqual(0L, hydration.NativeTransferredBytes,
+            "The final native block remains held until the service completes its own validation.");
+        var live = hydration.Controller.Snapshot.Transfers.Single();
+        Assert.AreEqual(TransferPhase.Verifying, live.Phase);
+        Assert.AreEqual(hydration.File.Size, live.Bytes);
+        Assert.AreEqual(hydration.File.Size, live.TotalBytes);
+        Assert.AreEqual(0d, live.BytesPerSecond, "Verification must not retain a stale network rate.");
+        Assert.AreEqual(0, hydration.Controller.Activity.Count,
+            "Successful wire transfer alone must not claim that the Windows cache was accepted.");
+        var completion = hydration.PendingCompletion;
+        Assert.IsFalse(completion.IsCompleted);
+
+        hydration.Stream.MarkValidated();
+        await completion.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.AreEqual(0, hydration.Controller.Snapshot.Transfers.Count);
+        Assert.AreEqual(0, hydration.Controller.Snapshot.ActiveTransfers);
+        Assert.AreEqual(0, hydration.Controller.Snapshot.QueuedTransfers);
+        var recorded = hydration.Controller.Activity.Single();
+        Assert.AreEqual(ActivityKind.Download, recorded.Kind);
+        Assert.AreEqual("Projects/Documents/buffered.txt", recorded.Path);
+        Assert.AreEqual(hydration.File.Size, recorded.Bytes);
+        Assert.IsTrue(recorded.Completed);
+        Assert.AreEqual(0, hydration.Controller.Activity.Count(item => item.Kind == ActivityKind.Error));
+    }
+
+    // This fixture reaches the actual B2 checksum and controller monitor paths while keeping
+    // the payload below HydrationStream's held final block. It never registers a Windows
+    // root or calls Complete, so the default OperationInfo cannot perform any CFAPI I/O.
+    private sealed class HydrationFixture : IAsyncDisposable
+    {
+        private readonly string _state = CreateState();
+        private readonly B2CloudStore _cloud;
+        private int _downloadRequests;
+        internal ClientController Controller { get; }
+        internal HydrationStream Stream { get; }
+        internal CloudObject File { get; }
+        internal int DownloadRequests => Volatile.Read(ref _downloadRequests);
+        internal long NativeTransferredBytes => (long)typeof(HydrationStream)
+            .GetField("_transferred", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(Stream)!;
+        internal Task PendingCompletion => ((ConcurrentDictionary<string, Task>)typeof(ClientController)
+            .GetField("_hydrationFinalizations", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(Controller)!).Values.Single();
+
+        private HydrationFixture(bool corruptPayload)
+        {
+            var payload = Encoding.UTF8.GetBytes("A small native download must wait for Windows cache validation.");
+            File = new("immutable-hydration-test", "CloudBay/Documents/buffered.txt", payload.Length,
+                Convert.ToHexString(SHA1.HashData(payload)).ToLowerInvariant(), DateTimeOffset.UnixEpoch);
+            var wirePayload = (byte[])payload.Clone();
+            if (corruptPayload) wirePayload[^1] ^= 0xff;
+            var storage = new ClientStorage(_state);
+            storage.SaveSettings(new() { RootPath = Path.Combine(_state, "Root"), StartAtSignIn = false });
+            Controller = new ClientController(storage, manageStartup: false);
+            Stream = new HydrationStream(default, 0, File.Size, CancellationToken.None);
+            _cloud = new B2CloudStore(new HydrationHandler(request =>
+            {
+                if (request.RequestUri!.AbsolutePath.EndsWith("b2_authorize_account", StringComparison.Ordinal))
+                    return new(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(JsonSerializer.Serialize(new
+                        {
+                            accountId = "test-account", authorizationToken = "unused-account-token",
+                            apiInfo = new { storageApi = new
+                            {
+                                apiUrl = "https://api.invalid", downloadUrl = "https://download.invalid",
+                                absoluteMinimumPartSize = 5_000_000, recommendedPartSize = 100_000_000,
+                                allowed = new { capabilities = new[] { "readFiles" }, buckets = (object?)null, namePrefix = "CloudBay/" }
+                            } }
+                        }), Encoding.UTF8, "application/json")
+                    };
+                Assert.IsTrue(request.RequestUri.AbsolutePath.EndsWith("b2_download_file_by_id", StringComparison.Ordinal));
+                Assert.AreEqual("?fileId=" + File.FileId, request.RequestUri.Query);
+                Assert.IsNull(request.Headers.Range, "This fixture must request the immutable full version.");
+                Interlocked.Increment(ref _downloadRequests);
+                var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(wirePayload) };
+                response.Content.Headers.ContentLength = File.Size;
+                response.Headers.TryAddWithoutValidation("X-Bz-File-Id", File.FileId);
+                response.Headers.TryAddWithoutValidation("X-Bz-Content-Sha1", File.Sha1);
+                return response;
+            }));
+        }
+
+        internal static async Task<HydrationFixture> CreateAsync(bool corruptPayload)
+        {
+            var fixture = new HydrationFixture(corruptPayload);
+            try
+            {
+                await fixture._cloud.ConnectAsync(new("unused-test-key-id", "unused-test-key"));
+                return fixture;
+            }
+            catch { await fixture.DisposeAsync(); throw; }
+        }
+
+        internal Task DownloadAsync() => ((Task)typeof(ClientController)
+            .GetMethod("HydrateTrackedAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(Controller, [_cloud, File, "CloudBay/", "Projects", 0L, File.Size, Stream, CancellationToken.None])!)
+            .WaitAsync(TimeSpan.FromSeconds(10));
+
+        public async ValueTask DisposeAsync()
+        {
+            // Even a failed assertion must release the validation monitor before controller
+            // disposal, which intentionally waits for every native finalization task.
+            Stream.MarkValidationFailed(new OperationCanceledException());
+            await Controller.DisposeAsync();
+            Stream.Dispose();
+            _cloud.Dispose();
+            Directory.Delete(_state, recursive: true);
+        }
+    }
+
+    private sealed class HydrationHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(respond(request));
+        }
     }
 
     private static string CreateState()
