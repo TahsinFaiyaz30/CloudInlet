@@ -7,7 +7,7 @@ namespace CloudBay.Tests;
 
 /// <summary>Models Shell mappings with fixture-only delegates; no real Windows folder is redirected.</summary>
 [TestClass]
-public sealed class BackupFolderChoiceTests
+public sealed class NativeBackupFolderChoiceTests
 {
     [TestMethod]
     public async Task CleanEnableDoesNotInspectOrImportTheOriginalOrSelectedSource()

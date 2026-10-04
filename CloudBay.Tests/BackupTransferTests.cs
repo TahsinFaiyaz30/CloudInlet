@@ -5,7 +5,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 namespace CloudBay.Tests;
 
 [TestClass]
-public sealed class BackupTransferTests
+public sealed class NativeBackupTransferTests
 {
     [TestMethod]
     public async Task VerifiedMoveRemovesExactOriginalsAndRetainsCopiedStreamsAndReadOnlyAttributes()
