@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using CloudBay.Core;
+using CloudBay.Core.Sync;
 using Microsoft.Win32.SafeHandles;
 
 namespace CloudBay.Windows;
@@ -11,6 +12,17 @@ namespace CloudBay.Windows;
 public static class FolderAppearance
 {
     public sealed record IconResource(string Path, int Index);
+
+    /// <summary>Completes local Shell appearance after a verified copy without reopening network metadata.</summary>
+    public static Task PreserveAfterVerifiedCopyAsync(string source, string destination, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        // VerifiedTreeCopy already retained desktop.ini, named streams and activation
+        // attributes. A UNC original can legitimately be a redirected Windows folder;
+        // cosmetic work must neither block its mapping restoration nor contact the share.
+        if (IsNetworkPath(source) || IsNetworkPath(destination)) return Task.CompletedTask;
+        return PreserveAsync(source, destination, cancellationToken);
+    }
 
     public static Task PreserveAsync(string source, string destination, CancellationToken cancellationToken = default)
     {
@@ -22,12 +34,21 @@ public static class FolderAppearance
         // full Documents tree just to make its root icon visible again.
         cancellationToken.ThrowIfCancellationRequested();
         var customization = File.GetAttributes(source) & (FileAttributes.ReadOnly | FileAttributes.System);
-        ApplyAttributes(destination, customization);
         var originalIni = Path.Combine(source, "desktop.ini");
         var copiedIni = Path.Combine(destination, "desktop.ini");
-        if (File.Exists(originalIni) && File.Exists(copiedIni))
+        var preserveIni = File.Exists(originalIni) && File.Exists(copiedIni);
+        if (preserveIni)
         {
-            EnsureRegularFile(originalIni); EnsureRegularFile(copiedIni, allowCloudFile: true);
+            // Turning backup off copies from the native sync root. Its desktop.ini is a
+            // Cloud Files placeholder even after the verified copy has hydrated its bytes.
+            // Only its attributes are needed here; online-only metadata is safe too, and
+            // must not be recalled merely to preserve the destination's Shell appearance.
+            EnsureRegularFile(originalIni, allowCloudFile: true); EnsureRegularFile(copiedIni, allowCloudFile: true);
+        }
+        // Reject unsupported metadata before changing the destination's appearance.
+        ApplyAttributes(destination, customization);
+        if (preserveIni)
+        {
             ApplyAttributes(copiedIni, FileAttributes.Hidden | FileAttributes.System |
                 (File.GetAttributes(originalIni) & FileAttributes.ReadOnly));
             // The verified tree copy retained the full original INI, including custom names,
@@ -43,9 +64,19 @@ public static class FolderAppearance
     {
         if (!KnownFolderBackup.GetPath(folder.Name).Equals(folder.DestinationPath, StringComparison.OrdinalIgnoreCase)) return;
         if (!Directory.Exists(folder.DestinationPath)) return;
-        if (Directory.Exists(folder.OriginalPath)) await PreserveAsync(folder.OriginalPath, folder.DestinationPath, cancellationToken);
+        await RefreshLocalBackupAppearanceAsync(folder.OriginalPath, folder.DestinationPath, GetKnownFolderIcon(folder.Name), cancellationToken);
+    }
+
+    internal static async Task RefreshLocalBackupAppearanceAsync(string original, string destination, IconResource? fallback,
+        CancellationToken cancellationToken = default)
+    {
         cancellationToken.ThrowIfCancellationRequested();
-        await EnsureIconAsync(folder.DestinationPath, GetKnownFolderIcon(folder.Name), cancellationToken);
+        // The initial verified copy preserved the original customization. Startup only
+        // repairs the owned local root and must not probe an unavailable former share.
+        if (!IsNetworkPath(original) && Directory.Exists(original))
+            await PreserveAsync(original, destination, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        await EnsureIconAsync(destination, fallback, cancellationToken);
     }
 
     /// <summary>Reads resident local metadata only. It never recalls an online-only INI or icon.</summary>
@@ -235,7 +266,7 @@ public static class FolderAppearance
     }
     private static void ApplyAttributes(string path, FileAttributes additional)
     {
-        using var handle = CreateFileW(path, 0x180, 3, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
+        using var handle = CreateFileW(path, 0x180, 3, IntPtr.Zero, 3, 0x02300000, IntPtr.Zero);
         if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
         if (!GetFileInformationByHandleEx(handle, 9, out var tag, 8)) throw new Win32Exception(Marshal.GetLastWin32Error());
         var state = CloudFiles.CloudFilesNative.CfGetPlaceholderStateFromAttributeTag(tag.Attributes, tag.Tag);
@@ -251,6 +282,7 @@ public static class FolderAppearance
         var state = CloudFiles.CloudFilesNative.State(path);
         return state != uint.MaxValue && (state & (CloudFiles.CloudFilesNative.Placeholder | 2)) != 0;
     }
+    private static bool IsNetworkPath(string path) => path.StartsWith("\\\\", StringComparison.Ordinal);
     private static void Notify(string path) => SHChangeNotify(0x00002000, 0x0005, path, IntPtr.Zero);
     private static T Method<T>(IntPtr instance, int slot) where T : Delegate =>
         Marshal.GetDelegateForFunctionPointer<T>(Marshal.ReadIntPtr(Marshal.ReadIntPtr(instance), slot * IntPtr.Size));
@@ -269,8 +301,10 @@ public static class FolderAppearance
     [DllImport("ole32.dll")] private static extern int CoInitializeEx(IntPtr reserved, uint flags);
     [DllImport("ole32.dll")] private static extern void CoUninitialize();
     [DllImport("ole32.dll")] private static extern int CoCreateInstance(ref Guid clsid, IntPtr outer, uint context, ref Guid iid, out IntPtr instance);
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern SafeFileHandle CreateFileW(string path, uint access, uint sharing, IntPtr security, uint disposition, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+    private static extern SafeFileHandle NativeCreateFileW(string path, uint access, uint sharing, IntPtr security, uint disposition, uint flags, IntPtr template);
+    private static SafeFileHandle CreateFileW(string path, uint access, uint sharing, IntPtr security, uint disposition, uint flags, IntPtr template) =>
+        NativeCreateFileW(WindowsFilePaths.ToExtendedPath(path), access, sharing, security, disposition, flags, template);
     [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetFileInformationByHandleEx(SafeFileHandle handle, int infoClass, out AttributeTag tag, uint size);
     [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
