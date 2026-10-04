@@ -1,4 +1,5 @@
 using CloudBay.Application;
+using CloudBay.Core;
 using Microsoft.UI.Xaml;
 using CloudBay.Views;
 using CloudBay.Windows;
@@ -41,6 +42,9 @@ public partial class App : Microsoft.UI.Xaml.Application
                 _ = FailIsolatedStartupAsync(args.Exception, _startupCompleted ? "Unhandled UI exception" : _startupStage);
                 return;
             }
+            // A failed secondary launch has no window or controller to surface an
+            // exception. Do not leave a headless shutdown helper running forever.
+            if (MainWindow is null) { Environment.ExitCode = 1; Exit(); return; }
             _controller?.Pause();
             MainWindow?.ShowWindow();
             if (MainWindow?.Content is FrameworkElement content)
@@ -94,22 +98,18 @@ public partial class App : Microsoft.UI.Xaml.Application
         var isolationSuffix = isSmoke ? ".UiSmoke." + smokeTheme : isLive ? ".UiLive" : "";
         var sid = WindowsIdentity.GetCurrent().User?.Value ?? Environment.UserName;
         _pipeName = "CloudBay.Client." + sid + isolationSuffix;
+        if (commandLine.Contains("--shutdown"))
+        {
+            Environment.ExitCode = ClientActivation.ExitCode(await ClientActivation.SendAsync(_pipeName, "quit"));
+            Exit(); return;
+        }
         _singleInstance = new Mutex(true, @"Local\CloudBay.Client." + sid + isolationSuffix, out var first);
         if (!first)
         {
-            try
-            {
-                await using var client = new NamedPipeClientStream(".", _pipeName, PipeDirection.Out);
-                await client.ConnectAsync(3000);
-                var activation = commandLine.Contains("--shutdown") ? "quit"
-                    : isLive && commandLine.Contains("--show-tray") ? "tray" : "show";
-                await client.WriteAsync(Encoding.UTF8.GetBytes(activation));
-            }
-            catch (IOException) { }
-            catch (TimeoutException) { }
+            var activation = isLive && commandLine.Contains("--show-tray") ? "tray" : "show";
+            Environment.ExitCode = ClientActivation.ExitCode(await ClientActivation.SendAsync(_pipeName, activation));
             Exit(); return;
         }
-        if (Environment.GetCommandLineArgs().Contains("--shutdown")) { _singleInstance.Dispose(); Exit(); return; }
         try
         {
             _startupStage = "Initialize client state";

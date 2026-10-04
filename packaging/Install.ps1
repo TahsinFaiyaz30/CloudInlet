@@ -75,7 +75,10 @@ $running = @(Get-Process -Name CloudBay -ErrorAction SilentlyContinue | Where-Ob
 })
 if ($running.Count -gt 0) {
     $shutdownProcess = Start-Process -FilePath $sourceExe -ArgumentList '--shutdown' -WindowStyle Hidden -PassThru
-    $shutdownProcess.WaitForExit(10000) | Out-Null
+    if (!$shutdownProcess.WaitForExit(10000)) { throw 'CloudBay did not answer the shutdown request. Quit it from its tray menu and run installation again.' }
+    $stillRunning = @($running | Where-Object { $_.Refresh(); !$_.HasExited })
+    if ($stillRunning.Count -gt 0 -and $shutdownProcess.ExitCode -eq 5) { throw 'Windows denied access to the running CloudBay app. Quit it from its tray menu and run installation again.' }
+    if ($stillRunning.Count -gt 0 -and $shutdownProcess.ExitCode -ne 0) { throw 'CloudBay could not receive the shutdown request. Quit it from its tray menu and run installation again.' }
     foreach ($process in $running) {
         if (!$process.WaitForExit(60000)) { throw 'CloudBay is still finishing a transfer. Quit it from its tray menu and run installation again.' }
     }
