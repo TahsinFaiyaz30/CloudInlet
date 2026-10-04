@@ -70,14 +70,18 @@ public sealed class B2TransportTests
     }
 
     [TestMethod]
-    public async Task DownloadInactivityRetriesFromOriginalDestinationPosition()
+    public async Task DownloadInactivityResumesConfirmedBytesWithoutDuplicatingDestinationPrefix()
     {
         var attempts = 0;
         var stalled = new StalledReadStream(Data[..5]);
         using var store = new B2CloudStore(new FakeHandler((request, _) =>
         {
             if (Operation(request) == "b2_authorize_account") return Task.FromResult(Authorization());
-            if (++attempts > 1) return Task.FromResult(Download(Data));
+            if (++attempts > 1)
+            {
+                Assert.AreEqual($"bytes=5-{Data.Length - 1}", request.Headers.Range?.ToString());
+                return Task.FromResult(Download(Data[5..], new ContentRangeHeaderValue(5, Data.Length - 1, Data.Length)));
+            }
             var response = Download(Data);
             response.Content = new StreamContent(stalled);
             response.Content.Headers.ContentLength = Data.Length;
@@ -341,6 +345,31 @@ public sealed class B2TransportTests
         await store.UploadAsync("bucket", File.Key, source, Data.Length, DataSha, Modified);
         Assert.AreEqual(2, targets);
         Assert.AreEqual(2, uploads);
+    }
+
+    [DataTestMethod]
+    [DataRow("key")]
+    [DataRow("action")]
+    [DataRow("bucket")]
+    public async Task SmallUploadRejectsAnAcknowledgmentForAnotherObjectIdentity(string mismatch)
+    {
+        using var store = new B2CloudStore(new FakeHandler(async (request, ct) =>
+        {
+            if (Operation(request) == "b2_authorize_account") return Authorization();
+            if (Operation(request) == "b2_get_upload_url") return UploadTarget("identity");
+            CollectionAssert.AreEqual(Data, await request.Content!.ReadAsByteArrayAsync(ct));
+            return Json(new
+            {
+                fileId = "version", fileName = mismatch == "key" ? "CloudBay/another.bin" : File.Key,
+                bucketId = mismatch == "bucket" ? "another-bucket" : "bucket",
+                contentLength = Data.Length, contentSha1 = DataSha,
+                action = mismatch == "action" ? "copy" : "upload", uploadTimestamp = 0
+            });
+        }));
+        await store.ConnectAsync(new("id", "private"));
+        using var source = new MemoryStream(Data);
+        await Assert.ThrowsExceptionAsync<InvalidDataException>(() =>
+            store.UploadAsync("bucket", File.Key, source, Data.Length, DataSha, Modified));
     }
 
     [TestMethod]
@@ -998,6 +1027,51 @@ public sealed class B2TransportTests
         Assert.IsTrue(source.CanRead);
     }
 
+    [DataTestMethod]
+    [DataRow(67_108_863L, false)]
+    [DataRow(67_108_864L, true)]
+    public async Task MultipartBoundaryKeepsSmallerFilesEfficientAndMakesMediumFilesResumable(long length, bool multipart)
+    {
+        var starts = 0;
+        var parts = 0;
+        var checksum = ZeroHash(length);
+        HttpResponseMessage Completed() => Json(new
+        {
+            fileId = "boundary", fileName = File.Key, contentLength = length,
+            contentSha1 = multipart ? "none" : checksum, action = "upload", uploadTimestamp = 0,
+            fileInfo = new { large_file_sha1 = checksum }
+        });
+        using var store = new B2CloudStore(new FakeHandler(async (request, ct) =>
+        {
+            switch (Operation(request))
+            {
+                case "b2_authorize_account": return Authorization();
+                case "b2_start_large_file": Interlocked.Increment(ref starts); return Json(new { fileId = "boundary" });
+                case "b2_get_upload_part_url": return UploadTarget("part");
+                case "b2_get_upload_url": return UploadTarget("file");
+                case "b2_finish_large_file": return Completed();
+            }
+            await request.Content!.CopyToAsync(Stream.Null, ct);
+            if (Operation(request) == "part")
+            {
+                Interlocked.Increment(ref parts);
+                return Json(new
+                {
+                    fileId = "boundary", partNumber = int.Parse(request.Headers.GetValues("X-Bz-Part-Number").Single()),
+                    contentLength = request.Content.Headers.ContentLength,
+                    contentSha1 = request.Headers.GetValues("X-Bz-Content-Sha1").Single()
+                });
+            }
+            return Completed();
+        }));
+        await store.ConnectAsync(new("id", "private"));
+        using var source = new ZeroStream(length);
+        var uploaded = await store.UploadAsync("bucket", File.Key, source, length, checksum, Modified);
+        Assert.AreEqual(length, uploaded.Size);
+        Assert.AreEqual(multipart ? 1 : 0, starts);
+        Assert.AreEqual(multipart ? 2 : 0, parts);
+    }
+
     [TestMethod]
     public async Task MultipartStreamsOrderedPartsAndCancelsUnfinishedFileOnFailure()
     {
@@ -1037,7 +1111,7 @@ public sealed class B2TransportTests
                 await r.Content!.CopyToAsync(Stream.Null, ct);
                 partHashes[number] = r.Headers.GetValues("X-Bz-Content-Sha1").Single();
                 Assert.AreEqual(ZeroHash(r.Content.Headers.ContentLength!.Value), partHashes[number]);
-                return Json(new { partNumber = number, contentLength = r.Content.Headers.ContentLength, contentSha1 = partHashes[number] });
+                return Json(new { fileId = "large", partNumber = number, contentLength = r.Content.Headers.ContentLength, contentSha1 = partHashes[number] });
             }));
             store.Configure(0, 0, 2);
             await store.ConnectAsync(new("id", "private"));

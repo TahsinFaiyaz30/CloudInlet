@@ -174,6 +174,8 @@ public static class PathRules
             throw new InvalidDataException("CloudBay settings contain missing account, folder, or exclusion fields. The original settings were preserved.");
         if (settings.Theme is not ("System" or "Light" or "Dark")) throw new InvalidDataException("The saved Windows theme is invalid.");
         if (settings.UploadConcurrency is < 1 or > 16) throw new ArgumentOutOfRangeException(nameof(settings.UploadConcurrency));
+        if (settings.DownloadConcurrency is < 1 or > 16) throw new ArgumentOutOfRangeException(nameof(settings.DownloadConcurrency));
+        if (!Enum.IsDefined(settings.UploadMode)) throw new ArgumentOutOfRangeException(nameof(settings.UploadMode));
         if (settings.UploadBytesPerSecond < 0 || settings.DownloadBytesPerSecond < 0) throw new ArgumentOutOfRangeException("Transfer limits must be nonnegative.");
         if (settings.PollSeconds is < 15 or > 3600) throw new ArgumentOutOfRangeException(nameof(settings.PollSeconds));
         if (NormalizePrefix(settings.Prefix) != settings.Prefix) throw new InvalidDataException("The saved cloud prefix is not normalized.");

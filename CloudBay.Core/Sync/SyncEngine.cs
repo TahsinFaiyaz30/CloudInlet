@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Threading.Channels;
 
 namespace CloudBay.Core.Sync;
 
@@ -20,20 +21,22 @@ public sealed class SyncEngine : IAsyncDisposable
     private Task? _background;
     private AppSettings _settings;
     private volatile bool _paused;
+    private DateTimeOffset _nextStagingCleanup;
     private DateTimeOffset? _resumeAt;
     private readonly object _stateGate = new();
     private HashSet<string>? _pendingDeletionReview;
     private HashSet<string>? _approvedDeletionReview;
     private readonly object _progressGate = new();
-    private readonly Dictionary<string, TransferProgress> _progress = new(StringComparer.OrdinalIgnoreCase);
+    private readonly TransferTracker _transfers;
     private SyncSnapshot _snapshot = new(ClientState.Connecting, "Connecting to Backblaze B2");
 
     public SyncEngine(ICloudStore cloud, IPlaceholderService placeholders, SyncManifest manifest,
         AppSettings settings, string recoveryPath, Action<ActivityEvent> activity, Action<SyncSnapshot> status,
-        Func<string?>? policy = null)
+        Func<string?>? policy = null, string? rootDisplayName = null)
     {
         _cloud = cloud; _placeholders = placeholders; _manifest = manifest; _settings = settings;
         _recoveryPath = recoveryPath; _activity = activity; _status = status; _policy = policy ?? (() => null);
+        _transfers = new(settings.RootPath, rootDisplayName ?? Path.GetFileName(Path.TrimEndingDirectorySeparator(settings.RootPath)));
     }
 
     public void Start()
@@ -62,6 +65,12 @@ public sealed class SyncEngine : IAsyncDisposable
         Wake();
     }
     public bool IsPaused => _paused;
+    /// <summary>Refresh measured activity without starting a scan or transfer.</summary>
+    public void RefreshTransferStatus()
+    {
+        lock (_progressGate)
+            if (_snapshot.ActiveTransfers > 0) SetStatus(_snapshot);
+    }
     public async Task QuiesceAsync(CancellationToken cancellationToken = default)
     {
         Pause();
@@ -75,6 +84,7 @@ public sealed class SyncEngine : IAsyncDisposable
             _paused = true; _resumeAt = duration.HasValue ? DateTimeOffset.UtcNow + duration : null;
             try { _cycleCancellation?.Cancel(); } catch (ObjectDisposedException) { }
         }
+        _transfers.Pause();
         SetStatus(_snapshot with { State = ClientState.Paused, Message = "Sync paused" });
     }
     public void Resume() { lock (_stateGate) { _paused = false; _resumeAt = null; } Wake(); }
@@ -138,6 +148,12 @@ public sealed class SyncEngine : IAsyncDisposable
     {
         var settings = _settings;
         if (!Directory.Exists(settings.RootPath)) throw new IOException("The sync folder is unavailable. No deletions were sent to B2.");
+        if (DateTimeOffset.UtcNow >= _nextStagingCleanup)
+        {
+            await Task.Run(() => DownloadStaging.CleanupAbandoned(settings.RootPath, ct), ct);
+            _nextStagingCleanup = DateTimeOffset.UtcNow.AddDays(1);
+        }
+        _transfers.Reset();
         SetStatus(_snapshot with { State = ClientState.Syncing, Message = "Checking for changes" });
         var baseline = _manifest.ReadAll();
         var directoryBaseline = _manifest.ReadDirectories();
@@ -181,6 +197,7 @@ public sealed class SyncEngine : IAsyncDisposable
             return;
         }
         var uploads = new List<string>();
+        var downloads = new List<(string Relative, CloudObject File)>();
         var errors = invalid;
         foreach (var relative in local.Keys.Concat(remote.Keys).Concat(baseline.Keys).Distinct(StringComparer.OrdinalIgnoreCase))
         {
@@ -219,7 +236,7 @@ public sealed class SyncEngine : IAsyncDisposable
                         _manifest.Remove(relative);
                         Record(ActivityKind.Delete, relative, "Moved to B2 version history after local deletion.");
                     }
-                    else await ApplyRemoteAsync(relative, cloud, settings, ct);
+                    else downloads.Add((relative, cloud));
                     continue;
                 }
                 if (last is null)
@@ -232,7 +249,7 @@ public sealed class SyncEngine : IAsyncDisposable
                     else
                     {
                         if (disk.Hydrated) uploads.Add(PreserveConflict(path, settings.RootPath));
-                        await ApplyRemoteAsync(relative, cloud, settings, ct);
+                        downloads.Add((relative, cloud));
                         Record(ActivityKind.Conflict, relative, "An existing local file differed from B2. Both copies were preserved.");
                     }
                     continue;
@@ -246,7 +263,7 @@ public sealed class SyncEngine : IAsyncDisposable
                         uploads.Add(PreserveConflict(path, settings.RootPath));
                         Record(ActivityKind.Conflict, relative, "Local and cloud edits overlapped. Both copies were preserved.");
                     }
-                    await ApplyRemoteAsync(relative, cloud, settings, ct);
+                    downloads.Add((relative, cloud));
                 }
                 else if (changed) uploads.Add(relative);
                 else if (!settings.FilesOnDemand && !disk.Hydrated)
@@ -256,21 +273,38 @@ public sealed class SyncEngine : IAsyncDisposable
             catch (Exception error) { errors++; Record(ActivityKind.Error, relative, error.Message); }
         }
 
-        SetStatus(_snapshot with { Pending = uploads.Count, Message = uploads.Count == 0 ? "Finishing sync" : $"Uploading {uploads.Count} files" });
-        var remaining = uploads.Count;
-        await Parallel.ForEachAsync(uploads.Distinct(StringComparer.OrdinalIgnoreCase), new ParallelOptions
-        { MaxDegreeOfParallelism = settings.UploadConcurrency, CancellationToken = ct }, async (relative, token) =>
+        uploads = uploads.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        _transfers.Queue(uploads.Select(path => (path, ActivityKind.Upload, File.Exists(PathRules.FullPath(settings.RootPath, path))
+            ? new FileInfo(PathRules.FullPath(settings.RootPath, path)).Length : 0L)));
+        _transfers.Queue(downloads.Where(item =>
         {
-            try { await UploadLocalAsync(relative, settings, token); }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception error) { Interlocked.Increment(ref errors); Record(ActivityKind.Error, relative, error.Message); }
-            finally
+            var path = PathRules.FullPath(settings.RootPath, item.Relative);
+            return !settings.FilesOnDemand || File.Exists(path) && !_placeholders.IsPlaceholder(path);
+        }).Select(item => (item.Relative, ActivityKind.Download, item.File.Size)));
+        var remaining = uploads.Count + downloads.Count;
+        SetStatus(_snapshot with { Pending = remaining, Message = remaining == 0 ? "Finishing sync" : $"Syncing {remaining} files" });
+        var limits = TransferLimits.For(settings);
+        void FinishTransfer(string relative, ActivityKind kind, Exception? error = null)
+        {
+            lock (_progressGate)
             {
-                lock (_progressGate) _progress.Remove(relative);
+                if (error is null) _transfers.Complete(relative, kind);
+                else { Interlocked.Increment(ref errors); _transfers.Phase(relative, kind, TransferPhase.Retrying); }
                 var left = Interlocked.Decrement(ref remaining);
                 SetStatus(_snapshot with { Pending = Math.Max(0, left) });
             }
-        });
+            if (error is not null) Record(ActivityKind.Error, relative, error.Message);
+        }
+        async Task TransferAsync(string relative, ActivityKind kind, Func<CancellationToken, Task> action, CancellationToken token)
+        {
+            try { await action(token); FinishTransfer(relative, kind); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception error) { FinishTransfer(relative, kind, error); }
+        }
+        await Task.WhenAll(
+            UploadPipelineAsync(uploads, settings, limits.Uploads, FinishTransfer, ct),
+            Parallel.ForEachAsync(downloads, new ParallelOptions { MaxDegreeOfParallelism = limits.Downloads, CancellationToken = ct },
+                (item, token) => new ValueTask(TransferAsync(item.Relative, ActivityKind.Download, t => ApplyRemoteAsync(item.Relative, item.File, settings, t), token))));
         errors += await ReconcileDirectoriesAsync(localSnapshot.Directories, remoteDirectories, directoryBaseline, settings, ct);
         var final = _manifest.ReadAll();
         var localBytes = (await Task.Run(() => ScanLocal(settings, ct), ct)).Files.Values.Where(f => f.Hydrated).Sum(f => f.Size);
@@ -406,10 +440,67 @@ public sealed class SyncEngine : IAsyncDisposable
             _placeholders.HasLocalChanges(path));
     }
 
-    private async Task UploadLocalAsync(string relative, AppSettings settings, CancellationToken ct)
+    private async Task UploadPipelineAsync(IReadOnlyList<string> uploads, AppSettings settings, int workers,
+        Action<string, ActivityKind, Exception?> finish, CancellationToken cancellationToken)
+    {
+        if (uploads.Count == 0) return;
+        // A completed HTTP upload releases its network worker immediately. Verification consumes
+        // a bounded queue separately, so short files keep feeding pooled connections while earlier
+        // acknowledgments are checked. Backpressure bounds pending metadata and tasks.
+        var pending = Channel.CreateBounded<UploadedLocal>(new BoundedChannelOptions(workers * 2)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleWriter = false,
+            SingleReader = workers == 1,
+            AllowSynchronousContinuations = false
+        });
+        using var pipeline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var token = pipeline.Token;
+        async Task ProduceAsync()
+        {
+            try
+            {
+                await Parallel.ForEachAsync(uploads, new ParallelOptions
+                { MaxDegreeOfParallelism = workers, CancellationToken = token }, async (relative, ct) =>
+                {
+                    try
+                    {
+                        var uploaded = await UploadLocalAsync(relative, settings, ct);
+                        if (uploaded is null) finish(relative, ActivityKind.Upload, null);
+                        else await pending.Writer.WriteAsync(uploaded, ct);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception error) { finish(relative, ActivityKind.Upload, error); }
+                });
+            }
+            catch { pipeline.Cancel(); throw; }
+            finally { pending.Writer.TryComplete(); }
+        }
+        async Task VerifyAsync()
+        {
+            try
+            {
+                await foreach (var uploaded in pending.Reader.ReadAllAsync(token))
+                {
+                    try
+                    {
+                        await VerifyUploadedLocalAsync(uploaded, settings, token);
+                        finish(uploaded.Relative, ActivityKind.Upload, null);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception error) { finish(uploaded.Relative, ActivityKind.Upload, error); }
+                }
+            }
+            catch { pipeline.Cancel(); throw; }
+        }
+        var verification = Enumerable.Range(0, Math.Min(workers, 8)).Select(_ => VerifyAsync()).ToArray();
+        await Task.WhenAll(verification.Append(ProduceAsync()));
+    }
+
+    private async Task<UploadedLocal?> UploadLocalAsync(string relative, AppSettings settings, CancellationToken ct)
     {
         var path = PathRules.FullPath(settings.RootPath, relative);
-        if (!File.Exists(path)) return;
+        if (!File.Exists(path)) { _transfers.Discard(relative, ActivityKind.Upload); return null; }
         if (_placeholders.IsPlaceholder(path) && !_placeholders.IsHydrated(path))
             await _placeholders.HydrateAsync(path, ct);
         // Deny concurrent writes for the hash and transfer so B2 receives the exact verified snapshot.
@@ -418,12 +509,28 @@ public sealed class SyncEngine : IAsyncDisposable
         // Read metadata after acquiring the writer-denying handle; an editor may have saved between
         // the initial directory scan and this open.
         var modified = new DateTimeOffset(File.GetLastWriteTimeUtc(path));
-        var sha1 = Convert.ToHexString(await SHA1.HashDataAsync(source, ct)).ToLowerInvariant();
+        SetPhase(relative, ActivityKind.Upload, TransferPhase.Hashing);
+        var sha1 = await _cloud.PrepareUploadChecksumAsync(settings.BucketId, settings.Prefix + relative, source, source.Length, modified, ct);
         source.Position = 0;
+        SetPhase(relative, ActivityKind.Upload, TransferPhase.Uploading);
         var file = await _cloud.UploadAsync(settings.BucketId, settings.Prefix + relative, source, source.Length,
-            sha1, modified, new InlineProgress(p => UpdateProgress(relative, p)), ct);
+            sha1, modified, new InlineProgress(p => UpdateProgress(relative, ActivityKind.Upload, p)), ct);
         var size = source.Length;
-        await source.DisposeAsync();
+        SetPhase(relative, ActivityKind.Upload, TransferPhase.Verifying);
+        if (file.Key != settings.Prefix + relative || file.Size != size || !string.Equals(file.Sha1, sha1, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("The uploaded file identity, size, or checksum does not match the locked local source.");
+        // The handle closes when this method returns, before the acknowledgment waits in the
+        // bounded queue. A subsequent edit is rechecked before native marking and stays dirty.
+        return new(relative, file, size, modified);
+    }
+
+    private async Task VerifyUploadedLocalAsync(UploadedLocal uploaded, AppSettings settings, CancellationToken ct)
+    {
+        var (relative, file, size, modified) = uploaded;
+        var path = PathRules.FullPath(settings.RootPath, relative);
+        await TransferResources.Verification.WaitAsync(ct);
+        try { await _cloud.VerifyUploadAsync(file, settings.BucketId, ct); }
+        finally { TransferResources.Verification.Release(); }
         var after = new FileInfo(path);
         // A save immediately after upload remains dirty and will be sent by the next scan.
         if (after.Exists && after.Length == size && after.LastWriteTimeUtc == modified.UtcDateTime)
@@ -435,27 +542,25 @@ public sealed class SyncEngine : IAsyncDisposable
     private async Task ApplyRemoteAsync(string relative, CloudObject cloud, AppSettings settings, CancellationToken ct)
     {
         var path = PathRules.FullPath(settings.RootPath, relative);
+        SetPhase(relative, ActivityKind.Download, TransferPhase.Downloading);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        if (settings.FilesOnDemand && (!File.Exists(path) || _placeholders.IsPlaceholder(path)))
+        var metadataOnly = settings.FilesOnDemand && (!File.Exists(path) || _placeholders.IsPlaceholder(path));
+        if (metadataOnly)
             await _placeholders.CreateOrUpdateAsync(path, cloud, true, ct);
         else
         {
             var original = File.Exists(path) ? ReadLocal(path) : null;
-            var temporary = Path.Combine(settings.RootPath, ".cloudbay", "transfers", Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(Path.GetDirectoryName(temporary)!);
+            await using var staging = await DownloadStaging.OpenAsync(settings.RootPath, relative, cloud, ct);
+            var temporary = staging.Path;
             try
             {
-                await using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 128 * 1024, true))
-                {
-                    await _cloud.DownloadAsync(cloud, output, progress: new InlineProgress(p => UpdateProgress(relative, p)), cancellationToken: ct);
-                    await output.FlushAsync(ct);
-                    output.Flush(flushToDisk: true);
-                }
-                if (new FileInfo(temporary).Length != cloud.Size)
-                    throw new InvalidDataException("The downloaded file length does not match B2 metadata.");
-                if (cloud.Sha1 is { Length: > 0 } sha1 && !sha1.Equals("none", StringComparison.OrdinalIgnoreCase) &&
-                    !string.Equals(await HashAsync(temporary, ct), sha1, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException("The downloaded file failed its B2 checksum verification.");
+                await _cloud.DownloadFileAsync(cloud, staging.Stream, staging.Chunks, staging.CheckpointAsync,
+                    new InlineProgress(p =>
+                    {
+                        if (p.TotalBytes > 0 && p.Bytes == p.TotalBytes) SetPhase(relative, ActivityKind.Download, TransferPhase.Verifying);
+                        UpdateProgress(relative, ActivityKind.Download, p);
+                    }), ct);
+                await staging.Stream.DisposeAsync();
                 File.SetLastWriteTimeUtc(temporary, cloud.ModifiedUtc.UtcDateTime);
                 if (File.Exists(path))
                 {
@@ -473,13 +578,16 @@ public sealed class SyncEngine : IAsyncDisposable
                 }
                 // Never overwrite: a file created after the atomic preservation remains intact.
                 File.Move(temporary, path, overwrite: false);
+                staging.ForgetCheckpoint();
                 await _placeholders.MarkInSyncAsync(path, cloud, ct);
             }
-            finally { if (File.Exists(temporary)) File.Delete(temporary); }
+            catch (InvalidDataException) { if (staging.Stream.CanWrite) staging.DiscardCorruptBytes(); throw; }
         }
         if (!settings.FilesOnDemand) await _placeholders.SetPinAsync(path, PinMode.AlwaysAvailable, ct);
         SaveBaseline(relative, cloud);
-        Record(ActivityKind.Download, relative, settings.FilesOnDemand ? "Cloud file is available in Explorer" : "Downloaded and available offline", cloud.Size);
+        Record(metadataOnly ? ActivityKind.Information : ActivityKind.Download, relative,
+            metadataOnly ? "Cloud file is available in Explorer" : "Downloaded and available offline",
+            metadataOnly ? 0 : cloud.Size);
     }
 
     private void SaveBaseline(string relative, CloudObject file)
@@ -515,14 +623,17 @@ public sealed class SyncEngine : IAsyncDisposable
     private async Task<bool> TryAdoptRemoteAsync(string relative, string path, CloudObject cloud, CancellationToken ct)
     {
         if (cloud.Sha1 is not { Length: > 0 } || cloud.Sha1.Equals("none", StringComparison.OrdinalIgnoreCase)) return false;
-        await using (var source = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, true))
+        await TransferResources.Hashing.WaitAsync(ct);
+        try
         {
+            await using var source = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, true);
             if (source.Length != cloud.Size) return false;
             var sha1 = Convert.ToHexString(await SHA1.HashDataAsync(source, ct)).ToLowerInvariant();
             if (!sha1.Equals(cloud.Sha1, StringComparison.OrdinalIgnoreCase)) return false;
             // The read handle denies writers while the matching bytes get the cloud timestamp.
             File.SetLastWriteTimeUtc(path, cloud.ModifiedUtc.UtcDateTime);
         }
+        finally { TransferResources.Hashing.Release(); }
         await _placeholders.MarkInSyncAsync(path, cloud, ct);
         SaveBaseline(relative, cloud);
         return true;
@@ -530,19 +641,35 @@ public sealed class SyncEngine : IAsyncDisposable
 
     private static async Task<string> HashAsync(string path, CancellationToken ct)
     {
-        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, true);
-        return Convert.ToHexString(await SHA1.HashDataAsync(stream, ct)).ToLowerInvariant();
+        await TransferResources.Hashing.WaitAsync(ct);
+        try
+        {
+            return await Task.Run(async () =>
+            {
+                await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, true);
+                return Convert.ToHexString(await SHA1.HashDataAsync(stream, ct)).ToLowerInvariant();
+            }, ct);
+        }
+        finally { TransferResources.Hashing.Release(); }
     }
-    private void UpdateProgress(string path, TransferProgress value)
+    private void SetPhase(string path, ActivityKind kind, TransferPhase phase)
+    {
+        _transfers.Phase(path, kind, phase);
+        SetStatus(_snapshot with { State = ClientState.Syncing, Message = "Syncing your files" });
+    }
+    private void UpdateProgress(string path, ActivityKind kind, TransferProgress value)
+    {
+        if (_transfers.Progress(path, kind, value)) SetStatus(_snapshot with { State = ClientState.Syncing, Message = "Syncing your files" });
+    }
+    private void SetStatus(SyncSnapshot value)
     {
         lock (_progressGate)
         {
-            _progress[path] = value;
-            SetStatus(_snapshot with { State = ClientState.Syncing, Message = $"Transferring {Path.GetFileName(path)}",
-                TransferredBytes = _progress.Values.Sum(p => p.Bytes), TransferTotalBytes = _progress.Values.Sum(p => p.TotalBytes) });
+            if (_paused) value = value with { State = ClientState.Paused, Message = "Sync paused" };
+            if (value.State == ClientState.Paused) _transfers.Pause();
+            _snapshot = _transfers.Apply(value); _status(_snapshot);
         }
     }
-    private void SetStatus(SyncSnapshot value) { _snapshot = value; _status(value); }
     private void Record(ActivityKind kind, string path, string message, long bytes = 0) =>
         _activity(new(DateTimeOffset.UtcNow, kind, path, message, bytes));
 
@@ -559,6 +686,7 @@ public sealed class SyncEngine : IAsyncDisposable
         _lifetime.Dispose(); _wake.Dispose(); _cycleGate.Dispose();
     }
     private sealed record LocalFile(long Size, DateTimeOffset WriteUtc, bool Hydrated, bool HasLocalChanges);
+    private sealed record UploadedLocal(string Relative, CloudObject File, long Size, DateTimeOffset Modified);
     private sealed record LocalSnapshot(Dictionary<string, LocalFile> Files, HashSet<string> Directories);
     private sealed class InlineProgress(Action<TransferProgress> action) : IProgress<TransferProgress>
     { public void Report(TransferProgress value) => action(value); }

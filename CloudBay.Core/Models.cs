@@ -6,7 +6,19 @@ public sealed record CloudAccount(string AccountId, string ApiUrl, string Downlo
 public sealed record CloudBucket(string Id, string Name);
 public sealed record CloudObject(string FileId, string Key, long Size, string? Sha1,
     DateTimeOffset ModifiedUtc, string Action = "upload");
-public sealed record TransferProgress(long Bytes, long TotalBytes);
+public sealed record TransferProgress(long Bytes, long TotalBytes)
+{
+    /// <summary>Bytes already confirmed before this request; they are not new network traffic.</summary>
+    public bool IsBaseline { get; init; }
+}
+public sealed record DownloadChunk(long Offset, long Length, string Sha1);
+public enum TransferPhase { Queued, Hashing, Uploading, Downloading, Verifying, Retrying, Paused }
+public sealed record TransferSnapshot(string Id, string RootName, string RelativePath,
+    ActivityKind Kind, TransferPhase Phase, long Bytes, long TotalBytes)
+{
+    public double BytesPerSecond { get; init; }
+}
+public enum UploadMode { Intelligent, MaximumThroughput, Manual }
 public enum ActivityKind { Upload, Download, Delete, Restore, Conflict, Backup, Information, Error }
 public sealed record ActivityEvent(DateTimeOffset Time, ActivityKind Kind, string Path, string Message,
     long Bytes = 0, bool Completed = true);
@@ -14,7 +26,14 @@ public enum PinMode { OnlineOnly, Available, AlwaysAvailable }
 public enum ClientState { NotConnected, Connecting, Syncing, UpToDate, Paused, Offline, Attention }
 public sealed record SyncSnapshot(ClientState State, string Message, int Pending = 0,
     int FileCount = 0, long CloudBytes = 0, long LocalBytes = 0,
-    long TransferredBytes = 0, long TransferTotalBytes = 0, DateTimeOffset? LastSync = null);
+    long TransferredBytes = 0, long TransferTotalBytes = 0, DateTimeOffset? LastSync = null)
+{
+    public IReadOnlyList<TransferSnapshot> Transfers { get; init; } = [];
+    public int ActiveTransfers { get; init; }
+    public int QueuedTransfers { get; init; }
+    public double UploadBytesPerSecond { get; init; }
+    public double DownloadBytesPerSecond { get; init; }
+}
 
 public sealed record BackupFolder(string Name, string OriginalPath, string DestinationPath);
 public sealed record CustomBackupFolder(string Name, string SourcePath, string Prefix);
@@ -38,6 +57,8 @@ public sealed record AppSettings
     public bool PauseOnMetered { get; init; } = true;
     public bool PauseOnBatterySaver { get; init; } = true;
     public int UploadConcurrency { get; init; } = 4;
+    public int DownloadConcurrency { get; init; } = 4;
+    public UploadMode UploadMode { get; init; } = UploadMode.Intelligent;
     public long UploadBytesPerSecond { get; init; }
     public long DownloadBytesPerSecond { get; init; }
     public int PollSeconds { get; init; } = 60;

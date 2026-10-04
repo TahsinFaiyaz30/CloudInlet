@@ -14,10 +14,10 @@ namespace CloudBay.Core.B2;
 /// B2 Native API v4 transport. One HTTP connection pool serves the lifetime of the store.
 /// An upload URL is borrowed exclusively by one transfer and reused for subsequent small files.
 /// </summary>
-public sealed class B2CloudStore : ICloudStore
+public sealed partial class B2CloudStore : ICloudStore
 {
     private const int Attempts = 5;
-    private const long MultipartThreshold = 200_000_000;
+    private const long MultipartThreshold = 64 * 1024 * 1024;
     private const long MaxPartSize = 5_000_000_000;
     private const long MaxLargeFileSize = 10_000_000_000_000;
     private readonly HttpClient _http;
@@ -88,6 +88,7 @@ public sealed class B2CloudStore : ICloudStore
         Volatile.Write(ref _connections, connections);
         _uploads.Configure(connections);
         _uploadRequests.Configure(connections);
+        ConfigureDownloads(connections);
         _uploadLimit.Configure(uploadBytesPerSecond);
         _downloadLimit.Configure(downloadBytesPerSecond);
     }
@@ -225,8 +226,9 @@ public sealed class B2CloudStore : ICloudStore
             if (source.Length - source.Position < length)
                 throw new EndOfStreamException("The upload source is shorter than its declared length.");
             var start = source.Position;
-            return length > MultipartThreshold
-                ? await UploadLargeAsync(bucketId, key, source, start, length, sha1, modifiedUtc, progress, cancellationToken).ConfigureAwait(false)
+            return length >= MultipartThreshold
+                ? await UploadLargeAsync(bucketId, key, source, start, length, sha1, modifiedUtc, progress, cancellationToken,
+                    durableSource: staged is null).ConfigureAwait(false)
                 : await UploadSmallAsync(bucketId, key, source, start, length, sha1, modifiedUtc, progress, cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -256,7 +258,7 @@ public sealed class B2CloudStore : ICloudStore
                     session ??= await GetUploadSessionAsync(bucketId, null, token).ConfigureAwait(false);
                 }
                 long bytes = 0;
-                progress?.Report(new(0, length));
+                progress?.Report(new(0, length) { IsBaseline = true });
                 using var request = UploadRequest(session, source, sourceLock, start, length, sha1,
                     n => progress?.Report(new(Interlocked.Add(ref bytes, n), length)), token);
                 request.Headers.TryAddWithoutValidation("X-Bz-File-Name", EncodeName(key));
@@ -268,7 +270,11 @@ public sealed class B2CloudStore : ICloudStore
                     {
                         using var json = await ReadDocumentAsync(response, token).ConfigureAwait(false);
                         var file = ParseObject(json.RootElement);
-                        if (file.Size != length || !sha1.Equals(file.Sha1, StringComparison.OrdinalIgnoreCase))
+                        // ParseObject also normalizes legitimate restore/copy responses.
+                        // A direct upload must acknowledge its own operation explicitly.
+                        if (RequiredString(json.RootElement, "action") != "upload" || file.Key != key || file.Size != length ||
+                            !sha1.Equals(file.Sha1, StringComparison.OrdinalIgnoreCase) ||
+                            OptionalString(json.RootElement, "bucketId") is { } returnedBucket && returnedBucket != bucketId)
                             throw new InvalidDataException("Backblaze returned an upload checksum or length that does not match the source.");
                         source.Position = checked(start + length);
                         reusable = true;
@@ -294,191 +300,6 @@ public sealed class B2CloudStore : ICloudStore
             if (reusable && session is not null) pool.Add(session);
             _uploadRequests.Exit();
         }
-    }
-
-    private async Task<CloudObject> UploadLargeAsync(string bucketId, string key, Stream source, long start, long length,
-        string sha1, DateTimeOffset modifiedUtc, IProgress<TransferProgress>? progress, CancellationToken token)
-    {
-        var auth = Current;
-        if (length > MaxLargeFileSize) throw new ArgumentOutOfRangeException(nameof(length), "This file exceeds B2's 10 TB large-file limit.");
-        var partSize = Math.Min(Math.Max(Math.Max(auth.MinimumPartSize, auth.RecommendedPartSize), (length + 9_999) / 10_000), length / 2);
-        if (partSize > MaxPartSize)
-            throw new ArgumentOutOfRangeException(nameof(length), "This file exceeds the B2 multipart size limit.");
-        var parts = checked((int)((length + partSize - 1) / partSize));
-        var hashes = new string[parts];
-        string? fileId = null;
-        var finished = false;
-        using var sourceLock = new SemaphoreSlim(1, 1);
-        using var workersCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-        long transferred = 0;
-        try
-        {
-            var actualSha1 = await HashSegmentAsync(source, sourceLock, start, length, token).ConfigureAwait(false);
-            if (!actualSha1.Equals(sha1, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("The multipart upload source does not match its declared SHA1 checksum.");
-            using (var json = await ApiAsync("b2_start_large_file", new
-            {
-                bucketId, fileName = key, contentType = "b2/x-auto",
-                fileInfo = new Dictionary<string, string>
-                {
-                    ["src_last_modified_millis"] = modifiedUtc.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture),
-                    ["large_file_sha1"] = sha1.ToLowerInvariant()
-                }
-            }, token, retryNetwork: false).ConfigureAwait(false))
-                fileId = RequiredString(json.RootElement, "fileId");
-
-            var nextPart = -1;
-            var workers = Enumerable.Range(0, Math.Min(parts, Volatile.Read(ref _connections)))
-                .Select(async _ =>
-                {
-                    UploadSession? session = null;
-                    var entered = false;
-                    try
-                    {
-                        await _uploadRequests.EnterAsync(workersCts.Token).ConfigureAwait(false);
-                        entered = true;
-                        while (true)
-                        {
-                            var index = Interlocked.Increment(ref nextPart);
-                            if (index >= parts) return;
-                            var partStart = checked(start + index * partSize);
-                            var partLength = Math.Min(partSize, length - index * partSize);
-                            hashes[index] = await HashSegmentAsync(source, sourceLock, partStart, partLength, workersCts.Token).ConfigureAwait(false);
-                            for (var attempt = 0; ; attempt++)
-                            {
-                                session ??= await GetUploadSessionAsync(bucketId, fileId, workersCts.Token).ConfigureAwait(false);
-                                long sentThisAttempt = 0;
-                                using var request = UploadRequest(session, source, sourceLock, partStart, partLength, hashes[index],
-                                    n =>
-                                    {
-                                        Interlocked.Add(ref sentThisAttempt, n);
-                                        var total = Interlocked.Add(ref transferred, n);
-                                        progress?.Report(new(Math.Min(total, length), length));
-                                    }, workersCts.Token);
-                                request.Headers.TryAddWithoutValidation("X-Bz-Part-Number", (index + 1).ToString(CultureInfo.InvariantCulture));
-                                try
-                                {
-                                    using var response = await SendAsync(request, workersCts.Token).ConfigureAwait(false);
-                                    if (response.IsSuccessStatusCode)
-                                    {
-                                        using var json = await ReadDocumentAsync(response, workersCts.Token).ConfigureAwait(false);
-                                        if (RequiredString(json.RootElement, "contentSha1") != hashes[index] ||
-                                            LongValue(json.RootElement, "contentLength") != partLength ||
-                                            LongValue(json.RootElement, "partNumber") != index + 1)
-                                            throw new InvalidDataException("Backblaze returned an invalid multipart acknowledgment.");
-                                        break;
-                                    }
-                                    var error = await ReadErrorAsync(response, workersCts.Token).ConfigureAwait(false);
-                                    session = null;
-                                    if (!IsUploadRetry(response.StatusCode, error.Code) || attempt == Attempts - 1) throw error;
-                                    Interlocked.Add(ref transferred, -sentThisAttempt);
-                                    await BackoffAsync(response, attempt, workersCts.Token).ConfigureAwait(false);
-                                }
-                                catch (Exception ex) when ((ex is IOException and not B2RequestException || ex is HttpRequestException) && attempt < Attempts - 1)
-                                {
-                                    Interlocked.Add(ref transferred, -sentThisAttempt);
-                                    session = null;
-                                    await BackoffAsync(null, attempt, workersCts.Token).ConfigureAwait(false);
-                                }
-                            }
-                        }
-                    }
-                    catch { await workersCts.CancelAsync().ConfigureAwait(false); throw; }
-                    finally { if (entered) _uploadRequests.Exit(); }
-                }).ToArray();
-            await Task.WhenAll(workers).ConfigureAwait(false);
-            var file = await FinishAsync(fileId, hashes, token).ConfigureAwait(false);
-            if (file.Size != length || !sha1.Equals(file.Sha1, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("Backblaze returned a completed multipart file with unexpected metadata.");
-            finished = true;
-            source.Position = checked(start + length);
-            progress?.Report(new(length, length));
-            return file;
-        }
-        finally
-        {
-            if (fileId is not null && !finished)
-            {
-                // The original cancellation token must not prevent removal of unfinished charged parts.
-                using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                try { using var _ = await ApiAsync("b2_cancel_large_file", new { fileId }, cleanup.Token).ConfigureAwait(false); }
-                catch (B2RequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound) { }
-                catch { ReportDiagnostic("An unfinished multipart upload could not be cleaned up. Check B2 unfinished uploads when the connection is restored."); }
-            }
-        }
-    }
-
-    public async Task DownloadAsync(CloudObject file, Stream destination, long offset = 0, long? length = null,
-        IProgress<TransferProgress>? progress = null, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(file);
-        ArgumentNullException.ThrowIfNull(destination);
-        if (!destination.CanWrite) throw new ArgumentException("The download destination must be writable.", nameof(destination));
-        ValidateCapability("readFiles");
-        ValidatePrefix(file.Key);
-        if (file.Action != "upload") throw new ArgumentException("Only uploaded file versions can be downloaded.", nameof(file));
-        if (offset < 0 || offset > file.Size || length is < 0 || length > file.Size - offset)
-            throw new ArgumentOutOfRangeException(nameof(offset), "The requested range is outside this file.");
-        var count = length ?? file.Size - offset;
-        if (count == 0 && file.Size != 0) { progress?.Report(new(0, 0)); return; }
-        var full = offset == 0 && count == file.Size;
-        var destinationStart = destination.CanSeek ? destination.Position : 0;
-        for (var attempt = 0; attempt < Attempts; attempt++)
-        {
-            var auth = Current;
-            using var request = new HttpRequestMessage(HttpMethod.Get,
-                $"{auth.Account.DownloadUrl}/b2api/v4/b2_download_file_by_id?fileId={Uri.EscapeDataString(file.FileId)}");
-            request.Headers.TryAddWithoutValidation("Authorization", auth.Token);
-            if (!full) request.Headers.Range = new RangeHeaderValue(offset, checked(offset + count - 1));
-            long copied = 0;
-            try
-            {
-                using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
-                if (!response.IsSuccessStatusCode)
-                {
-                    var error = await ReadErrorAsync(response, cancellationToken).ConfigureAwait(false);
-                    if (IsExpired(error) && attempt < Attempts - 1)
-                    { await ReauthorizeAsync(auth, cancellationToken).ConfigureAwait(false); continue; }
-                    if (!IsTransient(response.StatusCode) || attempt == Attempts - 1) throw error;
-                    await BackoffAsync(response, attempt, cancellationToken).ConfigureAwait(false);
-                    continue;
-                }
-                ValidateDownloadResponse(response, file, offset, count, full);
-                var expectedSha1 = IsSha1(file.Sha1) ? file.Sha1 : Header(response, "X-Bz-Content-Sha1");
-                if (!IsSha1(expectedSha1)) expectedSha1 = Header(response, "X-Bz-Info-large_file_sha1");
-                if (full && !IsSha1(expectedSha1))
-                    ReportDiagnostic("This B2 file has no whole-file SHA1 metadata. Its download uses authenticated HTTPS and exact byte-length verification.");
-                using var hash = full ? IncrementalHash.CreateHash(HashAlgorithmName.SHA1) : null;
-                await using var input = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-                var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
-                try
-                {
-                    progress?.Report(new(0, count));
-                    while (copied < count)
-                    {
-                        var read = await ReadTransferAsync(input, buffer.AsMemory(0, (int)Math.Min(buffer.Length, count - copied)), cancellationToken).ConfigureAwait(false);
-                        if (read == 0) throw new EndOfStreamException("The download ended before its declared length.");
-                        hash?.AppendData(buffer, 0, read);
-                        await _downloadLimit.WaitAsync(read, cancellationToken).ConfigureAwait(false);
-                        await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-                        copied += read;
-                        progress?.Report(new(copied, count));
-                    }
-                    if (await ReadTransferAsync(input, buffer.AsMemory(0, 1), cancellationToken).ConfigureAwait(false) != 0)
-                        throw new InvalidDataException("The download exceeded its declared length.");
-                    if (full && IsSha1(expectedSha1) && !Convert.ToHexString(hash!.GetHashAndReset()).Equals(expectedSha1, StringComparison.OrdinalIgnoreCase))
-                        throw new InvalidDataException("The downloaded file failed SHA1 verification.");
-                    return;
-                }
-                finally { ArrayPool<byte>.Shared.Return(buffer); }
-            }
-            catch (Exception ex) when ((ex is IOException and not B2RequestException || ex is HttpRequestException) && attempt < Attempts - 1 && (copied == 0 || destination.CanSeek))
-            {
-                if (destination.CanSeek) destination.Position = destinationStart;
-                await BackoffAsync(null, attempt, cancellationToken).ConfigureAwait(false);
-            }
-        }
-        throw new IOException("The download could not complete after bounded retries.");
     }
 
     public async Task HideAsync(string bucketId, string key, CancellationToken cancellationToken = default)
@@ -637,7 +458,8 @@ public sealed class B2CloudStore : ICloudStore
         finally { _authorizeLock.Release(); }
     }
 
-    private async Task<JsonDocument> ApiAsync(string operation, object body, CancellationToken token, bool retryNetwork = true)
+    private async Task<JsonDocument> ApiAsync(string operation, object body, CancellationToken token,
+        bool retryNetwork = true, bool retryTransient = true)
     {
         // Serialize once; rebuilding HttpRequestMessage and content is essential for safe replay.
         var payload = JsonSerializer.SerializeToUtf8Bytes(body);
@@ -657,7 +479,7 @@ public sealed class B2CloudStore : ICloudStore
                 var error = await ReadErrorAsync(response, timeout.Token).ConfigureAwait(false);
                 if (IsExpired(error) && attempt < Attempts - 1)
                 { await ReauthorizeAsync(auth, token).ConfigureAwait(false); continue; }
-                if (!IsTransient(response.StatusCode) || attempt == Attempts - 1) throw error;
+                if (!IsTransient(response.StatusCode) || !retryTransient || attempt == Attempts - 1) throw error;
                 await BackoffAsync(response, attempt, token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (!token.IsCancellationRequested && retryNetwork && attempt < Attempts - 1)
