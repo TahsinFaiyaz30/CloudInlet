@@ -65,7 +65,8 @@ public static class NativePlaceholderSmokeTest
 
             await service.SetPinAsync(Path.GetDirectoryName(path)!, PinMode.AlwaysAvailable, cancellationToken);
 
-            var version2 = file with { FileId = "smoke-v2", Size = replacement.Length, ModifiedUtc = DateTimeOffset.UtcNow };
+            var version2 = file with { FileId = "smoke-v2", Size = replacement.Length,
+                Sha1 = Convert.ToHexString(SHA1.HashData(replacement)), ModifiedUtc = DateTimeOffset.UtcNow };
             await service.CreateOrUpdateAsync(path, version2, true, cancellationToken);
             Require(service.IsHydrated(path), "A changed pinned remote file must hydrate its new content.");
             read = await Task.Run(() => File.ReadAllBytes(path), cancellationToken);

@@ -224,6 +224,11 @@ public static class FolderAppearance
                 if (info.Size != 0 && (CfGetPlaceholderRangeInfo(handle, 1, 0, info.Size, out var range, 16, out var returned) != 0 ||
                     returned != 16 || range.Offset != 0 || range.Length < info.Size))
                     throw new IOException("Folder appearance cannot recall online-only metadata.");
+                // Do not let an icon lookup block on VALIDATION_REQUIRED user I/O. The
+                // same held no-recall handle must prove its bytes have been acknowledged
+                // or locally edited before any data access is requested.
+                if (info.Size != 0 && !CloudFiles.CloudFilesNative.HasAvailableCloudRanges(handle, info.Size))
+                    throw new IOException("Folder appearance cannot read metadata awaiting cloud validation.");
             }
             else if ((tag.Attributes & (0x1000u | 0x400000u)) != 0)
                 throw new IOException("Folder appearance cannot recall offline metadata.");

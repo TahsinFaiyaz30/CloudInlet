@@ -8,6 +8,9 @@ public static class TransferResources
     // Acquired after native downloads are registered as queued, before transport starts.
     // Sixteen 256KiB final-block buffers cost at most 4MiB across all connected roots.
     public static SemaphoreSlim NativeHydration { get; } = new(16);
+    // Synchronous file reads can hold Hashing while cldflt calls VALIDATE_DATA. Native
+    // validation must never wait on that gate; one shared worker avoids this lock cycle.
+    public static SemaphoreSlim NativeValidation { get; } = new(1);
 }
 
 public sealed record TransferLimits(int Uploads, int Downloads)
