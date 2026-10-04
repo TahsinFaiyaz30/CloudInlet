@@ -56,6 +56,8 @@ public static class KnownFolderBackup
         var initialPath = source;
         Directory.CreateDirectory(source);
         await VerifiedTreeCopy.CopyAsync(source, destination, ct);
+        await FolderAppearance.PreserveAsync(source, destination, ct);
+        await FolderAppearance.EnsureIconAsync(destination, FolderAppearance.GetKnownFolderIcon(name), ct);
         if (!GetPath(name).Equals(initialPath, StringComparison.OrdinalIgnoreCase))
             throw new IOException("Another application changed this system folder during backup. Original files and copies were retained.");
         SetPath(name, destination);
@@ -68,6 +70,7 @@ public static class KnownFolderBackup
             throw new IOException("This folder's Windows location was changed by another app. CloudBay will not overwrite that mapping.");
         // Reading the files hydrates online-only content before restoring the local folder.
         await VerifiedTreeCopy.CopyAsync(folder.DestinationPath, folder.OriginalPath, ct);
+        await FolderAppearance.PreserveAsync(folder.DestinationPath, folder.OriginalPath, ct);
         if (!GetPath(folder.Name).Equals(folder.DestinationPath, StringComparison.OrdinalIgnoreCase))
             throw new IOException("Another application changed this system folder during restore. Copies were retained.");
         SetPath(folder.Name, folder.OriginalPath);

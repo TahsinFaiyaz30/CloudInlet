@@ -14,6 +14,8 @@ public static class FolderIconProvider
     // ImageSource objects belong to their UI thread. Seven sizes and thirteen folder identities bound this cache.
     [ThreadStatic]
     private static Dictionary<(Guid Folder, int Pixels), ImageSource?>? _cache;
+    [ThreadStatic]
+    private static Dictionary<(string Path, int Index, int Pixels, DateTime Modified), ImageSource?>? _sourceCache;
 
     /// <summary>Call on the UI thread. Pixels is the physical image size; null permits a Fluent font icon fallback.</summary>
     public static ImageSource? GetIcon(string? folderName, int pixels = 48)
@@ -24,6 +26,41 @@ public static class FolderIconProvider
 
     /// <summary>The Windows stock folder icon for a user-selected backup folder.</summary>
     public static ImageSource? GetCustomFolderIcon(int pixels = 48) => Get(Guid.Empty, pixels);
+
+    /// <summary>Resident source customization first, then the corresponding Windows folder definition.</summary>
+    public static ImageSource? GetFolderIcon(string absolutePath, int pixels = 48, string? knownFolderName = null)
+    {
+        if (DispatcherQueue.GetForCurrentThread() is null) return null;
+        try
+        {
+            var location = FolderAppearance.GetIconResource(absolutePath);
+            if (location is not null)
+            {
+                var size = Math.Clamp(pixels, 16, 128);
+                var key = (location.Path, location.Index, size, File.GetLastWriteTimeUtc(location.Path));
+                var cache = _sourceCache ??= [];
+                if (!cache.TryGetValue(key, out var result))
+                {
+                    if (cache.Count >= 128) cache.Clear();
+                    result = Bitmap(ShellFolderIconReader.Read(location, size), size);
+                    cache[key] = result;
+                }
+                if (result is not null) return result;
+            }
+        }
+        catch (Exception error) when (error is COMException or Win32Exception or IOException or ArgumentException or UnauthorizedAccessException)
+        { }
+        return GetIcon(knownFolderName, pixels) ?? GetCustomFolderIcon(pixels);
+    }
+
+    private static ImageSource? Bitmap(byte[]? data, int pixels)
+    {
+        if (data is null) return null;
+        var bitmap = new WriteableBitmap(pixels, pixels);
+        using (var buffer = bitmap.PixelBuffer.AsStream()) buffer.Write(data);
+        bitmap.Invalidate();
+        return bitmap;
+    }
 
     private static ImageSource? Get(Guid id, int requestedPixels)
     {
@@ -70,6 +107,18 @@ internal static class ShellFolderIconReader
         if (pixels is < 1 or > 128) throw new ArgumentOutOfRangeException(nameof(pixels));
         var location = folderId is { } id ? GetKnownFolderIcon(id) : GetStockFolderIcon();
         if (location is not { } resource) return null;
+        return Read(new FolderAppearance.IconResource(resource.Path, resource.Index), pixels);
+    }
+
+    public static byte[]? Read(FolderAppearance.IconResource resource, int pixels)
+    {
+        if (pixels is < 1 or > 128) throw new ArgumentOutOfRangeException(nameof(pixels));
+        var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows).TrimEnd(Path.DirectorySeparatorChar);
+        if (!resource.Path.StartsWith(windows + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        {
+            using var extracted = FolderIconResourceReader.Create(resource, pixels);
+            return extracted is null ? null : RenderIcon(extracted.DangerousGetHandle(), pixels);
+        }
         IntPtr icon = IntPtr.Zero;
         try
         {
