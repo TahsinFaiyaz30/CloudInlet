@@ -39,6 +39,40 @@ public sealed class B2CopyTests
     }
 
     [TestMethod]
+    public async Task CopyCancelledBeforeRequestAdmissionCanRestartWithoutUnknownOutcome()
+    {
+        using var fixture = new Fixture(31);
+        using var store = await fixture.ConnectAsync();
+        // Hold the request budget independently of the file budget, as multipart
+        // workers do. This isolates cancellation before any creating HTTP call.
+        var gate = typeof(B2CloudStore).GetField("_uploadRequests",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(store)!;
+        var enter = gate.GetType().GetMethod("EnterAsync")!;
+        var exit = gate.GetType().GetMethod("Exit")!;
+        for (var i = 0; i < 4; i++) await (Task)enter.Invoke(gate, [CancellationToken.None])!;
+        try
+        {
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+            try
+            {
+                await store.CopyToAsync("destination", Destination, fixture.Source, OperationId, cancellation.Token);
+                Assert.Fail("A queued copy must observe cancellation.");
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+            Assert.AreEqual(1, fixture.SourceReads);
+            Assert.AreEqual(1, fixture.ReceiptListings);
+            Assert.AreEqual(0, fixture.Copies);
+            Assert.AreEqual(0, fixture.Journals.Length, "No creating call was admitted, so no uncertain receipt may block resume.");
+        }
+        finally { for (var i = 0; i < 4; i++) exit.Invoke(gate, null); }
+        using var restarted = await fixture.ConnectAsync();
+        var copied = await restarted.CopyToAsync("destination", Destination, fixture.Source, OperationId);
+        Assert.AreEqual(fixture.Source.Size, copied.Size);
+        Assert.AreEqual(1, fixture.Copies);
+        Assert.AreEqual(1, fixture.Versions.Count);
+    }
+
+    [TestMethod]
     public async Task LostCopySuccessResponseReconcilesReceiptWithoutCreatingAnotherVersion()
     {
         using var fixture = new Fixture(1_023) { LoseCopyResponse = true };
@@ -274,6 +308,63 @@ public sealed class B2CopyTests
         Assert.AreEqual(0, fixture.Journals.Length);
     }
 
+    [TestMethod]
+    public async Task PartialSmallUploadCancellationDoesNotLeaveAnUnconfirmableIntentAndCanResumeAfterRestart()
+    {
+        using var fixture = new Fixture(11);
+        using var cancellation = new CancellationTokenSource(); fixture.PartialUploadCancellation = cancellation;
+        var bytes = RandomNumberGenerator.GetBytes(128 * 1024 + 11);
+        var sha = Convert.ToHexString(SHA1.HashData(bytes));
+        using (var store = await fixture.ConnectAsync())
+        {
+            using var source = new MemoryStream(bytes);
+            try
+            {
+                await store.UploadAsync("destination", "CloudBay/cancelled", source, bytes.Length, sha,
+                    fixture.Source.ModifiedUtc, cancellationToken: cancellation.Token);
+                Assert.Fail("A cancelled partial request cannot complete.");
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        }
+        Assert.AreEqual(64 * 1024, fixture.PartialUploadBytes, "The first payload block must be sent before cancellation.");
+        Assert.AreEqual(0, fixture.Journals.Length, "An incomplete body cannot create a B2 version and must not leave a permanent unknown receipt.");
+        Assert.AreEqual(0, fixture.Versions.Count);
+        fixture.PartialUploadCancellation = null;
+        using var restarted = await fixture.ConnectAsync(); using var retry = new MemoryStream(bytes);
+        var uploaded = await restarted.UploadAsync("destination", "CloudBay/cancelled", retry, bytes.Length, sha, fixture.Source.ModifiedUtc);
+        Assert.AreEqual(bytes.Length, uploaded.Size);
+        Assert.AreEqual(1, fixture.Uploads);
+        Assert.AreEqual(1, fixture.Versions.Count);
+        Assert.AreEqual(0, fixture.ReceiptListings, "An incomplete cancelled attempt must resume directly, without waiting for a nonexistent receipt.");
+    }
+
+    [TestMethod]
+    public async Task FullySentSmallUploadCancellationRetainsReceiptAndResumesOriginalVersionAfterRestart()
+    {
+        using var fixture = new Fixture(11);
+        using var cancellation = new CancellationTokenSource(); fixture.CompletedUploadCancellation = cancellation;
+        var bytes = Encoding.UTF8.GetBytes("small bytes"); var sha = Convert.ToHexString(SHA1.HashData(bytes));
+        using (var store = await fixture.ConnectAsync())
+        {
+            using var source = new MemoryStream(bytes);
+            try
+            {
+                await store.UploadAsync("destination", "CloudBay/cancelled", source, bytes.Length, sha,
+                    fixture.Source.ModifiedUtc, cancellationToken: cancellation.Token);
+                Assert.Fail("A caller cancellation cannot acknowledge a fully sent request.");
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        }
+        Assert.AreEqual(1, fixture.Journals.Length);
+        Assert.AreEqual(1, fixture.Versions.Count);
+        fixture.CompletedUploadCancellation = null;
+        using var restarted = await fixture.ConnectAsync(); using var retry = new MemoryStream(bytes);
+        var original = await restarted.UploadAsync("destination", "CloudBay/cancelled", retry, bytes.Length, sha, fixture.Source.ModifiedUtc);
+        Assert.AreEqual(fixture.Versions.Single().Key, original.FileId);
+        Assert.AreEqual(1, fixture.Uploads, "A cancelled acknowledgment after commit must never create another version.");
+        Assert.AreEqual(0, fixture.Journals.Length);
+    }
+
     private sealed record Version(string Id, string Key, string Bucket, long Length, string Sha, Dictionary<string, string> Info);
     private sealed class Fixture(long length) : IDisposable
     {
@@ -286,6 +377,8 @@ public sealed class B2CopyTests
         public int Copies, Starts, Finishes, Uploads, UploadTargets, SourceReads, Verifications, ReceiptListings;
         public int VerificationFailureStatus;
         public CancellationTokenSource? Interrupt;
+        public CancellationTokenSource? PartialUploadCancellation, CompletedUploadCancellation;
+        public long PartialUploadBytes;
         public ConcurrentDictionary<string, Version> Versions { get; } = new();
         public ConcurrentQueue<int> CopiedParts { get; } = new();
         private Version? _unfinished;
@@ -316,6 +409,12 @@ public sealed class B2CopyTests
             });
             if (request.RequestUri.Host == "upload.invalid")
             {
+                if (PartialUploadCancellation is { } partialCancellation)
+                {
+                    using var interruptedBody = new PartialUploadSink(partialCancellation, count => PartialUploadBytes = count);
+                    await request.Content!.CopyToAsync(interruptedBody, token);
+                    Assert.Fail("Partial fixture cancellation must interrupt body serialization.");
+                }
                 var bytes = await request.Content!.ReadAsByteArrayAsync(token);
                 var info = new Dictionary<string, string>
                 {
@@ -327,6 +426,8 @@ public sealed class B2CopyTests
                     Uri.UnescapeDataString(request.Headers.GetValues("X-Bz-File-Name").Single()), "destination", bytes.Length,
                     Convert.ToHexString(SHA1.HashData(bytes)).ToLowerInvariant(), info);
                 Versions[version.Id] = version;
+                if (CompletedUploadCancellation is { } fullCancellation)
+                { fullCancellation.Cancel(); throw new OperationCanceledException(token); }
                 if (LoseUploadResponse) throw new HttpRequestException("Generated response lost after storing upload.");
                 if (UploadResponse503) return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
                     { Content = new StringContent("{\"code\":\"service_unavailable\"}") };
@@ -412,6 +513,17 @@ public sealed class B2CopyTests
     { Content = new StringContent(JsonSerializer.Serialize(value), Encoding.UTF8, "application/json") };
     private sealed class Handler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpMessageHandler
     { protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token) => send(request, token); }
+    private sealed class PartialUploadSink(CancellationTokenSource cancellation, Action<long> received) : MemoryStream
+    {
+        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken token = default)
+        {
+            await base.WriteAsync(buffer, token);
+            received(Length);
+            cancellation.Cancel();
+            // Return this successfully written block. SegmentContent publishes its sent
+            // counter before the next read observes the caller's cancelled token.
+        }
+    }
     private static async Task ExpectUnknownOutcomeAsync(Func<Task> operation)
     {
         try { await operation(); Assert.Fail("An unconfirmed creating request must not be silently replayed."); }

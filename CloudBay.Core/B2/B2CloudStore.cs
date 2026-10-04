@@ -338,6 +338,15 @@ public sealed partial class B2CloudStore : ICloudStore
                     if (!IsUploadRetry(response.StatusCode, error.Code) || attempt == Attempts - 1) { Forget(); throw error; }
                     await BackoffAsync(response, attempt, token).ConfigureAwait(false);
                 }
+                catch (OperationCanceledException)
+                {
+                    // A small file is committed only after its complete declared body.
+                    // Pausing an incomplete request should allow that file to start again;
+                    // a fully sent body still needs its receipt before any replay.
+                    if (bytes < length) { Persist(pending: false); Forget(); }
+                    else Persist(pending: true, durable: true);
+                    throw;
+                }
                 catch (Exception ex) when (ex is not UnknownTransferOutcomeException &&
                     (ex is IOException and not B2RequestException || ex is HttpRequestException))
                 {

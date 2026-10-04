@@ -83,18 +83,24 @@ public sealed partial class B2CloudStore
         if (source.Size < MaxPartSize)
         {
             if (entry.RequestPending) throw UnknownOutcome("copy");
-            Persist(entry with { RequestPending = true });
             var creatingAcknowledged = false;
             try
             {
                 await _uploadRequests.EnterAsync(cancellationToken).ConfigureAwait(false);
                 JsonDocument copied;
-                try { copied = await ApiAsync("b2_copy_file", new
+                try
+                {
+                    // Cancellation while waiting for a request slot cannot have
+                    // created a version. Persist uncertainty only after admission.
+                    cancellationToken.ThrowIfCancellationRequested();
+                    Persist(entry with { RequestPending = true });
+                    copied = await ApiAsync("b2_copy_file", new
                     {
                         sourceFileId = source.FileId, fileName = destinationKey, destinationBucketId,
                         metadataDirective = "REPLACE", contentType = OptionalString(sourceInfo.RootElement, "contentType") ?? "b2/x-auto",
                         fileInfo = metadata
-                    }, cancellationToken, retryNetwork: false, retryTransient: false).ConfigureAwait(false); }
+                    }, cancellationToken, retryNetwork: false, retryTransient: false).ConfigureAwait(false);
+                }
                 finally { _uploadRequests.Exit(); }
                 creatingAcknowledged = true;
                 using var ownedCopyResponse = copied;
