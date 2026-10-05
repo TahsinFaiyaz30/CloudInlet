@@ -71,7 +71,8 @@ public sealed partial class TrayWindow : Window
         {
             if (!_closed && AppWindow.IsVisible && !_menuOpen && !_suppressAutoResize) ResizeToContent();
         };
-        AppWindow.Title = "CloudBay activity";
+        AppWindow.Title = BuildInfo.ProductName + " activity";
+        TrayProductName.Text = BuildInfo.ProductName;
         AppWindow.IsShownInSwitchers = false;
         // The tray owns all of its chrome. Make WinUI host the XAML surface
         // across the full window before removing the presenter title bar.

@@ -1191,7 +1191,7 @@
                                     </settings:SettingsCard>
                                 </StackPanel>
                                 <StackPanel x:Name="AboutSettingsDetail" Spacing="4" Visibility="Collapsed">
-                                    <settings:SettingsExpander Header="CloudBay" Description="Version 2.0.0">
+                                    <settings:SettingsExpander x:Name="VersionCard" Header="CloudBay">
                                         <settings:SettingsExpander.HeaderIcon>
                                             <FontIcon Glyph="" />
                                         </settings:SettingsExpander.HeaderIcon>
@@ -1203,6 +1203,42 @@
                                             </settings:SettingsCard>
                                         </settings:SettingsExpander.Items>
                                     </settings:SettingsExpander>
+                                    <settings:SettingsCard Header="Updates" Description="Check for a new version of your installed package.">
+                                        <settings:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE895;" /></settings:SettingsCard.HeaderIcon>
+                                        <Button x:Name="CheckUpdateButton" Content="Check for updates" Click="CheckUpdate_Click" />
+                                    </settings:SettingsCard>
+                                    <Border Style="{StaticResource CloudBaySurfaceStyle}" Padding="24" Margin="0,12">
+                                        <StackPanel Spacing="12">
+                                            <TextBlock x:Name="UpdateStatusText" Text="Updates are unavailable in this preview." TextWrapping="Wrap" />
+                                            <TextBlock x:Name="UpdateTimingText" Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                                            <ProgressBar x:Name="UpdateDownloadProgress" Visibility="Collapsed" />
+                                            <InfoBar x:Name="UpdateNotice" IsOpen="False" IsClosable="False" />
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <Button x:Name="DownloadUpdateButton" Content="Download update" Click="DownloadUpdate_Click" Visibility="Collapsed" Style="{StaticResource AccentButtonStyle}" />
+                                                <Button x:Name="InstallUpdateButton" Content="Install and restart" Click="InstallUpdate_Click" Visibility="Collapsed" Style="{StaticResource AccentButtonStyle}" />
+                                                <Button x:Name="DeleteUpdateButton" Content="Delete downloaded updates" Click="DeleteUpdate_Click" />
+                                                <HyperlinkButton x:Name="UpdateReleaseLink" Content="Release notes" NavigateUri="https://github.com/TahsinFaiyaz30/CloudBay/releases" />
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Border>
+                                    <StackPanel x:Name="UpdatePreferencesPanel" Spacing="4">
+                                        <settings:SettingsCard Header="Check automatically" Description="Check GitHub Releases in the background.">
+                                            <ToggleSwitch x:Name="AutoCheckUpdateSwitch" Style="{StaticResource CloudBayToggleStyle}" AutomationProperties.Name="Automatically check for updates" Toggled="UpdatePreference_Changed" />
+                                        </settings:SettingsCard>
+                                        <settings:SettingsCard Header="Check interval" Description="Server limits can delay the next check.">
+                                            <ComboBox x:Name="UpdateIntervalBox" Width="180" AutomationProperties.Name="Update check interval" SelectionChanged="UpdateInterval_Changed">
+                                                <ComboBoxItem Content="Every hour" Tag="1" /><ComboBoxItem Content="Every 6 hours" Tag="6" />
+                                                <ComboBoxItem Content="Every 12 hours" Tag="12" /><ComboBoxItem Content="Every day" Tag="24" />
+                                                <ComboBoxItem Content="Every 3 days" Tag="72" /><ComboBoxItem Content="Every week" Tag="168" />
+                                            </ComboBox>
+                                        </settings:SettingsCard>
+                                        <settings:SettingsCard x:Name="AutoDownloadUpdateCard" Header="Download automatically" Description="Download and verify a matching update when available.">
+                                            <ToggleSwitch x:Name="AutoDownloadUpdateSwitch" Style="{StaticResource CloudBayToggleStyle}" AutomationProperties.Name="Automatically download updates" Toggled="UpdatePreference_Changed" />
+                                        </settings:SettingsCard>
+                                        <settings:SettingsCard x:Name="AutoInstallUpdateCard" Header="Install automatically" Description="Close CloudBay, install silently, then resume with your current settings.">
+                                            <ToggleSwitch x:Name="AutoInstallUpdateSwitch" Style="{StaticResource CloudBayToggleStyle}" AutomationProperties.Name="Automatically install updates" Toggled="UpdatePreference_Changed" />
+                                        </settings:SettingsCard>
+                                    </StackPanel>
                                 </StackPanel>
                             </StackPanel>
                         </StackPanel>

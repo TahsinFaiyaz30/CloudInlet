@@ -84,11 +84,11 @@ public sealed partial class ClientController : IAsyncDisposable
 
     public async Task StartAsync()
     {
-        if (!Settings.IsConfigured) return;
         await _operations.WaitAsync(_lifetime.Token);
         try
         {
-            if (!Settings.IsConfigured || _disconnecting) return;
+            if (_disconnecting) return;
+            if (!Settings.IsConfigured) { await ReadStartupPreferenceAsync(); return; }
             if (_engine is not null)
             {
                 foreach (var folder in Settings.CustomBackups.Where(folder => !_customRoots.ContainsKey(folder.Name)))
@@ -100,8 +100,8 @@ public sealed partial class ClientController : IAsyncDisposable
             }
             var credentials = _storage.LoadCredentials();
             if (credentials is null) throw new InvalidDataException("Enter your B2 application key to reconnect this account.");
+            await ReadStartupPreferenceAsync();
             await OpenConnectionAsync(credentials, Settings, _lifetime.Token);
-            ConfigureStartup(Settings.StartAtSignIn);
         }
         catch (Exception error) { await CloseConnectionAsync(); SetStatus(new(ClientState.Attention, error.Message)); }
         finally { _operations.Release(); }
@@ -161,7 +161,6 @@ public sealed partial class ClientController : IAsyncDisposable
             await OpenConnectionAsync(credentials, settings, cancellationToken);
             _storage.SaveCredentials(credentials);
             _storage.SaveSettings(Settings);
-            ConfigureStartup(Settings.StartAtSignIn);
             AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Information, "", "Connected to Backblaze B2"));
         }
         catch (Exception error)
@@ -258,7 +257,7 @@ public sealed partial class ClientController : IAsyncDisposable
                 throw new IOException("Use account setup to change the connection or sync folder.");
             if (!Settings.Backups.SequenceEqual(settings.Backups) || !Settings.CustomBackups.SequenceEqual(settings.CustomBackups))
                 throw new IOException("Folder backup changed while these settings were open. Reload settings and use folder backup controls to change those folders.");
-            SavePreferenceUpdate(new()
+            await SavePreferenceUpdateAsync(new()
             {
                 StartAtSignIn = settings.StartAtSignIn, FilesOnDemand = settings.FilesOnDemand,
                 PauseOnMetered = settings.PauseOnMetered, PauseOnBatterySaver = settings.PauseOnBatterySaver,
@@ -287,12 +286,12 @@ public sealed partial class ClientController : IAsyncDisposable
         try
         {
             operation.Token.ThrowIfCancellationRequested();
-            return SavePreferenceUpdate(update);
+            return await SavePreferenceUpdateAsync(update);
         }
         finally { _operations.Release(); }
     }
 
-    private AppSettings SavePreferenceUpdate(PreferenceUpdate update)
+    private async Task<AppSettings> SavePreferenceUpdateAsync(PreferenceUpdate update)
     {
         var previous = Settings;
         var settings = previous with
@@ -326,25 +325,37 @@ public sealed partial class ClientController : IAsyncDisposable
         var startupChanged = previous.StartAtSignIn != settings.StartAtSignIn;
         if (!transferChanged && !syncChanged && !startupChanged && previous.Theme == settings.Theme) return previous;
 
-        if (startupChanged && _manageStartup)
+        if (startupChanged && _manageStartup && UpdateInstallation.IsPackaged)
+        {
+            var startup = await global::Windows.ApplicationModel.StartupTask.GetAsync("CloudBayStartup");
+            var wasEnabled = startup.State is global::Windows.ApplicationModel.StartupTaskState.Enabled or global::Windows.ApplicationModel.StartupTaskState.EnabledByPolicy;
+            await ConfigureStartupAsync(settings.StartAtSignIn, userRequested: true);
+            try { _storage.SaveSettings(settings); }
+            catch
+            {
+                await ConfigureStartupAsync(wasEnabled);
+                throw;
+            }
+        }
+        else if (startupChanged && _manageStartup)
         {
             // Restore the actual registry value, including its type, if the durable settings write fails.
             // Recreating it from the old preference could overwrite a startup entry changed outside the app.
             using var key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
-            var existed = key.GetValueNames().Contains("CloudBay", StringComparer.OrdinalIgnoreCase);
-            var value = existed ? key.GetValue("CloudBay", null, RegistryValueOptions.DoNotExpandEnvironmentNames) : null;
-            var kind = existed ? key.GetValueKind("CloudBay") : RegistryValueKind.String;
+            var existed = key.GetValueNames().Contains(BuildInfo.StartupRegistryName, StringComparer.OrdinalIgnoreCase);
+            var value = existed ? key.GetValue(BuildInfo.StartupRegistryName, null, RegistryValueOptions.DoNotExpandEnvironmentNames) : null;
+            var kind = existed ? key.GetValueKind(BuildInfo.StartupRegistryName) : RegistryValueKind.String;
             try
             {
-                ConfigureStartup(settings.StartAtSignIn);
+                await ConfigureStartupAsync(settings.StartAtSignIn);
                 _storage.SaveSettings(settings);
             }
             catch (Exception error)
             {
                 try
                 {
-                    if (existed) key.SetValue("CloudBay", value!, kind);
-                    else key.DeleteValue("CloudBay", throwOnMissingValue: false);
+                    if (existed) key.SetValue(BuildInfo.StartupRegistryName, value!, kind);
+                    else key.DeleteValue(BuildInfo.StartupRegistryName, throwOnMissingValue: false);
                 }
                 catch (Exception rollback)
                 {
@@ -562,7 +573,7 @@ public sealed partial class ClientController : IAsyncDisposable
             _storage.ClearCredentials();
             Settings = Settings with { KeyId = "", AccountId = "", BucketId = "", BucketName = "", Backups = [], CustomBackups = [] };
             _storage.SaveSettings(Settings);
-            ConfigureStartup(false);
+            await ConfigureStartupAsync(false);
             SetStatus(new(ClientState.NotConnected, "Account disconnected. Local and B2 files were retained."));
             AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Information, "", "Disconnected the account after downloading cloud files and restoring system folders."));
         }
@@ -636,9 +647,28 @@ public sealed partial class ClientController : IAsyncDisposable
     }
     private void EnsureConnected()
     { if (_cloud is null || _placeholders is null) throw new IOException("Connect your B2 account first."); }
-    private void ConfigureStartup(bool enabled)
+    private Task ConfigureStartupAsync(bool enabled, bool userRequested = false)
     {
-        if (_manageStartup) SystemIntegration.ConfigureStartup(enabled);
+        return _manageStartup ? SystemIntegration.ConfigureStartupAsync(enabled, userRequested) : Task.CompletedTask;
+    }
+
+    private async Task ReadStartupPreferenceAsync()
+    {
+        if (!_manageStartup) return;
+        try
+        {
+            // The installer, Task Manager, or Windows Settings may have changed
+            // this choice while CloudBay was closed. Startup reads that choice;
+            // only an explicit preference change writes it back to Windows.
+            var enabled = await SystemIntegration.IsStartupEnabledAsync();
+            if (Settings.StartAtSignIn == enabled) return;
+            var settings = Settings with { StartAtSignIn = enabled };
+            if (_settingsRecoveryError is null) _storage.SaveSettings(settings);
+            Settings = settings;
+            Changed?.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Runtime.InteropServices.COMException)
+        { _storage.Log(new(DateTimeOffset.UtcNow, ActivityKind.Error, "", "Windows startup could not be read: " + error.Message)); }
     }
 
     private void EnsureSettingsHealthy()

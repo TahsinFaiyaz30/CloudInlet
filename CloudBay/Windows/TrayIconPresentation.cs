@@ -56,7 +56,7 @@ internal static class TrayIconPresentation
 
     internal static string Tooltip(string state)
     {
-        var tip = "CloudBay – " + state.Replace('\r', ' ').Replace('\n', ' ');
+        var tip = BuildInfo.ProductName + " – " + state.Replace('\r', ' ').Replace('\n', ' ');
         var length = Math.Min(127, tip.Length);
         if (length < tip.Length && length > 0 && char.IsHighSurrogate(tip[length - 1])) length--;
         return tip[..length];

@@ -1,5 +1,6 @@
 using CloudBay.Application;
 using CloudBay.Core;
+using CloudBay.Core.Updates;
 using Microsoft.UI.Xaml;
 using CloudBay.Views;
 using CloudBay.Windows;
@@ -16,6 +17,7 @@ public partial class App : Microsoft.UI.Xaml.Application
 {
     public static MainWindow? MainWindow { get; private set; }
     private ClientController? _controller;
+    private UpdateCoordinator? _updates;
     private TrayWindow? _trayWindow;
     private TrayContextMenuWindow? _trayContextMenu;
     private TrayIconActions? _trayActions;
@@ -68,6 +70,36 @@ public partial class App : Microsoft.UI.Xaml.Application
         _isUiSmoke = isSmoke;
         _isUiLive = isLive;
         _smokeTheme = smokeTheme;
+        if (commandLine.Contains("--store-runtime-smoke"))
+        {
+            var directory = commandLine.FirstOrDefault(argument => argument.StartsWith("--validation-output=", StringComparison.Ordinal))?[20..]
+                ?? Path.Combine(Environment.CurrentDirectory, "artifacts", "store-runtime-smoke");
+            Directory.CreateDirectory(directory);
+            try
+            {
+                if (!UpdateInstallation.IsPackaged || UpdateInstallation.Load().Identity.InstallerKind != UpdateInstallerKind.Store)
+                    throw new InvalidOperationException("The Store test must run with Windows package identity.");
+                var package = global::Windows.ApplicationModel.Package.Current;
+                var startup = await global::Windows.ApplicationModel.StartupTask.GetAsync("CloudBayStartup");
+                var installed = Path.TrimEndingDirectorySeparator(Path.GetFullPath(package.InstalledLocation.Path));
+                if (!installed.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory)), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("The Windows package location does not match the executing application.");
+                await File.WriteAllTextAsync(Path.Combine(directory, "complete.json"), JsonSerializer.Serialize(new
+                {
+                    version = BuildInfo.Version, packageName = package.Id.Name, packageFamilyName = package.Id.FamilyName,
+                    installerKind = "Store", startupTaskId = startup.TaskId, startupState = startup.State.ToString(),
+                    activation = Microsoft.Windows.AppLifecycle.AppInstance.GetCurrent().GetActivatedEventArgs().Kind.ToString(),
+                    completedUtc = DateTimeOffset.UtcNow
+                }));
+                Environment.ExitCode = 0;
+            }
+            catch (Exception error)
+            {
+                Environment.ExitCode = 1;
+                await File.WriteAllTextAsync(Path.Combine(directory, "failure.txt"), error.ToString());
+            }
+            Exit(); return;
+        }
         if (isSmoke && commandLine.Contains("--tray-focus-smoke"))
         {
             try
@@ -113,7 +145,17 @@ public partial class App : Microsoft.UI.Xaml.Application
             Exit();
             return;
         }
-        var isolationSuffix = isSmoke ? ".UiSmoke." + smokeTheme : isLive ? ".UiLive" : "";
+        if (!(isSmoke || isLive))
+        {
+            try
+            {
+                if (WindowsUpdateInstaller.IsInstallationInProgress(Path.Combine(BuildInfo.DefaultDataDirectory, "Updates")))
+                { Exit(); return; }
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            { /* An unavailable update cache must not prevent normal backup startup. */ }
+        }
+        var isolationSuffix = isSmoke ? ".UiSmoke." + smokeTheme : isLive ? ".UiLive" : BuildInfo.PipeSuffix;
         var sid = WindowsIdentity.GetCurrent().User?.Value ?? Environment.UserName;
         _pipeName = "CloudBay.Client." + sid + isolationSuffix;
         if (commandLine.Contains("--shutdown"))
@@ -136,6 +178,22 @@ public partial class App : Microsoft.UI.Xaml.Application
             _controller = new ClientController(isolatedStorage, manageStartup: !(isSmoke || isLive));
             _startupStage = "Create main window";
             MainWindow = new MainWindow(_controller);
+            if (!(isSmoke || isLive))
+            {
+                try
+                {
+                    var installation = UpdateInstallation.Load();
+                    var updateDirectory = Path.Combine(BuildInfo.DefaultDataDirectory, "Updates");
+                    var installer = installation.CanInstall ? new WindowsUpdateInstaller(installation, updateDirectory,
+                        ReadRestartPreferenceAsync,
+                        () => MainWindow.DispatcherQueue.TryEnqueue(() => _ = QuitAsync())) : null;
+                    _updates = new UpdateCoordinator(installation.Identity, updateDirectory, installer);
+                    MainWindow.AttachUpdates(_updates, installation);
+                    _ = StartUpdatesAsync();
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException)
+                { MainWindow.ShowUpdateInitializationError(error.Message); }
+            }
             _startupStage = "Create tray window";
             _trayWindow = new TrayWindow(_controller, () => { MainWindow.ShowSettings(); MainWindow.ShowWindow(); }, () => _ = QuitAsync());
             _startupStage = "Register notification icon";
@@ -156,7 +214,10 @@ public partial class App : Microsoft.UI.Xaml.Application
             _trayIcon.Update(_controller.Snapshot);
             _controller.Changed += Controller_Changed;
             _ = ListenForActivationAsync();
-            if (!commandLine.Contains("--background") || !_controller.Settings.IsConfigured) MainWindow.ShowWindow();
+            var startupActivation = UpdateInstallation.IsPackaged &&
+                Microsoft.Windows.AppLifecycle.AppInstance.GetCurrent().GetActivatedEventArgs().Kind ==
+                Microsoft.Windows.AppLifecycle.ExtendedActivationKind.StartupTask;
+            if (!(commandLine.Contains("--background") || startupActivation) || !_controller.Settings.IsConfigured) MainWindow.ShowWindow();
             _startupStage = "Start client controller";
             var clientStartup = _controller.StartAsync();
             if (isLive)
@@ -190,11 +251,15 @@ public partial class App : Microsoft.UI.Xaml.Application
             File.Delete(failurePath);
             try
             {
-                if (!commandLine.Contains("--ui-smoke-tray")) await MainWindow.RunUiSmokeAsync(output);
-                await _trayWindow.RunUiSmokeAsync(output);
-                var menu = GetTrayContextMenu();
-                await menu.RunUiValidationAsync(output);
-                await _trayWindow.RunQuickSettingsAlignmentValidationAsync(menu, output);
+                if (commandLine.Contains("--ui-smoke-updates")) await MainWindow.RunUpdateOnlyUiValidationAsync(output);
+                else
+                {
+                    if (!commandLine.Contains("--ui-smoke-tray")) await MainWindow.RunUiSmokeAsync(output);
+                    await _trayWindow.RunUiSmokeAsync(output);
+                    var menu = GetTrayContextMenu();
+                    await menu.RunUiValidationAsync(output);
+                    await _trayWindow.RunQuickSettingsAlignmentValidationAsync(menu, output);
+                }
                 await File.WriteAllTextAsync(completionPath, $"{smokeTheme} {(commandLine.Contains("--ui-smoke-tray") ? "tray" : "UI")} capture completed");
             }
             catch (Exception error)
@@ -209,6 +274,7 @@ public partial class App : Microsoft.UI.Xaml.Application
     private static string LiveStateDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "CloudBay", "UiLive", "Client");
     private static string UiSmokeOutput => Path.Combine(Environment.CurrentDirectory, "artifacts",
+        Environment.GetCommandLineArgs().Contains("--ui-smoke-updates") ? "ui-smoke-updates" :
         Environment.GetCommandLineArgs().Contains("--ui-smoke-tray") ? "ui-smoke-tray" : "ui-smoke");
 
     private async Task WriteLiveReadinessAsync()
@@ -404,10 +470,39 @@ public partial class App : Microsoft.UI.Xaml.Application
         if (_controller is not null) _controller.Changed -= Controller_Changed;
         _trayIcon?.Dispose();
         _trayContextMenu?.Close();
+        if (_updates is not null) await _updates.DisposeAsync();
         if (_controller is not null) await _controller.DisposeAsync();
         _trayWindow?.Close();
         if (MainWindow is not null) { MainWindow.AllowClose = true; MainWindow.Close(); }
         _singleInstance?.Dispose();
         Exit();
+    }
+
+    private async Task StartUpdatesAsync()
+    {
+        try
+        {
+            await _updates!.InitializeAsync(_lifetime.Token);
+            try
+            {
+                var failure = await Task.Run(() => WindowsUpdateInstaller.ReadFailureAndPruneHosts(
+                    Path.Combine(BuildInfo.DefaultDataDirectory, "Updates")), _lifetime.Token);
+                if (failure is not null) MainWindow?.ShowUpdateInitializationError(failure);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
+            { MainWindow?.ShowUpdateInitializationError("Update maintenance could not finish: " + error.Message); }
+            if (!_exiting) _updates.Start();
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidOperationException)
+        { MainWindow?.ShowUpdateInitializationError(error.Message); }
+    }
+
+    private Task<bool> ReadRestartPreferenceAsync()
+    {
+        var result = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (MainWindow is null || !MainWindow.DispatcherQueue.TryEnqueue(() => result.TrySetResult(!MainWindow.AppWindow.IsVisible)))
+            result.TrySetException(new IOException("The application is closing. Try installing the update after restarting CloudBay."));
+        return result.Task;
     }
 }

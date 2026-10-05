@@ -1,7 +1,9 @@
-param([string]$Version = '2.0.5')
+param([string]$Version)
 $ErrorActionPreference = 'Stop'
 $repository = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-if ($Version -notmatch '^\d+\.\d+\.\d+([-.][a-zA-Z0-9.]+)?$') { throw 'Invalid release version.' }
+$versionInfo = & (Join-Path $PSScriptRoot 'get-release-version.ps1')
+if (!$Version) { $Version = $versionInfo.version }
+if ($Version -cne $versionInfo.version) { throw 'Release version must match version.json.' }
 $releaseRoot = [IO.Path]::GetFullPath((Join-Path $repository 'artifacts\release'))
 
 function Assert-ReleasePath([string]$Path) {
@@ -52,6 +54,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Release tests failed.' }
     dotnet publish CloudBay\CloudBay.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:PublishTrimmed=false -p:Version=$Version -o $appFolder -v:minimal
     if ($LASTEXITCODE -ne 0) { throw 'Self-contained publish failed.' }
+    [ordered]@{ schemaVersion = 1; version = $Version; buildFlavor = 'Release'; installerKind = 'Portable'; architecture = 'x64'; sourceRevision = $versionInfo.sourceRevision } |
+        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $appFolder 'distribution.json') -Encoding utf8NoBOM
     & (Join-Path $PSScriptRoot 'copy-release-notices.ps1') -AppFolder $appFolder -AssetsPath (Join-Path $repository 'CloudBay/obj/project.assets.json')
     Copy-Item -LiteralPath (Join-Path $repository 'packaging\Install.ps1') -Destination $package -Force
     Copy-Item -LiteralPath (Join-Path $repository 'packaging\Uninstall.ps1') -Destination $package -Force

@@ -16,7 +16,7 @@ public sealed class ClientStorage
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     public ClientStorage(string? path = null)
     {
-        DirectoryPath = path ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CloudBay", "Client");
+        DirectoryPath = path ?? BuildInfo.DefaultDataDirectory;
         Directory.CreateDirectory(DirectoryPath);
         if (File.Exists(DiagnosticsPath))
         {

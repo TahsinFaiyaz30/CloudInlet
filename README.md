@@ -1,4 +1,4 @@
-# CloudBay 2
+# CloudBay 1.0.0
 
 CloudBay is a native Windows backup and sync client for **Backblaze B2**. It runs in the background, uses **WinUI 3 Mica Alt**, and integrates with File Explorer through the Windows Cloud Files API. Mountain Duck is not required.
 
@@ -20,6 +20,7 @@ The previous mounted-drive migration helper is preserved on the **`legacy` branc
 - Visual exclusions: browse for files or folders, choose file types, match names, or assemble advanced path patterns from named parts. Rules can apply to all backups, one backup, or a specific folder, and can be edited, disabled, or removed.
 - Optional pause on metered connections or Battery Saver, sign-in startup, and Windows light/dark/system themes.
 - Application keys encrypted with current-user Windows DPAPI. Account disconnect downloads and converts cloud files into normal local files before removing provider registrations.
+- GitHub updates retain the installed Debug/Release flavor and EXE/MSI installer. Settings → About CloudBay offers manual checks, an automatic check interval, optional automatic download, and optional silent installation. Microsoft Store packages use Store updates.
 
 ## Run
 
@@ -82,7 +83,7 @@ dotnet test CloudBay.Tests\CloudBay.Tests.csproj -c Release --no-build -v:minima
 .\scripts\build-release.ps1
 ```
 
-The release script creates `artifacts\release\CloudBay-2.0.5-win-x64.zip`, an extracted package, and its SHA256 checksum. `CloudBay.exe --ui-smoke` captures the UI into `artifacts\ui-smoke` using fresh processes for both themes, isolated storage, and presentation fixtures for all seven client states. It checks focused Settings routes, retained drafts, keyboard focus, activity scrolling, provider discovery, and tray action reachability. These fixtures do not connect to a provider or modify the controller's account. The [live validation CLI](tools/CloudBay.Validation/README.md) uses a separately provisioned bucket-restricted key and a generated test prefix; it never redirects real Windows personal folders.
+The central product version is in `version.json`. The release script creates `artifacts\release\CloudBay-1.0.0-win-x64.zip`, an extracted portable package, and its SHA256 checksum. `CloudBay.exe --ui-smoke` captures the UI into `artifacts\ui-smoke` using fresh processes for both themes, isolated storage, and presentation fixtures for all seven client states. It checks focused Settings routes, retained drafts, keyboard focus, activity scrolling, provider discovery, and tray action reachability. These fixtures do not connect to a provider or modify the controller's account. The [live validation CLI](tools/CloudBay.Validation/README.md) uses a separately provisioned bucket-restricted key and a generated test prefix; it never redirects real Windows personal folders.
 
 See [architecture and primary documentation](docs/ARCHITECTURE.md), [Windows 11 interface design](docs/UI-DESIGN.md), and [verified release scope](docs/VALIDATION.md). Public distribution needs the publisher's code-signing certificate; this local release is unsigned.
 

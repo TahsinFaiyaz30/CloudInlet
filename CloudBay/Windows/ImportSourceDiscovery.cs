@@ -105,7 +105,7 @@ public static class ImportSourceDiscovery
     }
 
     private static bool IsCloudBay(ImportSourceCandidate candidate) => candidate.ProviderId == CloudBayProviderId ||
-        candidate.Id.StartsWith("CloudBay!", StringComparison.OrdinalIgnoreCase) ||
+        (candidate.Id.StartsWith("CloudBay!", StringComparison.OrdinalIgnoreCase) || candidate.Id.StartsWith("CloudBay.Debug!", StringComparison.OrdinalIgnoreCase)) ||
         candidate.ProviderName.Equals("CloudBay", StringComparison.OrdinalIgnoreCase);
 
     private static string? NormalizeContext(string? context)

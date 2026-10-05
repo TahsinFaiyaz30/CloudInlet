@@ -58,7 +58,7 @@ public sealed partial class TrayContextMenuWindow : Window
         // stroke remain theme resources, including the high-contrast fallback.
         MenuPresenter.SystemBackdrop = null;
         ExtendsContentIntoTitleBar = true;
-        AppWindow.Title = "CloudBay tray menu";
+        AppWindow.Title = CloudBay.Core.BuildInfo.ProductName + " tray menu";
         AppWindow.IsShownInSwitchers = false;
         if (AppWindow.Presenter is OverlappedPresenter presenter)
         {

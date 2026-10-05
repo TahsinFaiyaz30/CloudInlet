@@ -112,7 +112,9 @@ public sealed partial class MainWindow : Window
         RootGrid.DataContext = _viewModel;
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
-        AppWindow.Title = "CloudBay";
+        AppWindow.Title = BuildInfo.ProductName;
+        AppTitleBar.Title = BuildInfo.ProductName;
+        VersionCard.Description = $"Version {BuildInfo.Version} · {BuildInfo.Flavor}";
         var workArea = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Nearest).WorkArea;
         var dpiScale = GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this)) / 96d;
         if (dpiScale <= 0) dpiScale = 1;
@@ -143,10 +145,12 @@ public sealed partial class MainWindow : Window
             _initialNavigationReady.TrySetCanceled();
             _controller.Changed -= Controller_Changed;
             _uiSettings.TextScaleFactorChanged -= TextScaleFactor_Changed;
+            if (_updates is not null) _updates.Changed -= Updates_Changed;
         };
         CreateBackupRows();
         LoadSettings();
         Refresh();
+        RefreshUpdates();
         if (Navigation.SelectedItem is NavigationViewItem { Tag: "backup" }) RefreshBackups(refreshMetadata: true);
         _controller.Changed += Controller_Changed;
         Navigation.Loaded += Navigation_Loaded;
@@ -1900,8 +1904,8 @@ public sealed partial class MainWindow : Window
             }
             finally { earlyWindow.AllowClose = true; earlyWindow.Close(); }
         }
-        var title = FindDescendant<TextBlock>(AppTitleBar, item => item.Text == "CloudBay");
-        if (AppTitleBar.Title != "CloudBay" || title is null || title.ActualWidth <= 0 || title.ActualHeight <= 0)
+        var title = FindDescendant<TextBlock>(AppTitleBar, item => item.Text == BuildInfo.ProductName);
+        if (AppTitleBar.Title != BuildInfo.ProductName || title is null || title.ActualWidth <= 0 || title.ActualHeight <= 0)
             throw new InvalidOperationException("The native title bar brand must be visible and laid out.");
         await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"),
             $"native-title: title={title.Text}, bounds={title.ActualWidth:0.##}x{title.ActualHeight:0.##}; native Mica/compositor window frame is outside RenderTargetBitmap{Environment.NewLine}");
@@ -1965,6 +1969,8 @@ public sealed partial class MainWindow : Window
         foreach (var theme in themes)
         {
             var suffix = theme == ElementTheme.Light ? "-light" : "";
+            SetPresentation(ClientPreview.Connected(), theme);
+            await RunUpdateUiValidationAsync(outputDirectory, suffix);
             var initialHistory = ClientPreview.ActivityActions();
             SetPresentation(initialHistory, theme);
             for (var round = 0; round < 4; round++)

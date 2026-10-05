@@ -115,7 +115,7 @@
             </Grid.ColumnDefinitions>
             <Image Source="/Assets/CloudBay-32.png" Width="32" Height="32" />
             <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
-                <TextBlock Text="CloudBay" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <TextBlock x:Name="TrayProductName" Text="CloudBay" Style="{StaticResource BodyStrongTextBlockStyle}" />
                 <TextBlock
                     x:Name="TrayBucket"
                     Text="{Binding BucketLabel}"

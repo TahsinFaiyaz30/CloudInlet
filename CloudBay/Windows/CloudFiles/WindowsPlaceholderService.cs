@@ -106,10 +106,10 @@ public sealed class WindowsPlaceholderService : IPlaceholderService
             {
                 Id = id,
                 Path = await StorageFolder.GetFolderFromPathAsync(root),
-                DisplayNameResource = "CloudBay – Backblaze B2",
+                DisplayNameResource = BuildInfo.ProductName + " – Backblaze B2",
                 IconResource = Path.Combine(AppContext.BaseDirectory, "Assets", "CloudBay.ico") + ",0",
                 ProviderId = ProviderId,
-                Version = "2.0.0",
+                Version = BuildInfo.Version,
                 HydrationPolicy = StorageProviderHydrationPolicy.Full,
                 HydrationPolicyModifier = StorageProviderHydrationPolicyModifier.AutoDehydrationAllowed |
                     StorageProviderHydrationPolicyModifier.ValidationRequired,
@@ -1141,7 +1141,7 @@ public sealed class WindowsPlaceholderService : IPlaceholderService
     {
         using var identity = WindowsIdentity.GetCurrent();
         var sid = identity.User?.Value ?? throw new IOException("The current Windows user could not be identified.");
-        return "CloudBay!" + sid + "!" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(account)))[..24];
+        return "CloudBay" + BuildInfo.PipeSuffix + "!" + sid + "!" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(account)))[..24];
     }
 
     private static void ValidateAncestorLinks(string path)

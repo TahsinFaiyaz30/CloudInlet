@@ -1,4 +1,4 @@
-# CloudBay 2 architecture and acceptance criteria
+# CloudBay architecture and acceptance criteria
 
 CloudBay is a Windows desktop sync provider for Backblaze B2. The `legacy` branch preserves the mounted-drive folder migration application at `03656fb`. Main contains the new application, with independent cloud transport, reconciliation, Windows integration, and UI layers.
 
