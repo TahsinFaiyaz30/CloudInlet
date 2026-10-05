@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Threading.Channels;
+using CloudBay.Core.Transfers;
 
 namespace CloudBay.Core.Sync;
 
@@ -65,6 +66,8 @@ public sealed class SyncEngine : IAsyncDisposable
         Wake();
     }
     public bool IsPaused => _paused;
+    /// <summary>Read after QuiesceAsync when reviewing removal of verified local copies.</summary>
+    public IReadOnlyDictionary<string, SyncEntry> ReadVerifiedEntries() => _manifest.ReadAll();
     /// <summary>Refresh measured activity without starting a scan or transfer.</summary>
     public void RefreshTransferStatus()
     {
@@ -573,25 +576,64 @@ public sealed class SyncEngine : IAsyncDisposable
         });
         using var pipeline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var token = pipeline.Token;
-        async Task ProduceAsync()
+        // Keep bounded, writer-denying prepared handles ready while the network is busy.
+        // The shared hashing gate still limits disk work independently of upload slots.
+        var ready = Channel.CreateBounded<PreparedLocal>(new BoundedChannelOptions(workers)
+        { FullMode = BoundedChannelFullMode.Wait, SingleReader = workers == 1, SingleWriter = false });
+        async Task PrepareAsync()
         {
             try
             {
                 await Parallel.ForEachAsync(uploads, new ParallelOptions
-                { MaxDegreeOfParallelism = workers, CancellationToken = token }, async (relative, ct) =>
+                { MaxDegreeOfParallelism = Math.Min(2, workers), CancellationToken = token }, async (relative, ct) =>
                 {
+                    PreparedLocal? prepared = null;
                     try
                     {
-                        var uploaded = await UploadLocalAsync(relative, settings, ct);
-                        if (uploaded is null) finish(relative, ActivityKind.Upload, null);
-                        else await pending.Writer.WriteAsync(uploaded, ct);
+                        prepared = await PrepareLocalAsync(relative, settings, ct);
+                        if (prepared is null) finish(relative, ActivityKind.Upload, null);
+                        else
+                        {
+                            SetPhase(relative, ActivityKind.Upload, TransferPhase.Queued);
+                            await ready.Writer.WriteAsync(prepared, ct);
+                            prepared = null; // The upload worker now owns the stable handle.
+                        }
                     }
                     catch (OperationCanceledException) { throw; }
                     catch (Exception error) { finish(relative, ActivityKind.Upload, error); }
+                    finally { if (prepared is not null) await prepared.Source.DisposeAsync(); }
                 });
             }
             catch { pipeline.Cancel(); throw; }
-            finally { pending.Writer.TryComplete(); }
+            finally { ready.Writer.TryComplete(); }
+        }
+        async Task SendAsync()
+        {
+            await foreach (var prepared in ready.Reader.ReadAllAsync(token))
+            {
+                try
+                {
+                    UploadedLocal uploaded;
+                    await using (prepared.Source)
+                        uploaded = await UploadPreparedLocalAsync(prepared, settings, token);
+                    await pending.Writer.WriteAsync(uploaded, token);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception error) { finish(prepared.Relative, ActivityKind.Upload, error); }
+            }
+        }
+        async Task ProduceAsync()
+        {
+            try
+            {
+                await Task.WhenAll(Enumerable.Range(0, workers).Select(_ => SendAsync()).Append(PrepareAsync()));
+            }
+            catch { pipeline.Cancel(); throw; }
+            finally
+            {
+                pending.Writer.TryComplete();
+                while (ready.Reader.TryRead(out var abandoned)) await abandoned.Source.DisposeAsync();
+            }
         }
         async Task VerifyAsync()
         {
@@ -614,28 +656,36 @@ public sealed class SyncEngine : IAsyncDisposable
         await Task.WhenAll(verification.Append(ProduceAsync()));
     }
 
-    private async Task<UploadedLocal?> UploadLocalAsync(string relative, AppSettings settings, CancellationToken ct)
+    private async Task<PreparedLocal?> PrepareLocalAsync(string relative, AppSettings settings, CancellationToken ct)
     {
         var path = PathRules.FullPath(settings.RootPath, relative);
         if (!File.Exists(path)) { _transfers.Discard(relative, ActivityKind.Upload); return null; }
         if (_placeholders.IsPlaceholder(path) && !_placeholders.IsHydrated(path))
             await _placeholders.HydrateAsync(path, ct);
         // Deny concurrent writes for the hash and transfer so B2 receives the exact verified snapshot.
-        await using var source = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024,
+        var source = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
         // Read metadata after acquiring the writer-denying handle; an editor may have saved between
         // the initial directory scan and this open.
-        var modified = new DateTimeOffset(File.GetLastWriteTimeUtc(path));
-        SetPhase(relative, ActivityKind.Upload, TransferPhase.Hashing);
-        var sha1 = await _cloud.PrepareUploadChecksumAsync(settings.BucketId, settings.Prefix + relative, source, source.Length, modified, ct);
-        source.Position = 0;
+        try
+        {
+            var modified = new DateTimeOffset(File.GetLastWriteTimeUtc(path));
+            SetPhase(relative, ActivityKind.Upload, TransferPhase.Hashing);
+            var sha1 = await NativeTransferAdapters.PrepareUploadChecksumAsync(_cloud, settings.BucketId, settings.Prefix + relative, source, source.Length, modified, ct);
+            source.Position = 0;
+            return new(relative, source, sha1, modified);
+        }
+        catch { await source.DisposeAsync(); throw; }
+    }
+
+    private async Task<UploadedLocal> UploadPreparedLocalAsync(PreparedLocal prepared, AppSettings settings, CancellationToken ct)
+    {
+        var (relative, source, sha1, modified) = prepared;
         SetPhase(relative, ActivityKind.Upload, TransferPhase.Uploading);
-        var file = await _cloud.UploadAsync(settings.BucketId, settings.Prefix + relative, source, source.Length,
+        var file = await NativeTransferAdapters.UploadPreparedAsync(_cloud, settings.BucketId, settings.Prefix + relative, source, source.Length,
             sha1, modified, new InlineProgress(p => UpdateProgress(relative, ActivityKind.Upload, p)), ct);
         var size = source.Length;
         SetPhase(relative, ActivityKind.Upload, TransferPhase.Verifying);
-        if (file.Key != settings.Prefix + relative || file.Size != size || !string.Equals(file.Sha1, sha1, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("The uploaded file identity, size, or checksum does not match the locked local source.");
         // The handle closes when this method returns, before the acknowledgment waits in the
         // bounded queue. A subsequent edit is rechecked before native marking and stays dirty.
         return new(relative, file, size, modified);
@@ -645,9 +695,7 @@ public sealed class SyncEngine : IAsyncDisposable
     {
         var (relative, file, size, modified) = uploaded;
         var path = PathRules.FullPath(settings.RootPath, relative);
-        await TransferResources.Verification.WaitAsync(ct);
-        try { await _cloud.VerifyUploadAsync(file, settings.BucketId, ct); }
-        finally { TransferResources.Verification.Release(); }
+        await NativeTransferAdapters.VerifyUploadAsync(_cloud, file, settings.BucketId, ct);
         // The cloud snapshot survives failure, cancellation, or a process exit during local
         // marking. It describes the locked uploaded bytes, never a newer user's save.
         var baseline = new SyncEntry(relative, file, size, modified) { NativeMarkPending = true };
@@ -677,7 +725,7 @@ public sealed class SyncEngine : IAsyncDisposable
             var temporary = staging.Path;
             try
             {
-                await _cloud.DownloadFileAsync(cloud, staging.Stream, staging.Chunks, staging.CheckpointAsync,
+                await NativeTransferAdapters.DownloadFileAsync(_cloud, cloud, staging.Stream, staging.Chunks, staging.CheckpointAsync,
                     new InlineProgress(p =>
                     {
                         if (p.TotalBytes > 0 && p.Bytes == p.TotalBytes) SetPhase(relative, ActivityKind.Download, TransferPhase.Verifying);
@@ -871,6 +919,7 @@ public sealed class SyncEngine : IAsyncDisposable
     }
     private sealed record LocalFile(long Size, DateTimeOffset WriteUtc, bool Hydrated, bool HasLocalChanges);
     private sealed record UploadedLocal(string Relative, CloudObject File, long Size, DateTimeOffset Modified);
+    private sealed record PreparedLocal(string Relative, FileStream Source, string Sha1, DateTimeOffset Modified);
     private sealed class LocalSnapshot
     {
         public Dictionary<string, LocalFile> Files { get; } = new(StringComparer.OrdinalIgnoreCase);

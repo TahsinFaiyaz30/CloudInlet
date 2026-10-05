@@ -27,8 +27,8 @@ public sealed partial class B2CloudStore : ICloudStore
     private readonly SemaphoreSlim _authorizeLock = new(1, 1);
     private readonly ConcurrencyGate _uploads = new();
     private readonly ConcurrencyGate _uploadRequests = new();
-    private readonly BandwidthLimiter _uploadLimit = new();
-    private readonly BandwidthLimiter _downloadLimit = new();
+    private readonly BandwidthLimiter _uploadLimit;
+    private readonly BandwidthLimiter _downloadLimit;
     private readonly ConcurrentDictionary<string, ConcurrentBag<UploadSession>> _uploadSessions = new(StringComparer.Ordinal);
     private B2Credentials? _credentials;
     private Authorization? _authorization;
@@ -51,8 +51,11 @@ public sealed partial class B2CloudStore : ICloudStore
     }
 
     public B2CloudStore(HttpMessageHandler? handler = null, TimeSpan? metadataTimeout = null,
-        TimeSpan? transferInactivityTimeout = null)
+        TimeSpan? transferInactivityTimeout = null, TransferBandwidthBudget? bandwidthBudget = null)
     {
+        bandwidthBudget ??= new TransferBandwidthBudget();
+        _uploadLimit = bandwidthBudget.Uploads;
+        _downloadLimit = bandwidthBudget.Downloads;
         _metadataTimeout = ValidateTimeout(metadataTimeout ?? TimeSpan.FromSeconds(60), nameof(metadataTimeout));
         _transferInactivityTimeout = ValidateTimeout(transferInactivityTimeout ?? TimeSpan.FromSeconds(90), nameof(transferInactivityTimeout));
         handler ??= new SocketsHttpHandler
@@ -629,6 +632,8 @@ public sealed partial class B2CloudStore : ICloudStore
 
     private async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
     {
+        request.Version = HttpVersion.Version20;
+        request.VersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
         using var inactivity = new TransferInactivity(token,
             request.Content is SegmentContent or ReplayableContent ? _transferInactivityTimeout : _metadataTimeout);
         if (request.Content is SegmentContent segment) segment.Inactivity = inactivity;

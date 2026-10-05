@@ -33,7 +33,14 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
             if (Directory.Exists(path) && new DirectoryInfo(path).LinkTarget is not null)
                 throw new IOException("Linked local transfer folders are not supported.");
     }
-    private string FullPath(string relative) { CheckRoot(); return PathRules.FullPath(_root, relative.TrimEnd('/')); }
+    private string FullPath(string relative)
+    {
+        CheckRoot();
+        var full = PathRules.FullPath(_root, relative.TrimEnd('/'));
+        if ((File.Exists(full) || Directory.Exists(full)) && (File.GetAttributes(full) & FileAttributes.ReparsePoint) != 0)
+            throw new IOException("Linked or placeholder files and folders cannot be replaced by a local transfer. Choose their actual location or use CloudBay's native sync.");
+        return full;
+    }
 
     public Task<TransferFolderPage> BrowseFoldersAsync(string? cursor = null, CancellationToken cancellationToken = default)
     {
@@ -45,7 +52,10 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
             folders.Length > 200 ? folders[199].Name : null));
     }
 
-    public Task<TransferDiscoveryPage> DiscoverAsync(string? cursor = null, CancellationToken cancellationToken = default)
+    public Task<TransferDiscoveryPage> DiscoverAsync(string? cursor = null, CancellationToken cancellationToken = default) =>
+        DiscoverAsync(cursor, Array.Empty<string>(), cancellationToken);
+
+    public Task<TransferDiscoveryPage> DiscoverAsync(string? cursor, IReadOnlyList<string> exclusions, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested(); CheckRoot();
         var saved = cursor is null ? new LocalCursor([""], null) : JsonSerializer.Deserialize<LocalCursor>(cursor)
@@ -66,7 +76,7 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
             cancellationToken.ThrowIfCancellationRequested();
             if ((info.Attributes & FileAttributes.ReparsePoint) != 0) throw new IOException("Linked files cannot be transferred as local source files.");
             var relative = current.Length == 0 ? info.Name : current + "/" + info.Name;
-            if (PathRules.IsExcluded(relative, Array.Empty<string>())) continue;
+            if (PathRules.IsExcluded(relative, exclusions)) continue;
             var isFolder = (info.Attributes & FileAttributes.Directory) != 0;
             var size = isFolder ? 0 : info.Length;
             var version = Version(info.FullName, size, isFolder);
@@ -108,10 +118,11 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
         ValidateCheckpoint(request, checkpoint);
         var expected = checkpoint.Data.TryGetValue("sha1", out var hash) ? hash : null;
         if (expected is null) throw new InvalidDataException("The saved local commit has no verified checksum.");
+        ValidatePreservedDestination(request, checkpoint);
         await using var stream = new FileStream(final, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, true);
         if (stream.Length != source.Entry.Size || !expected.Equals(Convert.ToHexString(await SHA1.HashDataAsync(stream, cancellationToken)), StringComparison.OrdinalIgnoreCase))
             throw new TransferConflictException("The interrupted local destination commit has changed. Its contents were retained.");
-        return Receipt(request, source.Entry, final, expected);
+        return Receipt(request, source.Entry, final, expected, checkpoint.Data);
     }
 
     public async Task<TransferReceipt> UploadAsync(TransferUploadRequest request, ITransferSourceFile source,
@@ -123,17 +134,20 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
         {
             if (File.Exists(final)) throw new TransferConflictException("A file occupies the selected destination folder.");
             Directory.CreateDirectory(final);
+            FullPath(request.RelativePath); // Recheck a concurrently introduced link before acknowledgment.
             return Receipt(request, source.Entry, final, null);
         }
         Directory.CreateDirectory(Path.GetDirectoryName(final)!);
         // This destination is explicitly local. Its private partial lives beside the final file
         // so atomic rename is possible; cloud-to-cloud jobs never instantiate this adapter.
         var partial = Path.Combine(Path.GetDirectoryName(final)!, ".CloudBay-transfer-" + request.OperationId + ".part");
-        var expectedVersion = File.Exists(final) ? Version(final, new FileInfo(final).Length) : "absent";
+        var (expectedId, expectedVersion) = DestinationSnapshot(final);
         if (checkpoint is not null)
         {
             ValidateCheckpoint(request, checkpoint);
             expectedVersion = checkpoint.Data?.GetValueOrDefault("destinationVersion") ?? throw new InvalidDataException("Missing local destination intent.");
+            expectedId = checkpoint.Data?.GetValueOrDefault("destinationId") ??
+                (expectedVersion == "absent" ? "absent" : throw new InvalidDataException("The saved local replacement has no original file identity. Its files were retained for review."));
         }
         else if (expectedVersion != "absent")
         {
@@ -162,8 +176,9 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
         }
         if (offset != (checkpoint?.AcknowledgedBytes ?? 0)) throw new InvalidDataException("The saved local byte counter does not match its range receipts.");
         destination.SetLength(offset);
-        var data = new Dictionary<string, string> { ["destinationVersion"] = expectedVersion, ["relativePath"] = request.RelativePath,
+        var data = new Dictionary<string, string> { ["destinationVersion"] = expectedVersion, ["destinationId"] = expectedId, ["relativePath"] = request.RelativePath,
             ["operation"] = request.OperationId, ["chunks"] = JsonSerializer.Serialize(hashes) };
+        if (expectedVersion != "absent") data["recoveryRelativePath"] = RecoveryRelativePath(request);
         await saveCheckpoint(new("local", request.OperationId, offset, data), cancellationToken);
         progress?.Report(new(offset, source.Entry.Size) { IsBaseline = true });
         var bytes = ArrayPool<byte>.Shared.Rent(256 * 1024);
@@ -196,13 +211,17 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
             await source.ValidateAsync(cancellationToken);
             data["committing"] = "true"; data["sha1"] = sha1;
             await saveCheckpoint(new("local", request.OperationId, offset, new Dictionary<string,string>(data)), cancellationToken);
+            // Set metadata through the still-owned handle, before installation. A newer
+            // file at the final path must never receive this transfer's timestamp.
+            File.SetLastWriteTimeUtc(destination.SafeFileHandle, source.Entry.ModifiedUtc.UtcDateTime);
             await destination.DisposeAsync();
-            var current = File.Exists(final) ? Version(final, new FileInfo(final).Length) : "absent";
-            if (current != expectedVersion) throw new TransferConflictException("The local destination changed during the transfer. Its contents were retained.");
-            if (expectedVersion == "absent") File.Move(partial, final, overwrite: false);
-            else File.Replace(partial, final, null);
-            File.SetLastWriteTimeUtc(final, source.Entry.ModifiedUtc.UtcDateTime);
-            return Receipt(request, source.Entry, final, sha1);
+            using var directoryGuards = VerifiedCloudCopyCleanup.GuardAncestors(final);
+            if (expectedVersion != "absent")
+                PreserveDestinationForCommit(request, expectedId, expectedVersion, final);
+            // A file created after the exact original was preserved remains untouched.
+            // The original is retained beside the destination for recovery and review.
+            File.Move(partial, final, overwrite: false);
+            return Receipt(request, source.Entry, final, sha1, data);
         }
         finally { ArrayPool<byte>.Shared.Return(bytes, clearArray: true); }
     }
@@ -212,9 +231,109 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
         if (checkpoint.Provider != "local" || checkpoint.SessionId != request.OperationId || checkpoint.Data is null ||
             checkpoint.Data.GetValueOrDefault("relativePath") != request.RelativePath || checkpoint.Data.GetValueOrDefault("operation") != request.OperationId)
             throw new InvalidDataException("The local checkpoint belongs to a different destination.");
+        if (checkpoint.Data.TryGetValue("recoveryRelativePath", out var recovery) && recovery != RecoveryRelativePath(request))
+            throw new InvalidDataException("The saved local original recovery path differs from its transfer.");
     }
-    private static TransferReceipt Receipt(TransferUploadRequest request, TransferEntry entry, string path, string? sha1) =>
-        new(Identity(path), request.RelativePath, Version(path, entry.Size, entry.IsFolder), entry.Size, sha1, request.OperationId);
+    private static TransferReceipt Receipt(TransferUploadRequest request, TransferEntry entry, string path, string? sha1,
+        IReadOnlyDictionary<string, string>? data = null) =>
+        new(Identity(path), request.RelativePath, Version(path, entry.Size, entry.IsFolder), entry.Size, sha1, request.OperationId,
+            data?.TryGetValue("recoveryRelativePath", out var recovery) == true
+                ? new Dictionary<string,string> { ["recoveryRelativePath"] = recovery } : null);
+
+    private static string RecoveryRelativePath(TransferUploadRequest request)
+    {
+        if (request.OperationId is not { Length: 64 } || !request.OperationId.All(Uri.IsHexDigit))
+            throw new InvalidDataException("A local replacement requires a stable SHA256 operation identity.");
+        var relative = request.RelativePath.Replace('\\', '/');
+        var slash = relative.LastIndexOf('/');
+        return (slash < 0 ? "" : relative[..(slash + 1)]) + ".CloudBay-transfer-" + request.OperationId + ".original";
+    }
+
+    private static (string Id, string Version) DestinationSnapshot(string path)
+    {
+        if (!File.Exists(path)) return ("absent", "absent");
+        if (!OperatingSystem.IsWindows())
+        {
+            using var portable = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            return (Identity(path), Version(path, portable.Length));
+        }
+        // Open the named entry itself, never follow a late reparse-point replacement.
+        using var handle = CreateFile(WindowsFilePaths.ToExtendedPath(path), 0x80000000u, 1, IntPtr.Zero, 3, 0x40200000u, IntPtr.Zero);
+        if (handle.IsInvalid) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        using var held = new FileStream(handle, FileAccess.Read, 128 * 1024, isAsync: true);
+        RejectReparseHandle(handle);
+        return (HandleIdentity(held.SafeFileHandle, path), Version(path, held.Length));
+    }
+
+    private void ValidatePreservedDestination(TransferUploadRequest request, TransferCheckpoint checkpoint)
+    {
+        var data = checkpoint.Data!;
+        if (data.GetValueOrDefault("destinationVersion") is not { } expectedVersion || expectedVersion == "absent") return;
+        var expectedId = data.GetValueOrDefault("destinationId") ?? throw new InvalidDataException("The saved local replacement has no original file identity.");
+        var recovery = FullPath(RecoveryRelativePath(request));
+        if (!File.Exists(recovery)) return;
+        using var held = new FileStream(recovery, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (HandleIdentity(held.SafeFileHandle, recovery) != expectedId || Version(recovery, held.Length) != expectedVersion)
+            throw new TransferConflictException("The preserved local original changed. Both destination and original were retained for review.");
+    }
+
+    private void PreserveDestinationForCommit(TransferUploadRequest request, string expectedId, string expectedVersion, string final)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("Exact local replacement requires the Windows file-handle API. The partial and original were retained.");
+        var recovery = FullPath(RecoveryRelativePath(request));
+        if (File.Exists(recovery))
+        {
+            // Recovery after a process exit between exact preservation and installation.
+            using var prior = new FileStream(recovery, FileMode.Open, FileAccess.Read, FileShare.Read);
+            if (HandleIdentity(prior.SafeFileHandle, recovery) != expectedId || Version(recovery, prior.Length) != expectedVersion)
+                throw new TransferConflictException("A different file occupies the local original recovery path. All files were retained.");
+            if (File.Exists(final) || Directory.Exists(final))
+                throw new TransferConflictException("A new local destination appeared after its original was preserved. All files were retained.");
+            return;
+        }
+        // Only this exact, unchanged original can be renamed. Deny both writers and
+        // other delete/rename handles while checking its identity and preserving it.
+        using var handle = CreateFile(WindowsFilePaths.ToExtendedPath(final), 0x80000000u | 0x00010000u, 1, IntPtr.Zero, 3, 0x40200000u, IntPtr.Zero);
+        if (handle.IsInvalid) throw new TransferConflictException("The original local destination is unavailable or changed. Its contents and the partial were retained.");
+        using var original = new FileStream(handle, FileAccess.Read, 128 * 1024, isAsync: true);
+        RejectReparseHandle(handle);
+        if (HandleIdentity(handle, final) != expectedId || Version(final, original.Length) != expectedVersion)
+            throw new TransferConflictException("The original local destination changed during transfer. Its contents and the partial were retained.");
+        RenameExactHandle(handle, recovery);
+    }
+
+    private static string HandleIdentity(SafeFileHandle handle, string path)
+    {
+        if (!OperatingSystem.IsWindows()) return Identity(path);
+        if (!GetFileInformationByHandle(handle, out var info)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        return $"{info.VolumeSerialNumber:x8}:{info.FileIndexHigh:x8}{info.FileIndexLow:x8}";
+    }
+
+    private static void RejectReparseHandle(SafeFileHandle handle)
+    {
+        if (!GetFileInformationByHandle(handle, out var info)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        if ((info.Attributes & 0x400u) != 0) throw new TransferConflictException("The local destination became a linked or placeholder file. Its contents were retained.");
+    }
+
+    private static void RenameExactHandle(SafeFileHandle handle, string destination)
+    {
+        var name = Encoding.Unicode.GetBytes(WindowsFilePaths.ToExtendedPath(destination));
+        var nameOffset = Marshal.OffsetOf<FileRenameHeader>(nameof(FileRenameHeader.NameLength)).ToInt32() + sizeof(uint);
+        // FILE_RENAME_INFO requires a trailing UTF-16 terminator even though its
+        // FileNameLength counts only the filename bytes.
+        var size = checked(nameOffset + name.Length + sizeof(char));
+        var buffer = Marshal.AllocHGlobal(size);
+        try
+        {
+            Marshal.StructureToPtr(new FileRenameHeader { ReplaceIfExists = 0, RootDirectory = IntPtr.Zero, NameLength = (uint)name.Length }, buffer, false);
+            Marshal.Copy(name, 0, IntPtr.Add(buffer, nameOffset), name.Length);
+            Marshal.WriteInt16(buffer, nameOffset + name.Length, 0);
+            if (!SetFileInformationByHandle(handle, 3, buffer, (uint)size))
+                throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "The exact local original could not be preserved. No destination file was overwritten.");
+        }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
 
     public async Task VerifyAsync(TransferReceipt receipt, ITransferSourceFile source, CancellationToken cancellationToken = default)
     {
@@ -243,7 +362,8 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
         // Deny writers and renames, verify the contents, then mark this exact handle for
         // deletion. A failed validation never arms DeleteOnClose on a replacement file.
         var path = FullPath(entry.RelativePath);
-        using var handle = CreateFile(path, 0x80000000u | 0x00010000u, 0, IntPtr.Zero, 3, 0x40000000u, IntPtr.Zero);
+        using var directoryGuards = VerifiedCloudCopyCleanup.GuardAncestors(path);
+        using var handle = CreateFile(WindowsFilePaths.ToExtendedPath(path), 0x80000000u | 0x00010000u, 0, IntPtr.Zero, 3, 0x40000000u, IntPtr.Zero);
         if (handle.IsInvalid) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
         await using var held = new FileStream(handle, FileAccess.Read, 128 * 1024, isAsync: true);
         if (held.Length != entry.Size || Version(path, held.Length) != entry.Version)
@@ -252,6 +372,8 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
             throw new TransferSourceChangedException("The local source was replaced before Move deletion.");
         if (entry.Sha1 is null || !entry.Sha1.Equals(Convert.ToHexString(await SHA1.HashDataAsync(held, cancellationToken)), StringComparison.OrdinalIgnoreCase))
             throw new TransferSourceChangedException("The local source content changed before Move deletion.");
+        if (VerifiedCloudCopyCleanup.HasNamedStreams(path))
+            throw new TransferSourceChangedException("The local source has additional Windows data streams that are not stored in the cloud copy. It was retained.");
         cancellationToken.ThrowIfCancellationRequested();
         var disposition = new FileDisposition { DeleteFile = true };
         if (!SetFileInformationByHandle(handle, 4, ref disposition, (uint)Marshal.SizeOf<FileDisposition>()))
@@ -309,6 +431,12 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
     }
     private sealed record LocalCursor(IReadOnlyList<string> Folders, string? After);
     [StructLayout(LayoutKind.Sequential)] private struct FileDisposition { [MarshalAs(UnmanagedType.Bool)] public bool DeleteFile; }
+    [StructLayout(LayoutKind.Sequential)] private struct FileRenameHeader
+    {
+        public uint ReplaceIfExists;
+        public IntPtr RootDirectory;
+        public uint NameLength;
+    }
     [StructLayout(LayoutKind.Sequential)] private struct FileIdentity
     {
         public uint Attributes; public System.Runtime.InteropServices.ComTypes.FILETIME Creation, Access, Write;
@@ -320,4 +448,6 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
     private static extern bool GetFileInformationByHandle(SafeFileHandle handle, out FileIdentity info);
     [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetFileInformationByHandle(SafeFileHandle handle, int informationClass, ref FileDisposition information, uint size);
+    [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetFileInformationByHandle(SafeFileHandle handle, int informationClass, IntPtr information, uint size);
 }

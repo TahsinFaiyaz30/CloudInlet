@@ -32,7 +32,7 @@ public sealed class TransferJobJournal : IDisposable
                 discovery_complete INTEGER NOT NULL DEFAULT 0, cursor TEXT,
                 file_count INTEGER NOT NULL DEFAULT 0, total_bytes INTEGER NOT NULL DEFAULT 0,
                 completed_files INTEGER NOT NULL DEFAULT 0, skipped_files INTEGER NOT NULL DEFAULT 0,
-                transferred_bytes INTEGER NOT NULL DEFAULT 0, settled_bytes INTEGER NOT NULL DEFAULT 0, error TEXT);
+                transferred_bytes INTEGER NOT NULL DEFAULT 0, settled_bytes INTEGER NOT NULL DEFAULT 0, skipped_bytes INTEGER NOT NULL DEFAULT 0, error TEXT);
             CREATE TABLE IF NOT EXISTS transfer_items(
                 job_id TEXT NOT NULL, id TEXT NOT NULL, path TEXT NOT NULL COLLATE NOCASE,
                 entry TEXT NOT NULL, state INTEGER NOT NULL, bytes INTEGER NOT NULL DEFAULT 0,
@@ -41,6 +41,16 @@ public sealed class TransferJobJournal : IDisposable
             CREATE INDEX IF NOT EXISTS transfer_queue ON transfer_items(job_id,state);
             PRAGMA user_version=1;
             """);
+        using (var columns = Command("PRAGMA table_info(transfer_jobs)"))
+        {
+            var hasSkipped = false;
+            using (var reader = columns.ExecuteReader())
+                while (reader.Read()) if (reader.GetString(1) == "skipped_bytes") hasSkipped = true;
+            if (!hasSkipped)
+                Execute("ALTER TABLE transfer_jobs ADD COLUMN skipped_bytes INTEGER NOT NULL DEFAULT 0; " +
+                    "UPDATE transfer_jobs SET skipped_bytes=COALESCE((SELECT SUM(json_extract(entry,'$.Size')-bytes) FROM transfer_items WHERE job_id=transfer_jobs.id AND state=$skipped),0)",
+                    ("$skipped", (int)TransferItemState.Skipped));
+        }
         using (var saved = Command("SELECT id FROM transfer_jobs WHERE state IN ($discovering,$running)",
             ("$discovering", (int)TransferJobState.Discovering), ("$running", (int)TransferJobState.Running)))
         {
@@ -201,14 +211,16 @@ public sealed class TransferJobJournal : IDisposable
         lock (_gate)
         {
             using var transaction = _connection.BeginTransaction();
-            using var item = Command("UPDATE transfer_items SET state=$state,error=NULL WHERE job_id=$job AND id=$id AND state NOT IN ($complete,$skipped)",
+            using var item = Command("UPDATE transfer_items SET state=$state,error=NULL,verified=CASE WHEN $state=$complete THEN 1 ELSE verified END WHERE job_id=$job AND id=$id AND state NOT IN ($complete,$skipped)",
                 ("$state", (int)(skipped ? TransferItemState.Skipped : TransferItemState.Completed)), ("$job", jobId), ("$id", entry.Id),
                 ("$complete", (int)TransferItemState.Completed), ("$skipped", (int)TransferItemState.Skipped));
             item.Transaction = transaction;
             if (item.ExecuteNonQuery() == 1)
             {
-                using var job = Command("UPDATE transfer_jobs SET completed_files=completed_files+$completed,skipped_files=skipped_files+$skipped,settled_bytes=settled_bytes+$size WHERE id=$job",
-                    ("$completed", !skipped && !entry.IsFolder ? 1 : 0), ("$skipped", skipped && !entry.IsFolder ? 1 : 0), ("$size", entry.Size), ("$job", jobId));
+                using var job = Command("UPDATE transfer_jobs SET completed_files=completed_files+$completed,skipped_files=skipped_files+$skipped,settled_bytes=settled_bytes+$size," +
+                    "skipped_bytes=skipped_bytes+CASE WHEN $isSkipped=1 THEN $size-(SELECT bytes FROM transfer_items WHERE job_id=$job AND id=$id) ELSE 0 END WHERE id=$job",
+                    ("$completed", !skipped && !entry.IsFolder ? 1 : 0), ("$skipped", skipped && !entry.IsFolder ? 1 : 0),
+                    ("$isSkipped", skipped ? 1 : 0), ("$size", entry.Size), ("$job", jobId), ("$id", entry.Id));
                 job.Transaction = transaction; job.ExecuteNonQuery();
             }
             transaction.Commit();
@@ -257,17 +269,17 @@ public sealed class TransferJobJournal : IDisposable
         {
             var job = GetJob(jobId);
             using var command = Command("SELECT file_count,total_bytes,completed_files,skipped_files,transferred_bytes,settled_bytes,error," +
-                "(SELECT COUNT(*) FROM transfer_items WHERE job_id=$job AND state=$queued) FROM transfer_jobs WHERE id=$job",
+                "(SELECT COUNT(*) FROM transfer_items WHERE job_id=$job AND state=$queued),skipped_bytes FROM transfer_jobs WHERE id=$job",
                 ("$job", jobId), ("$queued", (int)TransferItemState.Queued));
-            long count, total, completed, skipped, transferred, settled, queued;
+            long count, total, completed, skipped, transferred, settled, queued, skippedBytes;
             string? error;
             using (var reader = command.ExecuteReader())
             {
                 reader.Read(); count = reader.GetInt64(0); total = reader.GetInt64(1); completed = reader.GetInt64(2);
                 skipped = reader.GetInt64(3); transferred = reader.GetInt64(4); settled = reader.GetInt64(5);
-                error = reader.IsDBNull(6) ? null : reader.GetString(6); queued = reader.GetInt64(7);
+                error = reader.IsDBNull(6) ? null : reader.GetString(6); queued = reader.GetInt64(7); skippedBytes = reader.GetInt64(8);
             }
-            if (count < 0 || total < 0 || completed < 0 || skipped < 0 || completed + skipped > count || transferred < 0 || transferred > total || settled < 0 || settled > total)
+            if (count < 0 || total < 0 || completed < 0 || skipped < 0 || completed + skipped > count || transferred < 0 || transferred > total || settled < 0 || settled > total || skippedBytes < 0 || skippedBytes > total - transferred)
                 throw new InvalidDataException("Saved transfer counters are inconsistent; the journal was retained for review.");
             using var items = Command("SELECT entry,state,bytes,error FROM transfer_items WHERE job_id=$job AND state NOT IN ($complete,$skipped) " +
                 "ORDER BY CASE WHEN state=$queued THEN 1 ELSE 0 END,rowid LIMIT 256", ("$job", jobId),
@@ -284,7 +296,7 @@ public sealed class TransferJobJournal : IDisposable
                 window.Add(new(entry.Id, entry.RelativePath, state, bytes, entry.Size, 0, itemReader.IsDBNull(3) ? null : itemReader.GetString(3)));
             }
             return new(job.Plan, job.State, job.DiscoveryComplete, count, completed, skipped, total, transferred,
-                total - settled, queued, 0, window, error);
+                total - transferred - skippedBytes, queued, 0, window, error);
         }
     }
 

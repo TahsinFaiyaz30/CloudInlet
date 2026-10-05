@@ -26,6 +26,7 @@ public sealed record ActivityEvent(DateTimeOffset Time, ActivityKind Kind, strin
     long Bytes = 0, bool Completed = true)
 {
     public ActivityLocation? Location { get; init; }
+    public string? TransferJobId { get; init; }
 }
 public enum PinMode { OnlineOnly, Available, AlwaysAvailable }
 public enum ClientState { NotConnected, Connecting, Syncing, UpToDate, Paused, Offline, Attention }

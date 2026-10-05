@@ -18,15 +18,21 @@ public sealed class OneDriveClient
     }) { Timeout = Timeout.InfiniteTimeSpan };
     private readonly HttpClient _http;
     private readonly OneDriveAuthClient _auth;
-    private readonly BandwidthLimiter _uploadLimit = new();
-    private readonly BandwidthLimiter _downloadLimit = new();
+    private readonly BandwidthLimiter _uploadLimit;
+    private readonly BandwidthLimiter _downloadLimit;
     private readonly ConcurrencyGate _uploads = new();
     private readonly ConcurrencyGate _downloads = new();
     private static readonly TimeSpan InactivityTimeout = TimeSpan.FromMinutes(2);
     internal const string ItemFields = "id,name,size,eTag,cTag,folder,file,lastModifiedDateTime,@microsoft.graph.downloadUrl";
     private const string GraphRoot = "https://graph.microsoft.com/v1.0/";
 
-    public OneDriveClient(OneDriveAuthClient auth, HttpClient? http = null) { _auth = auth; _http = http ?? SharedHttp; }
+    public OneDriveClient(OneDriveAuthClient auth, HttpClient? http = null, TransferBandwidthBudget? bandwidthBudget = null)
+    {
+        _auth = auth; _http = http ?? SharedHttp;
+        bandwidthBudget ??= new TransferBandwidthBudget();
+        _uploadLimit = bandwidthBudget.Uploads;
+        _downloadLimit = bandwidthBudget.Downloads;
+    }
 
     /// <summary>Zero bytes/second means unlimited. Limits apply across all simultaneous account transfers.</summary>
     public void Configure(long uploadBytesPerSecond, long downloadBytesPerSecond, int connections) =>
@@ -309,6 +315,8 @@ public sealed class OneDriveClient
 
     private async Task<HttpResponseMessage> SendContentAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
+        request.Version = HttpVersion.Version20;
+        request.VersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
         // Cap a stalled request rather than total transfer duration, so intentional
         // bandwidth caps and very large healthy uploads do not expire mid-file.
         using var inactivity = new TransferInactivity(cancellationToken, InactivityTimeout);

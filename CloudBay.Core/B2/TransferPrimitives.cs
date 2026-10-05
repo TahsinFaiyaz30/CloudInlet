@@ -15,7 +15,11 @@ internal sealed class BandwidthLimiter
 
     public void Configure(long rate)
     {
-        lock (_lock) { _rate = rate; _last = Stopwatch.GetTimestamp(); _credit = 0; }
+        lock (_lock)
+        {
+            if (_rate == rate) return;
+            _rate = rate; _last = Stopwatch.GetTimestamp(); _credit = 0;
+        }
     }
 
     public async ValueTask WaitAsync(int bytes, CancellationToken token)

@@ -37,7 +37,10 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
     private sealed record DiscoveryCursor(string DriveId, string RootId, DiscoveryFolder Current, string? NextLink,
         List<DiscoveryFolder> Pending, int ReplayGeneration = 0);
 
-    public async Task<TransferDiscoveryPage> DiscoverAsync(string? cursor = null, CancellationToken cancellationToken = default)
+    public Task<TransferDiscoveryPage> DiscoverAsync(string? cursor = null, CancellationToken cancellationToken = default) =>
+        DiscoverAsync(cursor, Array.Empty<string>(), cancellationToken);
+
+    public async Task<TransferDiscoveryPage> DiscoverAsync(string? cursor, IReadOnlyList<string> exclusions, CancellationToken cancellationToken = default)
     {
         var state = cursor is null ? new(Location.ContainerId, Location.FolderId, new(Location.FolderId, ""), null, [])
             : JsonSerializer.Deserialize<DiscoveryCursor>(cursor) ?? throw new InvalidDataException("The saved OneDrive discovery cursor is invalid.");
@@ -62,6 +65,7 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
         {
             ValidateName(item.Name);
             var path = Join(state.Current.Path, item.Name);
+            if (CloudBay.Core.Sync.PathRules.IsExcluded(path, exclusions)) continue;
             entries.Add(new(item.Id, path, item.ETag, item.IsFolder ? 0 : item.Size, item.ModifiedUtc, item.Sha1, item.IsFolder));
             if (item.IsFolder && !state.Pending.Any(folder => folder.Id == item.Id)) state.Pending.Add(new(item.Id, path));
         }

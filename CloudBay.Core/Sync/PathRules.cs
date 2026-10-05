@@ -84,11 +84,23 @@ public static class PathRules
     {
         var parts = relative.Replace('\\', '/').Split('/');
         if (parts.Any(p => p.Equals(".cloudbay", StringComparison.OrdinalIgnoreCase) || p.Equals(".cloudbay-backups", StringComparison.OrdinalIgnoreCase) ||
-            p.StartsWith(".cloudbay-copy-", StringComparison.OrdinalIgnoreCase) && p.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase))) return true;
+            p.StartsWith(".cloudbay-copy-", StringComparison.OrdinalIgnoreCase) && p.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) ||
+            IsOwnedTransferArtifact(p))) return true;
         return patterns.Where(p => !string.IsNullOrWhiteSpace(p)).Any(pattern =>
             pattern.Contains('/')
                 ? FileSystemName.MatchesSimpleExpression(pattern, relative, ignoreCase: true)
                 : parts.Any(p => FileSystemName.MatchesSimpleExpression(pattern, p, ignoreCase: true)));
+    }
+
+    private static bool IsOwnedTransferArtifact(string name)
+    {
+        const string prefix = ".cloudbay-transfer-";
+        if (!name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return false;
+        var suffix = name.EndsWith(".part", StringComparison.OrdinalIgnoreCase) ? ".part" :
+            name.EndsWith(".original", StringComparison.OrdinalIgnoreCase) ? ".original" : null;
+        if (suffix is null || name.Length != prefix.Length + 64 + suffix.Length) return false;
+        foreach (var character in name.AsSpan(prefix.Length, 64)) if (!Uri.IsHexDigit(character)) return false;
+        return true;
     }
 
     /// <summary>Matches legacy, literal, and guided rules against this engine's root. Folder rules include descendants.</summary>

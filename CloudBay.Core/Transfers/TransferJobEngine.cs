@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Channels;
+using CloudBay.Core.B2;
 
 namespace CloudBay.Core.Transfers;
 
@@ -10,7 +11,8 @@ public sealed class TransferJobEngine : IAsyncDisposable
 {
     private readonly TransferJobJournal _journal;
     private readonly Func<TransferLocation, ITransferEndpoint> _endpointFactory;
-    private readonly int _workers;
+    private const int PipelineWorkers = 16;
+    private readonly ConcurrencyGate _transferAdmission = new();
     private readonly object _gate = new();
     private readonly Dictionary<string, RunningJob> _running = new(StringComparer.Ordinal);
     private bool _disposed;
@@ -20,7 +22,19 @@ public sealed class TransferJobEngine : IAsyncDisposable
     public TransferJobEngine(TransferJobJournal journal, Func<TransferLocation, ITransferEndpoint> endpointFactory, int workers = 4)
     {
         if (workers is < 1 or > 16) throw new ArgumentOutOfRangeException(nameof(workers));
-        _journal = journal; _endpointFactory = endpointFactory; _workers = workers;
+        _journal = journal; _endpointFactory = endpointFactory;
+        _transferAdmission.Configure(workers);
+    }
+
+    /// <summary>Apply transfer preferences to running jobs without discarding their queues or checkpoints.</summary>
+    public void ConfigureWorkers(int workers)
+    {
+        if (workers is < 1 or > PipelineWorkers) throw new ArgumentOutOfRangeException(nameof(workers));
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _transferAdmission.Configure(workers);
+        }
     }
 
     public Task CreateAsync(TransferJobPlan plan, CancellationToken cancellationToken = default)
@@ -87,10 +101,10 @@ public sealed class TransferJobEngine : IAsyncDisposable
             _journal.ResetUnfinished(jobId, retryFailures);
             _journal.SetState(jobId, job.DiscoveryComplete ? TransferJobState.Running : TransferJobState.Discovering);
             Publish(jobId);
-            var wake = Channel.CreateBounded<bool>(new BoundedChannelOptions(_workers)
+            var wake = Channel.CreateBounded<bool>(new BoundedChannelOptions(PipelineWorkers)
             { FullMode = BoundedChannelFullMode.DropWrite, SingleReader = false, SingleWriter = true });
-            var verification = Channel.CreateBounded<JournalItem>(new BoundedChannelOptions(_workers * 2)
-            { FullMode = BoundedChannelFullMode.Wait, SingleReader = _workers == 1, SingleWriter = false });
+            var verification = Channel.CreateBounded<JournalItem>(new BoundedChannelOptions(PipelineWorkers * 2)
+            { FullMode = BoundedChannelFullMode.Wait, SingleReader = false, SingleWriter = false });
             var discoveryDone = job.DiscoveryComplete ? 1 : 0;
 
             async Task DiscoverAsync()
@@ -101,10 +115,10 @@ public sealed class TransferJobEngine : IAsyncDisposable
                     while (!saved.DiscoveryComplete)
                     {
                         token.ThrowIfCancellationRequested();
-                        var page = await source.DiscoverAsync(saved.Cursor, token).ConfigureAwait(false);
+                        var page = await source.DiscoverAsync(saved.Cursor, job.Plan.Exclusions, token).ConfigureAwait(false);
                         _journal.SaveDiscovery(jobId, page);
                         saved = _journal.GetJob(jobId);
-                        for (var i = 0; i < _workers; i++) wake.Writer.TryWrite(true);
+                        for (var i = 0; i < PipelineWorkers; i++) wake.Writer.TryWrite(true);
                         Publish(jobId);
                     }
                     _journal.SetState(jobId, TransferJobState.Running);
@@ -143,22 +157,28 @@ public sealed class TransferJobEngine : IAsyncDisposable
                             await verification.Writer.WriteAsync(item, token).ConfigureAwait(false);
                             continue;
                         }
-                        await file.ValidateAsync(token).ConfigureAwait(false);
                         TransferReceipt? receipt;
-                        await TransferResources.RelayTransfers.WaitAsync(token).ConfigureAwait(false);
+                        await _transferAdmission.EnterAsync(token).ConfigureAwait(false);
                         try
                         {
-                            receipt = await destination.ReconcileAsync(request, file, item.Checkpoint, token).ConfigureAwait(false);
-                            receipt ??= await destination.UploadAsync(request, file, item.Checkpoint, (checkpoint, ct) =>
+                            await file.ValidateAsync(token).ConfigureAwait(false);
+                            await TransferResources.RelayTransfers.WaitAsync(token).ConfigureAwait(false);
+                            try
                             {
-                                ct.ThrowIfCancellationRequested();
-                                if (checkpoint.Provider != job.Plan.Destination.Provider) throw new InvalidDataException("A checkpoint belongs to a different provider.");
-                                _journal.SaveCheckpoint(jobId, item.Entry, checkpoint);
-                                live.AcknowledgedBytes = checkpoint.AcknowledgedBytes;
-                                return Task.CompletedTask;
-                            }, new InlineProgress(value => Progress(runtime, live, value)), token).ConfigureAwait(false);
+                                live.State = TransferItemState.Transferring;
+                                receipt = await destination.ReconcileAsync(request, file, item.Checkpoint, token).ConfigureAwait(false);
+                                receipt ??= await destination.UploadAsync(request, file, item.Checkpoint, (checkpoint, ct) =>
+                                {
+                                    ct.ThrowIfCancellationRequested();
+                                    if (checkpoint.Provider != job.Plan.Destination.Provider) throw new InvalidDataException("A checkpoint belongs to a different provider.");
+                                    _journal.SaveCheckpoint(jobId, item.Entry, checkpoint);
+                                    live.AcknowledgedBytes = checkpoint.AcknowledgedBytes;
+                                    return Task.CompletedTask;
+                                }, new InlineProgress(value => Progress(runtime, live, value)), token).ConfigureAwait(false);
+                            }
+                            finally { TransferResources.RelayTransfers.Release(); }
                         }
-                        finally { TransferResources.RelayTransfers.Release(); }
+                        finally { _transferAdmission.Exit(); }
                         if (receipt.RelativePath != request.RelativePath) throw new InvalidDataException("The destination created an unexpected file name.");
                         // An acknowledged receipt is durable before source revalidation or expensive verification.
                         _journal.SaveReceipt(jobId, item.Entry, receipt, request.OperationId);
@@ -192,21 +212,26 @@ public sealed class TransferJobEngine : IAsyncDisposable
                         }
                         await file.ValidateAsync(token).ConfigureAwait(false);
                         await TransferResources.Verification.WaitAsync(token).ConfigureAwait(false);
-                        try { await destination.VerifyAsync(item.Receipt, file, token).ConfigureAwait(false); }
+                        TransferReceipt verifiedReceipt;
+                        try { verifiedReceipt = await destination.VerifyReceiptAsync(item.Receipt, file, token).ConfigureAwait(false); }
                         finally { TransferResources.Verification.Release(); }
                         await file.ValidateAsync(token).ConfigureAwait(false);
-                        _journal.SetItemState(jobId, item.Entry.Id, TransferItemState.Verified);
+                        if (verifiedReceipt != item.Receipt)
+                            _journal.SaveReceipt(jobId, item.Entry, verifiedReceipt, Request(job.Plan,item.Entry).OperationId);
                         if (job.Plan.Operation == TransferOperation.Move && !item.Entry.IsFolder)
                         {
                             _journal.SetItemState(jobId, item.Entry.Id, TransferItemState.DeletingSource);
                             if (runtime.Items.TryGetValue(item.Entry.Id, out var live)) live.State = TransferItemState.DeletingSource;
-                            await source.DeleteSourceAsync(item.Entry with { Sha1 = item.Entry.Sha1 ?? item.Receipt.Sha1 }, token).ConfigureAwait(false);
+                            await source.DeleteSourceAsync(item.Entry with { Sha1 = item.Entry.Sha1 ?? verifiedReceipt.Sha1 }, token).ConfigureAwait(false);
                         }
                         _journal.Finish(jobId, item.Entry);
                         runtime.Items.TryRemove(item.Entry.Id, out _);
-                        Activity?.Invoke(new(DateTimeOffset.UtcNow, ActivityKind.Backup, item.Entry.RelativePath,
-                            job.Plan.Operation == TransferOperation.Move ? "Cloud transfer verified; unchanged source file moved" : "Transfer completed and verified",
-                            item.Entry.Size));
+                        var message = job.Plan.Operation == TransferOperation.Move ? "Cloud transfer verified; unchanged source file moved" : "Transfer completed and verified";
+                        if (job.Plan.Destination.Provider == "local" && verifiedReceipt.Data?.GetValueOrDefault("recoveryRelativePath") is { } original)
+                            message += ". Previous local copy retained at " + Path.Combine(job.Plan.Destination.Path, original.Replace('/', Path.DirectorySeparatorChar));
+                        Activity?.Invoke(new(DateTimeOffset.UtcNow, job.Plan.Destination.Provider == "local" ? ActivityKind.Download : ActivityKind.Upload, item.Entry.RelativePath,
+                            message,
+                            item.Entry.Size) { TransferJobId = jobId });
                     }
                     catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
                     catch (Exception error) { Fail(jobId, item.Entry, error, runtime); }
@@ -215,7 +240,7 @@ public sealed class TransferJobEngine : IAsyncDisposable
 
             async Task ProduceAsync()
             {
-                try { await Task.WhenAll(Enumerable.Range(0, _workers).Select(_ => TransferAsync()).Append(DiscoverAsync())).ConfigureAwait(false); }
+                try { await Task.WhenAll(Enumerable.Range(0, PipelineWorkers).Select(_ => GuardAsync(TransferAsync)).Append(GuardAsync(DiscoverAsync))).ConfigureAwait(false); }
                 catch { runtime.Cancellation.Cancel(); throw; }
                 finally { verification.Writer.TryComplete(); }
             }
@@ -228,12 +253,17 @@ public sealed class TransferJobEngine : IAsyncDisposable
             var refresh = RefreshAsync();
             try
             {
-                var consumers = Enumerable.Range(0, Math.Min(_workers, 8)).Select(_ => VerifyAsync()).ToArray();
+                var consumers = Enumerable.Range(0, 8).Select(_ => GuardAsync(VerifyAsync)).ToArray();
                 await Task.WhenAll(consumers.Append(ProduceAsync())).ConfigureAwait(false);
                 _journal.SetState(jobId, _journal.HasUnfinished(jobId) ? TransferJobState.Attention : TransferJobState.Completed,
                     _journal.HasUnfinished(jobId) ? "Some files need attention. Completed copies and checkpoints are retained." : null);
             }
             finally { runtime.Cancellation.Cancel(); await refresh.ConfigureAwait(false); }
+            async Task GuardAsync(Func<Task> work)
+            {
+                try { await work().ConfigureAwait(false); }
+                catch { runtime.Cancellation.Cancel(); throw; }
+            }
         }
         catch (OperationCanceledException) when (runtime.Cancellation.IsCancellationRequested)
         {
@@ -244,7 +274,7 @@ public sealed class TransferJobEngine : IAsyncDisposable
         {
             _journal.ResetUnfinished(jobId, false);
             _journal.SetState(jobId, TransferJobState.Attention, error.Message);
-            Activity?.Invoke(new(DateTimeOffset.UtcNow, ActivityKind.Error, jobId, error.Message, Completed: false));
+            Activity?.Invoke(new(DateTimeOffset.UtcNow, ActivityKind.Error, jobId, error.Message, Completed: false) { TransferJobId = jobId });
         }
         finally
         {
@@ -257,7 +287,7 @@ public sealed class TransferJobEngine : IAsyncDisposable
     {
         _journal.SetItemState(jobId, entry.Id, TransferItemState.Attention, error.Message);
         runtime.Items.TryRemove(entry.Id, out _);
-        Activity?.Invoke(new(DateTimeOffset.UtcNow, ActivityKind.Error, entry.RelativePath, error.Message, Completed: false));
+        Activity?.Invoke(new(DateTimeOffset.UtcNow, ActivityKind.Error, entry.RelativePath, error.Message, Completed: false) { TransferJobId = jobId });
     }
 
     public static TransferUploadRequest Request(TransferJobPlan plan, TransferEntry entry)
@@ -265,13 +295,14 @@ public sealed class TransferJobEngine : IAsyncDisposable
         var operation = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(plan.Id + "|" + entry.Id + "|" + entry.Version))).ToLowerInvariant();
         var path = entry.RelativePath.TrimEnd('/');
         var policy = plan.ConflictPolicy;
-        if (policy == TransferConflictPolicy.Rename)
+        if (policy == TransferConflictPolicy.Rename && !entry.IsFolder)
         {
             var slash = path.TrimEnd('/').LastIndexOf('/');
             var name = path.TrimEnd('/')[(slash + 1)..];
             path = (slash < 0 ? "" : path[..(slash + 1)]) + Sync.PathRules.ConflictFileName(name, " (CloudBay " + operation[..12] + ")");
             policy = TransferConflictPolicy.Fail;
         }
+        if (entry.IsFolder && policy == TransferConflictPolicy.Rename) policy = TransferConflictPolicy.Replace;
         return new(operation, path, policy);
     }
 
@@ -309,7 +340,9 @@ public sealed class TransferJobEngine : IAsyncDisposable
             window[live.Entry.Id] = new(live.Entry.Id, live.Entry.RelativePath, live.State, live.Bytes, live.Entry.Size,
                 live.State == TransferItemState.Transferring ? live.Speed.BytesPerSecond : 0, null);
         var transferred = Math.Min(snapshot.TotalBytes, snapshot.TransferredBytes + additional);
-        return snapshot with { TransferredBytes = transferred, BytesPerSecond = liveItems.Any(item => item.State == TransferItemState.Transferring) ? runtime.Speed.BytesPerSecond : 0,
+        return snapshot with { TransferredBytes = transferred, RemainingBytes = Math.Max(0, snapshot.RemainingBytes - additional),
+            QueuedFiles = snapshot.QueuedFiles + liveItems.Count(item => item.State == TransferItemState.Queued),
+            BytesPerSecond = liveItems.Any(item => item.State == TransferItemState.Transferring) ? runtime.Speed.BytesPerSecond : 0,
             Items = window.Values.OrderBy(item => item.State == TransferItemState.Queued ? 1 : 0).Take(256).ToArray() };
     }
     private void Publish(string jobId) => Changed?.Invoke(ApplyLive(_journal.Snapshot(jobId)));
@@ -322,7 +355,13 @@ public sealed class TransferJobEngine : IAsyncDisposable
             if (_disposed) return;
             _disposed = true;
             work = _running.Values.Select(runtime => runtime.Task).ToArray();
-            foreach (var runtime in _running.Values) { runtime.StopState = TransferJobState.Paused; runtime.Cancellation.Cancel(); }
+            foreach (var runtime in _running.Values)
+            {
+                // A graceful app shutdown is an interruption, not the user's Pause choice.
+                // Keep its durable running intent so the next startup continues it automatically.
+                runtime.StopState ??= TransferJobState.Running;
+                runtime.Cancellation.Cancel();
+            }
         }
         await Task.WhenAll(work).ConfigureAwait(false);
         _journal.Dispose();
@@ -343,7 +382,7 @@ public sealed class TransferJobEngine : IAsyncDisposable
     {
         public object Gate { get; } = new();
         public TransferEntry Entry { get; } = entry;
-        public TransferItemState State = TransferItemState.Transferring;
+        public TransferItemState State = TransferItemState.Queued;
         public long Bytes = baseline;
         public long AcknowledgedBytes = baseline;
         public TransferSpeedMeter Speed { get; } = new();

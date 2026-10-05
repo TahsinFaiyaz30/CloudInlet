@@ -65,6 +65,7 @@ public sealed class TransferJobEngineTests
         await fixture.Destination.VerificationEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
         await fixture.Engine.PauseAsync(fixture.Plan.Id); await work;
         Assert.AreEqual(6L, fixture.Engine.Snapshots().Single().TransferredBytes);
+        Assert.AreEqual(0L, fixture.Engine.Snapshots().Single().RemainingBytes, "Acknowledged payload is no longer remaining while verification is pending.");
         Assert.AreEqual(0L, fixture.Engine.Snapshots().Single().CompletedFiles);
         await fixture.RestartAsync();
         fixture.Destination.HoldVerification = false;
@@ -160,6 +161,19 @@ public sealed class TransferJobEngineTests
     }
 
     [TestMethod]
+    public async Task GracefulShutdownPreservesAutomaticContinuationIntentWithoutChangingUserPause()
+    {
+        await using var fixture = new Fixture(1);
+        fixture.Source.OnePage = true; fixture.Destination.HoldAfterCheckpoint = true;
+        _ = fixture.Engine.RunAsync(fixture.Plan.Id);
+        await fixture.Destination.CheckpointSaved.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await fixture.Engine.DisposeAsync();
+        using var journal = new TransferJobJournal(fixture.Database,new ProtectedCheckpoint());
+        CollectionAssert.AreEqual(new[]{fixture.Plan.Id},journal.RecoverableJobIds.ToArray());
+        Assert.AreEqual(3L,journal.Snapshots().Single().TransferredBytes);
+    }
+
+    [TestMethod]
     public async Task MetadataJournalNeverContainsCloudPayloadOrPlaintextSessionSecrets()
     {
         await using var fixture = new Fixture(1);
@@ -199,6 +213,55 @@ public sealed class TransferJobEngineTests
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
     }
 
+    [TestMethod]
+    public async Task WorkerPreferenceCanIncreaseRunningJobWithoutLosingAcknowledgedCheckpoints()
+    {
+        await using var fixture = new Fixture(1);
+        fixture.Destination.HoldAfterCheckpoint = true;
+        var work = fixture.Engine.RunAsync(fixture.Plan.Id);
+        await fixture.Destination.CheckpointSaved.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.AreEqual(1, fixture.Destination.Uploads.Count);
+        fixture.Engine.ConfigureWorkers(2);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (fixture.Destination.Uploads.Count < 2) await Task.Delay(10, timeout.Token);
+        await fixture.Engine.PauseAsync(fixture.Plan.Id); await work;
+        Assert.AreEqual(6L, fixture.Engine.Snapshots().Single().TransferredBytes);
+        fixture.Destination.HoldAfterCheckpoint = false;
+        await fixture.Engine.ResumeAsync(fixture.Plan.Id).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.AreEqual(TransferJobState.Completed, fixture.Engine.Snapshots().Single().State);
+        Assert.AreEqual(2, fixture.Destination.StartOffsets.Count(offset => offset == 3));
+    }
+
+    [TestMethod]
+    public async Task SkippedFilesReduceRemainingBytesWithoutCountingPayloadAsTransferred()
+    {
+        await using var fixture = new Fixture(1);
+        fixture.Source.OnePage = true; fixture.Destination.SkipUploads = true;
+        await fixture.Engine.RunAsync(fixture.Plan.Id).WaitAsync(TimeSpan.FromSeconds(10));
+        var snapshot = fixture.Engine.Snapshots().Single();
+        Assert.AreEqual(TransferJobState.Completed, snapshot.State);
+        Assert.AreEqual(1L, snapshot.SkippedFiles);
+        Assert.AreEqual(0L, snapshot.TransferredBytes);
+        Assert.AreEqual(0L, snapshot.RemainingBytes);
+        await fixture.RestartAsync();
+        Assert.AreEqual(0L, fixture.Engine.Snapshots().Single().RemainingBytes);
+    }
+
+    [TestMethod]
+    public void RenameConflictKeepsFolderHierarchyAndUsesStableFileName()
+    {
+        var plan = new TransferJobPlan(Guid.NewGuid().ToString("N"),
+            new("onedrive", "source", "drive", "folder", "", "Source"),
+            new("b2", "target", "bucket", "", "target/", "Target"),
+            TransferOperation.Copy, TransferConflictPolicy.Rename, [], DateTimeOffset.UtcNow);
+        var folder = new TransferEntry("folder", "nested", "folder-version", 0, DateTimeOffset.UnixEpoch, IsFolder: true);
+        Assert.AreEqual("nested", TransferJobEngine.Request(plan, folder).RelativePath);
+        var file = folder with { Id = "file", RelativePath = "nested/file.txt", IsFolder = false, Size = 6 };
+        var request = TransferJobEngine.Request(plan, file);
+        Assert.IsTrue(request.RelativePath.StartsWith("nested/file (CloudBay "));
+        Assert.AreEqual(request, TransferJobEngine.Request(plan, file));
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         public string DirectoryPath { get; } = Path.Combine(Path.GetTempPath(), "CloudBayTransferTests-" + Guid.NewGuid().ToString("N"));
@@ -230,7 +293,7 @@ public sealed class TransferJobEngineTests
     {
         public TransferLocation Location { get; } = location;
         public byte[] Payload = "abcdef"u8.ToArray();
-        public bool OnePage, HoldSecondPage, HoldAfterCheckpoint, HoldVerification, BadIntegrity, Changed, LoseDeleteAcknowledgment, ReplayFirstOnSecondPage;
+        public bool OnePage, HoldSecondPage, HoldAfterCheckpoint, HoldVerification, BadIntegrity, Changed, LoseDeleteAcknowledgment, ReplayFirstOnSecondPage, SkipUploads;
         public List<string?> Pages { get; } = [];
         public ConcurrentDictionary<string,int> Uploads { get; } = new();
         public ConcurrentDictionary<string,bool> Deleted { get; } = new();
@@ -259,6 +322,7 @@ public sealed class TransferJobEngineTests
         public async Task<TransferReceipt> UploadAsync(TransferUploadRequest request,ITransferSourceFile source,TransferCheckpoint? checkpoint,
             Func<TransferCheckpoint,CancellationToken,Task> saveCheckpoint,IProgress<TransferProgress>? progress=null,CancellationToken cancellationToken=default)
         {
+            if (SkipUploads) throw new TransferSkippedException("Injected existing destination.");
             Uploads.AddOrUpdate(source.Entry.Id,1,(_,count)=>count+1);
             var offset=checkpoint?.AcknowledgedBytes??0; StartOffsets.Enqueue(offset);
             var half=source.Entry.Size/2;

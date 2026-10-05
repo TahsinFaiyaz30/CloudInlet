@@ -37,6 +37,18 @@ public sealed class PathRulesTests
     }
 
     [TestMethod]
+    public void ExactOwnedTransferPartialsAndOriginalsAreNeverDiscoveredForBackup()
+    {
+        var operation = new string('a', 64);
+        Assert.IsTrue(PathRules.IsExcluded("nested/.CloudBay-transfer-" + operation + ".part", []));
+        Assert.IsTrue(PathRules.IsExcluded("nested/.CLOUDBAY-TRANSFER-" + operation + ".ORIGINAL", []));
+        Assert.IsFalse(PathRules.IsExcluded("nested/.CloudBay-transfer-notes.original", []));
+        Assert.IsFalse(PathRules.IsExcluded("nested/.CloudBay-transfer-" + operation + "a.part", []));
+        Assert.IsFalse(PathRules.IsExcluded("nested/.CloudBay-transfer-" + new string('g', 64) + ".part", []));
+        Assert.IsFalse(PathRules.IsExcluded("nested/.CloudBay-transfer-" + operation + ".original.txt", []));
+    }
+
+    [TestMethod]
     public void ConflictNamesRetainUniqueSuffixExtensionAndValidUnicodeWithinWindowsLimit()
     {
         const string suffix = " (conflict 20261004-123456-abcdef)";

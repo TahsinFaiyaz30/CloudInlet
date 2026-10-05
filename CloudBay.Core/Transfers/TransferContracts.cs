@@ -37,6 +37,8 @@ public interface ITransferEndpoint
     TransferLocation Location { get; }
     Task<TransferFolderPage> BrowseFoldersAsync(string? cursor = null, CancellationToken cancellationToken = default);
     Task<TransferDiscoveryPage> DiscoverAsync(string? cursor = null, CancellationToken cancellationToken = default);
+    Task<TransferDiscoveryPage> DiscoverAsync(string? cursor, IReadOnlyList<string> exclusions, CancellationToken cancellationToken = default) =>
+        DiscoverAsync(cursor, cancellationToken);
     ITransferSourceFile OpenSource(TransferEntry entry);
     Task<TransferReceipt?> ReconcileAsync(TransferUploadRequest request, ITransferSourceFile source,
         TransferCheckpoint? checkpoint, CancellationToken cancellationToken = default);
@@ -44,6 +46,12 @@ public interface ITransferEndpoint
         TransferCheckpoint? checkpoint, Func<TransferCheckpoint, CancellationToken, Task> saveCheckpoint,
         IProgress<TransferProgress>? progress = null, CancellationToken cancellationToken = default);
     Task VerifyAsync(TransferReceipt receipt, ITransferSourceFile source, CancellationToken cancellationToken = default);
+    /// <summary>May enrich the durable receipt with a digest computed from verified destination bytes.</summary>
+    async Task<TransferReceipt> VerifyReceiptAsync(TransferReceipt receipt, ITransferSourceFile source, CancellationToken cancellationToken = default)
+    {
+        await VerifyAsync(receipt, source, cancellationToken).ConfigureAwait(false);
+        return receipt;
+    }
     Task DeleteSourceAsync(TransferEntry entry, CancellationToken cancellationToken = default);
     /// <summary>Reconciles an interrupted exact-version deletion; absence must never refer to a replacement at the same path.</summary>
     Task<bool> IsSourceDeletedAsync(TransferEntry entry, CancellationToken cancellationToken = default) => Task.FromResult(false);

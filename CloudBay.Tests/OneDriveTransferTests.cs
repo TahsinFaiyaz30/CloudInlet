@@ -54,6 +54,22 @@ public sealed class OneDriveTransferTests
     }
 
     [TestMethod]
+    public async Task PublicClientRegistrationFailureGivesActionableDiagnosticsWithoutEchoingAccountOrTokenDetails()
+    {
+        using var http = new HttpClient(new DelegateHandler((request, ct) => Task.FromResult(Json(new
+        {
+            error = "invalid_client", error_codes = new[] { 7000218 },
+            error_description = "account-private@example.test SECRET_TOKEN_VALUE"
+        }, HttpStatusCode.BadRequest))));
+        var auth = new OneDriveAuthClient(ClientId, http: http);
+        var error = await Assert.ThrowsExceptionAsync<OneDriveApiException>(() => auth.BeginDeviceSignInAsync());
+        StringAssert.Contains(error.Message, "AADSTS7000218");
+        StringAssert.Contains(error.Message, "Allow public client flows");
+        Assert.IsFalse(error.Message.Contains("account-private"));
+        Assert.IsFalse(error.Message.Contains("SECRET_TOKEN_VALUE"));
+    }
+
+    [TestMethod]
     public async Task SavedOneDrivePagesContinueAtCurrentFolderWithoutRescanningRoot()
     {
         var paths = new List<string>();
@@ -78,6 +94,40 @@ public sealed class OneDriveTransferTests
         Assert.IsNull(third.NextCursor);
         Assert.AreEqual(3, paths.Count);
         Assert.AreEqual(1, paths.Count(path => path.Contains("root/children") && !path.Contains("page=2")));
+    }
+
+    [TestMethod]
+    public async Task ExcludedOneDriveFoldersAreNotTraversedOrCounted()
+    {
+        var requested = new List<string>();
+        using var http = new HttpClient(new DelegateHandler((request, ct) =>
+        {
+            requested.Add(request.RequestUri!.AbsolutePath);
+            return Task.FromResult(Json(new { value = new[] { Item("excluded", "Ignore", 0, "v1", true), Item("kept", "keep.txt", 3, "v1", false) } }));
+        }));
+        var page = await new OneDriveTransferEndpoint(Client(http), Location).DiscoverAsync(null, new[] { "Ignore" });
+        Assert.IsNull(page.NextCursor);
+        Assert.AreEqual("keep.txt", page.Entries.Single().RelativePath);
+        Assert.AreEqual(1, requested.Count);
+    }
+
+    [TestMethod]
+    public async Task SeparateConnectedAccountsShareTheClientBandwidthBudget()
+    {
+        using var http = new HttpClient(new DelegateHandler(async (request, ct) =>
+        {
+            await request.Content!.CopyToAsync(Stream.Null, ct);
+            return Json(Item("uploaded", "file.bin", 64 * 1024, "version", false));
+        }));
+        var budget = new TransferBandwidthBudget();
+        OneDriveClient Account(string token) => new(new(ClientId, tokens: new(token, "refresh", DateTimeOffset.UtcNow.AddHours(1), "Files.ReadWrite"), http: http), http, budget);
+        var first = Account("first-account"); var second = Account("second-account");
+        first.Configure(128 * 1024, 0, 2, 1);
+        second.Configure(128 * 1024, 0, 2, 1);
+        var timer = Stopwatch.StartNew();
+        await Task.WhenAll(first.PutSmallAsync("drive", "root", "first.bin", new byte[64 * 1024], "fail", null),
+            second.PutSmallAsync("drive", "root", "second.bin", new byte[64 * 1024], "fail", null));
+        Assert.IsTrue(timer.Elapsed >= TimeSpan.FromMilliseconds(850), "The two accounts must share 128 KiB/s rather than each receiving that rate.");
     }
 
     [TestMethod]
