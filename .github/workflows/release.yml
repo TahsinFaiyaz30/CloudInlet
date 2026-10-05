@@ -1,0 +1,196 @@
+name: GitHub release
+
+on:
+  workflow_run:
+    workflows: [Windows CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Publish the unreleased central version, or build without publishing
+        type: choice
+        options: [release, verify]
+        default: release
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudbay-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: windows-2025
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      revision: ${{ steps.version.outputs.sourceRevision }}
+      build: ${{ steps.version.outputs.build }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+      - name: Resolve immutable release version
+        id: version
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ACTION: ${{ inputs.action || 'release' }}
+          SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:SOURCE_BRANCH -ne 'main') { throw 'Releases are built only from main.' }
+          git fetch origin main --tags
+          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the release source.' }
+          $version = .\scripts\get-release-version.ps1 -CheckRelease -GitHubOutput
+          $main = (git rev-parse origin/main).Trim()
+          if ($main -cne $version.sourceRevision) {
+            'A newer main commit exists; this older completed CI run does not publish a release.' >> $env:GITHUB_STEP_SUMMARY
+            'build=false' >> $env:GITHUB_OUTPUT
+            'publish=false' >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          $publish = $version.shouldRelease
+          if (!$publish) {
+            $existing = gh release view $version.tag --repo $env:GITHUB_REPOSITORY --json isDraft 2>$null
+            if ($LASTEXITCODE -eq 0 -and ($existing | ConvertFrom-Json).isDraft) {
+              $tagRevision = (git rev-list -n 1 $version.tag).Trim()
+              if ($tagRevision -cne $version.sourceRevision) { throw 'Existing draft belongs to a different immutable commit.' }
+              $publish = $true
+            }
+          }
+          $build = $publish -or $env:RELEASE_ACTION -eq 'verify'
+          if ($env:RELEASE_ACTION -eq 'verify') { $publish = $false }
+          "build=$($build.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "publish=$($publish.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          $version.reason >> $env:GITHUB_STEP_SUMMARY
+
+  installers:
+    needs: prepare
+    if: needs.prepare.outputs.build == 'true'
+    runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [Debug, Release]
+    environment: github-release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 8.0.x
+      - name: Compile, test, and build EXE, MSI, and portable ZIP
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_REVISION: ${{ needs.prepare.outputs.revision }}
+          RELEASE_CONFIGURATION: ${{ matrix.configuration }}
+          CLOUDBAY_SIGNING_PFX_BASE64: ${{ secrets.CLOUDBAY_SIGNING_PFX_BASE64 }}
+          CLOUDBAY_SIGNING_PFX_PASSWORD: ${{ secrets.CLOUDBAY_SIGNING_PFX_PASSWORD }}
+        run: |
+          .\scripts\build-release-artifacts.ps1 -Version $env:RELEASE_VERSION -SourceRevision $env:RELEASE_REVISION -Configuration $env:RELEASE_CONFIGURATION -OutputDirectory artifacts/packages -HostedTests
+      - name: Retain tests and installer build evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: CloudBay-release-evidence-${{ matrix.configuration }}
+          path: |
+            artifacts/release-build/${{ matrix.configuration }}/Tests/*.trx
+            artifacts/packages/*validation.json
+          if-no-files-found: ignore
+      - name: Retain release payload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: CloudBay-payload-${{ matrix.configuration }}
+          path: artifacts/packages/*
+          if-no-files-found: error
+      - name: Retain Release app for Store packaging
+        if: matrix.configuration == 'Release'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: CloudBay-store-source
+          path: artifacts/release-build/Release/App/*
+          if-no-files-found: error
+
+  store-package:
+    needs: [prepare, installers]
+    if: >-
+      needs.prepare.outputs.build == 'true' &&
+      vars.CLOUDBAY_STORE_IDENTITY_NAME != '' &&
+      vars.CLOUDBAY_STORE_PUBLISHER != '' &&
+      vars.CLOUDBAY_STORE_PUBLISHER_DISPLAY_NAME != ''
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: CloudBay-store-source
+          path: artifacts/store-source
+      - name: Build Partner Center MSIX and MSIXUPLOAD
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_REVISION: ${{ needs.prepare.outputs.revision }}
+          CLOUDBAY_STORE_IDENTITY_NAME: ${{ vars.CLOUDBAY_STORE_IDENTITY_NAME }}
+          CLOUDBAY_STORE_PUBLISHER: ${{ vars.CLOUDBAY_STORE_PUBLISHER }}
+          CLOUDBAY_STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.CLOUDBAY_STORE_PUBLISHER_DISPLAY_NAME }}
+        run: .\scripts\build-store-package.ps1 -AppFolder artifacts/store-source -Version $env:RELEASE_VERSION -SourceRevision $env:RELEASE_REVISION -OutputDirectory artifacts/store-packages
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: CloudBay-payload-Store
+          path: artifacts/store-packages/*
+          if-no-files-found: error
+
+  publish:
+    needs: [prepare, installers, store-package]
+    if: >-
+      always() && needs.prepare.outputs.publish == 'true' &&
+      needs.installers.result == 'success' &&
+      (needs.store-package.result == 'success' || needs.store-package.result == 'skipped')
+    runs-on: windows-2025
+    environment: github-release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: CloudBay-payload-*
+          merge-multiple: true
+          path: artifacts/release-assets
+      - name: Create complete release validation record
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_REVISION: ${{ needs.prepare.outputs.revision }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $configurations = @('Debug', 'Release') | ForEach-Object {
+            $path = Join-Path artifacts/release-assets "$_-validation.json"
+            $validation = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+            if ($validation.configuration -cne $_ -or $validation.version -cne $env:RELEASE_VERSION -or $validation.sourceRevision -cne $env:RELEASE_REVISION) { throw 'Release payload evidence does not match this build.' }
+            $validation
+          }
+          @{ version = $env:RELEASE_VERSION; sourceRevision = $env:RELEASE_REVISION; configurations = @($configurations); hostedNativeTestsExcluded = $true } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath artifacts/release-assets/release-validation.json -Encoding utf8NoBOM
+      - name: Tag and publish the complete immutable GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REVISION: ${{ needs.prepare.outputs.revision }}
+        run: .\scripts\publish-github-release.ps1 -AssetDirectory artifacts/release-assets -ExpectedRevision $env:RELEASE_REVISION

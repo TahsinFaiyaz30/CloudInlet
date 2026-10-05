@@ -1,0 +1,44 @@
+name: Bump version
+
+on:
+  workflow_dispatch:
+    inputs:
+      component:
+        description: Semantic version component to increment
+        type: choice
+        options: [Patch, Minor, Major]
+        default: Patch
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: cloudbay-version
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Commit the next central version
+        shell: pwsh
+        env:
+          VERSION_COMPONENT: ${{ inputs.component }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          .\scripts\bump-version.ps1 -Component $env:VERSION_COMPONENT -Commit -Push
+      - name: Explicitly run CI for the new commit
+        # GITHUB_TOKEN pushes do not create another push-triggered workflow.
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run windows.yml --ref main --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw 'The version commit was pushed, but CI dispatch failed. Run Windows CI on main manually.' }
