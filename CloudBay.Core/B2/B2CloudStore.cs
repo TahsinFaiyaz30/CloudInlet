@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using CloudBay.Core.Transfers;
 
 namespace CloudBay.Core.B2;
 
@@ -212,13 +213,16 @@ public sealed partial class B2CloudStore : ICloudStore
         if (!source.CanRead) throw new ArgumentException("The upload source must be readable.", nameof(source));
         if (!IsSha1(sha1)) throw new ArgumentException("A 40 digit SHA1 checksum is required.", nameof(sha1));
         await _uploads.EnterAsync(cancellationToken).ConfigureAwait(false);
-        FileStream? staged = null;
+        MemoryStream? staged = null;
         try
         {
             if (!source.CanSeek)
             {
-                // A disk spool gives non-seekable sources safe retries without growing the process heap.
-                staged = TemporaryFile();
+                // Compatibility streams have no replay capability. Bound their RAM replay buffer;
+                // cloud adapters use independent version-checked range reads instead of staging.
+                if (length > 4 * 1024 * 1024)
+                    throw new ArgumentException("Non-seekable uploads larger than 4 MiB require a replayable transfer source. CloudBay never stages upload payloads on disk.", nameof(source));
+                staged = new MemoryStream(checked((int)length));
                 await CopyExactlyAsync(source, staged, length, cancellationToken).ConfigureAwait(false);
                 staged.Position = 0;
                 source = staged;
@@ -626,13 +630,22 @@ public sealed partial class B2CloudStore : ICloudStore
     private async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
     {
         using var inactivity = new TransferInactivity(token,
-            request.Content is SegmentContent ? _transferInactivityTimeout : _metadataTimeout);
+            request.Content is SegmentContent or ReplayableContent ? _transferInactivityTimeout : _metadataTimeout);
         if (request.Content is SegmentContent segment) segment.Inactivity = inactivity;
+        if (request.Content is ReplayableContent replayable) replayable.Inactivity = inactivity;
         try { return await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, inactivity.Token).ConfigureAwait(false); }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         { throw new HttpRequestException("The connection to Backblaze B2 timed out. Changes will retry automatically."); }
+        catch (HttpRequestException) when (request.Content is ReplayableContent { SourceError: TransferSourceChangedException })
+        { throw ((ReplayableContent)request.Content).SourceError!; }
+        catch (HttpRequestException) when (request.Content is ReplayableContent { SourceError: InvalidDataException })
+        { throw ((ReplayableContent)request.Content).SourceError!; }
         catch (HttpRequestException) { throw new HttpRequestException("The connection to Backblaze B2 failed. Check your network connection."); }
-        finally { if (request.Content is SegmentContent uploaded) uploaded.Inactivity = null; }
+        finally
+        {
+            if (request.Content is SegmentContent uploaded) uploaded.Inactivity = null;
+            if (request.Content is ReplayableContent replayed) replayed.Inactivity = null;
+        }
     }
 
     private async Task<JsonDocument> ReadDocumentAsync(HttpResponseMessage response, CancellationToken token)
@@ -870,9 +883,6 @@ public sealed partial class B2CloudStore : ICloudStore
         }
         finally { ArrayPool<byte>.Shared.Return(buffer); }
     }
-
-    private static FileStream TemporaryFile() => new(Path.Combine(Path.GetTempPath(), $"CloudBay-{Guid.NewGuid():N}.upload"),
-        FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 64 * 1024, FileOptions.Asynchronous | FileOptions.DeleteOnClose);
 
     private void ReportDiagnostic(string message)
     {

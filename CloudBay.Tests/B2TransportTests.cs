@@ -1016,13 +1016,13 @@ public sealed class B2TransportTests
     }
 
     [TestMethod]
-    public async Task NonSeekableUploadCanReplayWithoutBufferingWholeFileInMemory()
+    public async Task NonSeekableSmallUploadReplaysWithinBoundedMemoryWithoutDiskSpooling()
     {
         var calls = 0;
         using var store = new B2CloudStore(new FakeHandler(async (r, ct) =>
         {
             if (Operation(r) == "b2_authorize_account") return Authorization();
-            if (Operation(r) == "b2_get_upload_url") return UploadTarget("spool" + calls);
+            if (Operation(r) == "b2_get_upload_url") return UploadTarget("replay" + calls);
             CollectionAssert.AreEqual(Data, await r.Content!.ReadAsByteArrayAsync(ct));
             if (calls++ == 0)
             {
