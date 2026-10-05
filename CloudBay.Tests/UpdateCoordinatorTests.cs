@@ -14,6 +14,36 @@ public sealed class UpdateCoordinatorTests
 {
     private static readonly byte[] Payload = Encoding.UTF8.GetBytes("verified installer fixture");
 
+    [DataTestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task OldNotificationCannotDownloadOrInstallANewerVersionAfterWaitingForACheck(bool install)
+    {
+        await using var fixture = new Fixture();
+        await fixture.Updater.CheckAsync();
+        if (install) await fixture.Updater.DownloadAsync();
+        fixture.Clock.Advance(TimeSpan.FromMinutes(2));
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Responder = async (_, token) =>
+        {
+            entered.TrySetResult();
+            await release.Task.WaitAsync(token);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(Manifest("1.2.0"), UpdateManifestRules.JsonOptions)) };
+        };
+        var check = fixture.Updater.CheckAsync();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var action = install ? fixture.Updater.InstallVersionAsync("1.1.0") : fixture.Updater.DownloadVersionAsync("1.1.0");
+        Assert.IsFalse(action.IsCompleted);
+        release.TrySetResult();
+        await check;
+        await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => action);
+        Assert.AreEqual("1.2.0", fixture.Updater.Snapshot.Candidate!.Version);
+        Assert.AreEqual(0, fixture.Installer.Calls);
+        Assert.AreEqual(install ? 3 : 2, fixture.Requests.Count, "Only the feed check may run; the stale button must not transfer a different installer.");
+    }
+
     [TestMethod]
     public async Task RepairedPreferencesStayValidAndRetainVerifiedDownloadAcrossRestart()
     {
@@ -487,7 +517,7 @@ public sealed class UpdateCoordinatorTests
             if (fixture.Updater.Preferences.AutomaticallyDownload || fixture.Updater.Preferences.AutomaticallyInstall || queued.Task.IsCompleted) return;
             var action = (Task)typeof(UpdateCoordinator).GetMethod(install ? "InstallCoreAsync" : "DownloadCoreAsync",
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
-                .Invoke(fixture.Updater, [false, CancellationToken.None])!;
+                .Invoke(fixture.Updater, [false, CancellationToken.None, null])!;
             if (action.IsCompleted) queued.TrySetException(new InvalidOperationException("The automatic action did not wait for the preference operation gate."));
             else queued.TrySetResult(action);
         };

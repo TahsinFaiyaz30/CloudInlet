@@ -86,14 +86,16 @@ try {
     $identityXml = [Security.SecurityElement]::Escape($PackageIdentityName)
     $publisherXml = [Security.SecurityElement]::Escape($Publisher)
     $displayXml = [Security.SecurityElement]::Escape($PublisherDisplayName)
+    $notificationActivatorId = if ($LocalValidationIdentity) { 'C722D540-4407-4B56-966E-4C5DFCB4FF90' } else { 'B424C182-71F3-45E8-A349-321EB851B896' }
     @"
 <?xml version="1.0" encoding="utf-8"?>
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
  xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6"
+ xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
- IgnorableNamespaces="uap desktop desktop6 rescap">
+ IgnorableNamespaces="uap desktop desktop6 com rescap">
  <Identity Name="$identityXml" Publisher="$publisherXml" Version="$Version.0" ProcessorArchitecture="x64" />
  <Properties>
   <DisplayName>CloudBay</DisplayName><PublisherDisplayName>$displayXml</PublisherDisplayName><Logo>StoreAssets\Logo50.png</Logo>
@@ -106,7 +108,16 @@ try {
   <uap:VisualElements DisplayName="CloudBay" Description="Native Windows backup and Files On-Demand for Backblaze B2." BackgroundColor="transparent" Square150x150Logo="StoreAssets\Logo150.png" Square44x44Logo="StoreAssets\Logo44.png" />
   <Extensions><desktop:Extension Category="windows.startupTask" Executable="CloudBay.exe" EntryPoint="Windows.FullTrustApplication">
    <desktop:StartupTask TaskId="CloudBayStartup" Enabled="false" DisplayName="CloudBay" />
-  </desktop:Extension></Extensions>
+  </desktop:Extension>
+  <desktop:Extension Category="windows.toastNotificationActivation">
+   <desktop:ToastNotificationActivation ToastActivatorCLSID="$notificationActivatorId" />
+  </desktop:Extension>
+  <com:Extension Category="windows.comServer"><com:ComServer>
+   <com:ExeServer Executable="CloudBay.exe" DisplayName="CloudBay" Arguments="----AppNotificationActivated:">
+    <com:Class Id="$notificationActivatorId" />
+   </com:ExeServer>
+  </com:ComServer></com:Extension>
+  </Extensions>
  </Application></Applications>
  <Capabilities><Capability Name="internetClient" /><rescap:Capability Name="runFullTrust" /><rescap:Capability Name="unvirtualizedResources" /></Capabilities>
 </Package>

@@ -104,6 +104,7 @@ try {
         throw "The packaged app did not complete the isolated runtime probe ($exitDescription). Activation process: $processId; diagnostics: $resultDirectory"
     }
     $result = Get-Content -LiteralPath $completion -Raw | ConvertFrom-Json
+    if ($result.notificationRegistration -ne $true) { throw 'The packaged notification registration was not confirmed.' }
     if ($result.version -cne $expectedVersion -or $result.packageName -cne 'CloudBay.LocalValidation' -or $result.packageFamilyName -cne $registered.PackageFamilyName -or $result.installerKind -cne 'Store' -or $result.startupTaskId -cne 'CloudBayStartup') { throw 'The packaged runtime identity or startup-task probe returned unexpected results.' }
     if ($process -and !$process.WaitForExit(10000)) { throw 'The isolated Store runtime process did not finish gracefully.' }
     if ($process -and $process.ExitCode -ne 0) { throw "The isolated Store runtime process returned exit code $($process.ExitCode)." }

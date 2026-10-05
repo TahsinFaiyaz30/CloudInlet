@@ -18,6 +18,7 @@ public sealed partial class MainWindow
         RootGrid.RequestedTheme = Environment.GetCommandLineArgs().Contains("--ui-smoke-theme=Light") ? ElementTheme.Light : ElementTheme.Dark;
         await InitialNavigationReady.WaitAsync(TimeSpan.FromSeconds(30));
         await RunUpdateUiValidationAsync(output, RootGrid.RequestedTheme == ElementTheme.Light ? "-light" : "");
+        await RunNotificationUiValidationAsync(output, RootGrid.RequestedTheme == ElementTheme.Light ? "-light" : "");
     }
     private async Task RunUpdateUiValidationAsync(string output, string suffix)
     {

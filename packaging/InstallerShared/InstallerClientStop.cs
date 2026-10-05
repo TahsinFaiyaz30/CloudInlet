@@ -17,7 +17,28 @@ namespace CloudBay.Packaging
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool GetNamedPipeServerProcessId(SafePipeHandle pipe, out uint processId);
 
-        public static void Stop(string flavor, string installationDirectory)
+        public static void Stop(string flavor, string installationDirectory, bool removeNotifications = false)
+        {
+            StopCore(flavor, installationDirectory);
+            if (!removeNotifications) return;
+            var image = Path.Combine(Path.GetFullPath(installationDirectory), "CloudBay.exe");
+            if (!File.Exists(image)) return;
+            if ((File.GetAttributes(image) & FileAttributes.ReparsePoint) != 0)
+                throw new IOException("Notification cleanup cannot launch a linked application file.");
+            using (var process = Process.Start(new ProcessStartInfo(image, "--unregister-notifications")
+            {
+                UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden,
+                WorkingDirectory = Path.GetDirectoryName(image)
+            }))
+            {
+                if (process == null || !process.WaitForExit(30000))
+                    throw new IOException("Windows notification cleanup has not finished. Wait and try uninstalling again.");
+                if (process.ExitCode != 0)
+                    throw new IOException("Windows notification cleanup could not finish. Restart CloudBay, then try uninstalling again.");
+            }
+        }
+
+        private static void StopCore(string flavor, string installationDirectory)
         {
             if (flavor != "Debug" && flavor != "Release") throw new ArgumentException("Unsupported build flavor.");
             var sid = WindowsIdentity.GetCurrent().User?.Value ?? throw new IOException("The current Windows user could not be identified.");

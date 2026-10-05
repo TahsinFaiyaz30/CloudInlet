@@ -68,6 +68,7 @@ public sealed record AppSettings
     public long DownloadBytesPerSecond { get; init; }
     public int PollSeconds { get; init; } = 60;
     public string Theme { get; init; } = "System";
+    public Notifications.NotificationPreferences Notifications { get; init; } = new();
     public List<string> Exclusions { get; init; } = ["~$*"];
     /// <summary>Disabled legacy expressions retain their original syntax and matching semantics.</summary>
     public List<string> DisabledLegacyExclusions { get; init; } = [];

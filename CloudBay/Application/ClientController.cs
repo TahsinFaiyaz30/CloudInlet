@@ -24,6 +24,7 @@ public sealed record PreferenceUpdate
     public long? DownloadBytesPerSecond { get; init; }
     public int? PollSeconds { get; init; }
     public string? Theme { get; init; }
+    public CloudBay.Core.Notifications.NotificationPreferences? Notifications { get; init; }
     public IReadOnlyList<string>? Exclusions { get; init; }
     public IReadOnlyList<SelectedExclusion>? SelectedExclusions { get; init; }
     public IReadOnlyList<GuidedExclusion>? GuidedExclusions { get; init; }
@@ -264,7 +265,7 @@ public sealed partial class ClientController : IAsyncDisposable
                 UploadConcurrency = settings.UploadConcurrency, UploadBytesPerSecond = settings.UploadBytesPerSecond,
                 DownloadConcurrency = settings.DownloadConcurrency, UploadMode = settings.UploadMode,
                 DownloadBytesPerSecond = settings.DownloadBytesPerSecond, PollSeconds = settings.PollSeconds,
-                Theme = settings.Theme, Exclusions = settings.Exclusions.ToArray(),
+                Theme = settings.Theme, Notifications = settings.Notifications, Exclusions = settings.Exclusions.ToArray(),
                 DisabledLegacyExclusions = settings.DisabledLegacyExclusions.ToArray(),
                 SelectedExclusions = settings.SelectedExclusions.ToArray(), GuidedExclusions = settings.GuidedExclusions.ToArray()
             });
@@ -307,6 +308,7 @@ public sealed partial class ClientController : IAsyncDisposable
             DownloadBytesPerSecond = update.DownloadBytesPerSecond ?? previous.DownloadBytesPerSecond,
             PollSeconds = update.PollSeconds ?? previous.PollSeconds,
             Theme = update.Theme ?? previous.Theme,
+            Notifications = update.Notifications ?? previous.Notifications,
             Exclusions = update.Exclusions?.ToList() ?? previous.Exclusions,
             DisabledLegacyExclusions = update.DisabledLegacyExclusions?.ToList() ?? previous.DisabledLegacyExclusions,
             SelectedExclusions = update.SelectedExclusions?.ToList() ?? previous.SelectedExclusions,
@@ -323,7 +325,7 @@ public sealed partial class ClientController : IAsyncDisposable
             !previous.DisabledLegacyExclusions.SequenceEqual(settings.DisabledLegacyExclusions) ||
             !previous.SelectedExclusions.SequenceEqual(settings.SelectedExclusions) || !previous.GuidedExclusions.SequenceEqual(settings.GuidedExclusions);
         var startupChanged = previous.StartAtSignIn != settings.StartAtSignIn;
-        if (!transferChanged && !syncChanged && !startupChanged && previous.Theme == settings.Theme) return previous;
+        if (!transferChanged && !syncChanged && !startupChanged && previous.Theme == settings.Theme && previous.Notifications == settings.Notifications) return previous;
 
         if (startupChanged && _manageStartup && UpdateInstallation.IsPackaged)
         {

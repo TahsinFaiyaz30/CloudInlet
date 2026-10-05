@@ -169,7 +169,13 @@ public sealed class UpdateCoordinator : IAsyncDisposable
     public Task DownloadAsync(CancellationToken cancellationToken = default) =>
         DownloadCoreAsync(manual: true, cancellationToken);
 
-    private async Task DownloadCoreAsync(bool manual, CancellationToken cancellationToken)
+    public Task DownloadVersionAsync(string expectedVersion, CancellationToken cancellationToken = default)
+    {
+        if (!UpdateVersion.TryParse(expectedVersion, out _)) throw new ArgumentException("Invalid requested update version.", nameof(expectedVersion));
+        return DownloadCoreAsync(manual: true, cancellationToken, expectedVersion);
+    }
+
+    private async Task DownloadCoreAsync(bool manual, CancellationToken cancellationToken, string? expectedVersion = null)
     {
         using var operation = CreateOperation(cancellationToken);
         cancellationToken = operation.Token;
@@ -178,6 +184,8 @@ public sealed class UpdateCoordinator : IAsyncDisposable
         try
         {
             if (Snapshot.State == UpdateState.Installing) return;
+            if (expectedVersion is not null && _candidate?.Version != expectedVersion)
+                throw new InvalidOperationException("This notification refers to an older update. Review the current update in About CloudBay.");
             if (!manual && !Preferences.AutomaticallyDownload) return;
             var candidate = _candidate ?? throw new InvalidOperationException("Check for an available update first.");
             if (_identity.InstallerKind is UpdateInstallerKind.Store or UpdateInstallerKind.Portable)
@@ -256,7 +264,13 @@ public sealed class UpdateCoordinator : IAsyncDisposable
     public Task InstallAsync(CancellationToken cancellationToken = default) =>
         InstallCoreAsync(manual: true, cancellationToken);
 
-    private async Task InstallCoreAsync(bool manual, CancellationToken cancellationToken)
+    public Task InstallVersionAsync(string expectedVersion, CancellationToken cancellationToken = default)
+    {
+        if (!UpdateVersion.TryParse(expectedVersion, out _)) throw new ArgumentException("Invalid requested update version.", nameof(expectedVersion));
+        return InstallCoreAsync(manual: true, cancellationToken, expectedVersion);
+    }
+
+    private async Task InstallCoreAsync(bool manual, CancellationToken cancellationToken, string? expectedVersion = null)
     {
         using var operation = CreateOperation(cancellationToken);
         cancellationToken = operation.Token;
@@ -265,6 +279,8 @@ public sealed class UpdateCoordinator : IAsyncDisposable
         try
         {
             if (Snapshot.State == UpdateState.Installing) return;
+            if (expectedVersion is not null && _candidate?.Version != expectedVersion)
+                throw new InvalidOperationException("This notification refers to an older update. Review the current update in About CloudBay.");
             if (!manual && (!Preferences.AutomaticallyInstall ||
                 _lastInstallAttempt >= _clock.GetUtcNow().AddHours(-1))) return;
             if (_installer is null || _identity.InstallerKind is UpdateInstallerKind.Store or UpdateInstallerKind.Portable)

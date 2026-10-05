@@ -222,7 +222,7 @@ begin
   Image := ExpandConstant('{app}\CloudBay.SetupHelper.exe');
   Result := True;
   if FileExists(Image) then
-    Result := Exec(Image, '--flavor {#BuildFlavor} --install-directory "' + RemoveBackslashUnlessRoot(ExpandConstant('{app}')) + '"', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
+    Result := Exec(Image, '--flavor {#BuildFlavor} --install-directory "' + RemoveBackslashUnlessRoot(ExpandConstant('{app}')) + '" --remove-notifications', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
   if not Result then
     SuppressibleMsgBox('CloudBay is still safely finishing a transfer. Quit it from the tray menu before uninstalling.', mbError, MB_OK, IDOK);
 end;

@@ -21,6 +21,7 @@ public sealed class ClientControllerTests
     [DataRow("{\"SchemaVersion\":1,\"CustomBackups\":null}")]
     [DataRow("{\"SchemaVersion\":1,\"Backups\":[null]}")]
     [DataRow("{\"SchemaVersion\":1,\"SelectedExclusions\":null}")]
+    [DataRow("{\"SchemaVersion\":1,\"Notifications\":null}")]
     [DataRow("{\"SchemaVersion\":1,\"GuidedExclusions\":[null]}")]
     [DataRow("{\"SchemaVersion\":1,\"DisabledLegacyExclusions\":null}")]
     public async Task InvalidBackupCollectionsEnterRecoveryBeforeUiOrLifecycleReads(string damagedSettings)
@@ -167,7 +168,8 @@ public sealed class ClientControllerTests
                 Task.Run(() => controller.UpdatePreferencesAsync(limits)), Task.Run(() => controller.UpdatePreferencesAsync(policy)),
                 Task.Run(() => controller.UpdatePreferencesAsync(new() { SelectedExclusions = selections })),
                 Task.Run(() => controller.UpdatePreferencesAsync(new() { GuidedExclusions = guided })),
-                Task.Run(() => controller.UpdatePreferencesAsync(new() { DisabledLegacyExclusions = ["~$*"] })));
+                Task.Run(() => controller.UpdatePreferencesAsync(new() { DisabledLegacyExclusions = ["~$*"] })),
+                Task.Run(() => controller.UpdatePreferencesAsync(new() { Notifications = new() { Enabled = false, Sound = true } })));
             var saved = storage.LoadSettings();
             Assert.AreEqual("Dark", saved.Theme);
             Assert.AreEqual(120_000L, saved.UploadBytesPerSecond);
@@ -177,6 +179,8 @@ public sealed class ClientControllerTests
             Assert.AreEqual(UploadMode.Manual, saved.UploadMode);
             Assert.IsFalse(saved.PauseOnMetered);
             Assert.IsFalse(saved.PauseOnBatterySaver);
+            Assert.IsFalse(saved.Notifications.Enabled);
+            Assert.IsTrue(saved.Notifications.Sound);
             Assert.AreEqual(original.KeyId, saved.KeyId);
             Assert.AreEqual(original.BucketId, saved.BucketId);
             Assert.AreEqual(original.BucketName, saved.BucketName);
@@ -192,6 +196,7 @@ public sealed class ClientControllerTests
             CollectionAssert.AreEqual(saved.SelectedExclusions, restarted.Settings.SelectedExclusions);
             CollectionAssert.AreEqual(saved.GuidedExclusions, restarted.Settings.GuidedExclusions);
             CollectionAssert.AreEqual(saved.DisabledLegacyExclusions, restarted.Settings.DisabledLegacyExclusions);
+            Assert.AreEqual(saved.Notifications, restarted.Settings.Notifications);
             Assert.AreEqual(startup, ReadStartup(), "Theme, transfer, and network preferences must not rewrite the startup entry.");
             Assert.IsFalse(Directory.Exists(root), "Editing preferences must not open a connection or register a root.");
         }

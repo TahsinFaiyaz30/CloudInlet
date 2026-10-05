@@ -237,6 +237,7 @@ public sealed partial class MainWindow : Window
         "settings/account" => "settings/account", "settings/sync" => "settings/sync",
         "settings/network" => "settings/network", "settings/appearance" => "settings/appearance",
         "settings/general" => "settings/general", "settings/about" => "settings/about",
+        "settings/notifications" => "settings/notifications",
         _ => "overview"
     };
 
@@ -443,6 +444,7 @@ public sealed partial class MainWindow : Window
                 "network" => "Transfers and power",
                 "appearance" => "Appearance",
                 "general" => "Startup",
+                "notifications" => "Notifications",
                 "about" => "About CloudBay",
                 _ => "Settings"
             },
@@ -488,6 +490,7 @@ public sealed partial class MainWindow : Window
             if (reloadPreferences || previous is null || MeteredBox.IsOn == previous.PauseOnMetered) MeteredBox.IsOn = settings.PauseOnMetered;
             if (reloadPreferences || previous is null || BatterySaverBox.IsOn == previous.PauseOnBatterySaver) BatterySaverBox.IsOn = settings.PauseOnBatterySaver;
             if (reloadPreferences || previous is null || StartAtSignInBox.IsOn == previous.StartAtSignIn) StartAtSignInBox.IsOn = settings.StartAtSignIn;
+            LoadNotificationPreferences();
             ExclusionsEditor.SetSettings(settings, presentationOnly: _viewModel.Preview is not null);
             if (reloadPreferences || previous is null || (ThemeBox.SelectedItem as ComboBoxItem)?.Tag as string == previous.Theme)
                 ThemeBox.SelectedItem = ThemeBox.Items.Cast<ComboBoxItem>().FirstOrDefault(item => (string)item.Tag == settings.Theme) ?? ThemeBox.Items[0];
@@ -1556,7 +1559,7 @@ public sealed partial class MainWindow : Window
         {
             ["account"] = AccountSettingsDetail, ["sync"] = SyncSettingsDetail,
             ["network"] = NetworkSettingsDetail, ["appearance"] = AppearanceSettingsDetail,
-            ["general"] = GeneralSettingsDetail, ["about"] = AboutSettingsDetail
+            ["general"] = GeneralSettingsDetail, ["notifications"] = NotificationSettingsDetail, ["about"] = AboutSettingsDetail
         };
         _settingsRoute = routes.ContainsKey(route) ? route : "home";
         foreach (var panel in routes.Values) panel.Visibility = Visibility.Collapsed;
@@ -1971,6 +1974,7 @@ public sealed partial class MainWindow : Window
             var suffix = theme == ElementTheme.Light ? "-light" : "";
             SetPresentation(ClientPreview.Connected(), theme);
             await RunUpdateUiValidationAsync(outputDirectory, suffix);
+            await RunNotificationUiValidationAsync(outputDirectory, suffix);
             var initialHistory = ClientPreview.ActivityActions();
             SetPresentation(initialHistory, theme);
             for (var round = 0; round < 4; round++)

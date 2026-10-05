@@ -7,6 +7,7 @@ The previous mounted-drive migration helper is preserved on the **`legacy` branc
 ## Features
 
 - Notification area icon and activity flyout with live per-file uploads/downloads, waiting counts, recent history, pause/resume, quick settings, and full settings. Activity includes All activity, In progress, Queued, and History filters.
+- Native Windows notifications with action buttons for reviewing problems, retrying sync, opening folders, and downloading or installing the matching update. Notification categories, completion summaries, and sound are configurable under Settings → Notifications.
 - Files On-Demand, native Explorer status, download progress, always-available files, and freeing local space.
 - Windows Storage Sense integration for eligible clean, unpinned cloud content. Windows owns cache retention; configure it through **Settings → Files and storage → Windows Storage Sense**.
 - Backup for Desktop, Documents, Pictures, Music, Videos, Downloads, Favorites, Contacts, Saved Games, Links, Searches, and 3D Objects where Windows makes them available. Choose the current Windows folder, its matching folder in another cloud account, or a browsed folder. Copy, verified move, and turning on without importing are explicit choices before changing the real Windows default location.

@@ -897,6 +897,16 @@
                                                 Background="{ThemeResource DividerStrokeColorDefaultBrush}"
                                                 Margin="20,0" />
                                             <settings:SettingsCard
+                                                x:Name="NotificationsCategory"
+                                                Header="Notifications"
+                                                Description="Choose which Windows alerts you receive."
+                                                MinHeight="68" Padding="20,14"
+                                                IsClickEnabled="True" Tag="notifications" Click="SettingsCategory_Click"
+                                                CornerRadius="4" Background="Transparent" BorderThickness="0">
+                                                <settings:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE7F4;" FontSize="20" Foreground="{ThemeResource TextFillColorSecondaryBrush}" /></settings:SettingsCard.HeaderIcon>
+                                            </settings:SettingsCard>
+                                            <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" Margin="20,0" />
+                                            <settings:SettingsCard
                                                 x:Name="AboutCategory"
                                                 Description="Version information and local diagnostics."
                                                 MinHeight="68"
@@ -1190,6 +1200,43 @@
                                             Toggled="Preference_Toggled" />
                                     </settings:SettingsCard>
                                 </StackPanel>
+                                <ContentControl x:Name="NotificationSettingsDetail" HorizontalContentAlignment="Stretch" Visibility="Collapsed">
+                                  <StackPanel Spacing="4">
+                                    <settings:SettingsCard Header="Windows notifications" Description="Show CloudBay alerts in Notification Center with buttons for related actions.">
+                                        <settings:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE7E7;" /></settings:SettingsCard.HeaderIcon>
+                                        <ToggleSwitch x:Name="NotificationsSwitch" Style="{StaticResource CloudBayToggleStyle}" AutomationProperties.Name="Windows notifications" Toggled="NotificationPreference_Toggled" />
+                                    </settings:SettingsCard>
+                                    <ContentControl x:Name="NotificationChoices" HorizontalContentAlignment="Stretch">
+                                      <StackPanel Spacing="4">
+                                        <settings:SettingsCard Header="Backup problems" Description="Grouped alerts when files or your account need attention.">
+                                            <settings:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE7BA;" /></settings:SettingsCard.HeaderIcon>
+                                            <ToggleSwitch x:Name="NotificationProblemsSwitch" Style="{StaticResource CloudBayToggleStyle}" AutomationProperties.Name="Notify about backup problems" Toggled="NotificationPreference_Toggled" />
+                                        </settings:SettingsCard>
+                                        <settings:SettingsCard Header="Folder backup changes" Description="Confirm when folder backup is enabled or stopped.">
+                                            <settings:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE8B7;" /></settings:SettingsCard.HeaderIcon>
+                                            <ToggleSwitch x:Name="NotificationFoldersSwitch" Style="{StaticResource CloudBayToggleStyle}" AutomationProperties.Name="Notify about folder backup changes" Toggled="NotificationPreference_Toggled" />
+                                        </settings:SettingsCard>
+                                        <settings:SettingsCard Header="Sync completed" Description="A single summary when your transfers finish.">
+                                            <settings:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE895;" /></settings:SettingsCard.HeaderIcon>
+                                            <ToggleSwitch x:Name="NotificationSyncSwitch" Style="{StaticResource CloudBayToggleStyle}" AutomationProperties.Name="Notify when sync completes" Toggled="NotificationPreference_Toggled" />
+                                        </settings:SettingsCard>
+                                        <settings:SettingsCard Header="App updates" Description="Notify when an update is available or ready to install.">
+                                            <settings:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE896;" /></settings:SettingsCard.HeaderIcon>
+                                            <ToggleSwitch x:Name="NotificationUpdatesSwitch" Style="{StaticResource CloudBayToggleStyle}" AutomationProperties.Name="Notify about app updates" Toggled="NotificationPreference_Toggled" />
+                                        </settings:SettingsCard>
+                                        <settings:SettingsCard Header="Notification sound" Description="Windows controls the sound and Do not disturb behavior.">
+                                            <settings:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE767;" /></settings:SettingsCard.HeaderIcon>
+                                            <ToggleSwitch x:Name="NotificationSoundSwitch" Style="{StaticResource CloudBayToggleStyle}" AutomationProperties.Name="Play a notification sound" Toggled="NotificationPreference_Toggled" />
+                                        </settings:SettingsCard>
+                                      </StackPanel>
+                                    </ContentControl>
+                                    <settings:SettingsCard Header="Windows notification settings" Description="Control banners, Notification Center, and Do not disturb.">
+                                        <settings:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE713;" /></settings:SettingsCard.HeaderIcon>
+                                        <Button Content="Open Windows settings" Click="WindowsNotifications_Click" />
+                                    </settings:SettingsCard>
+                                    <InfoBar x:Name="NotificationNotice" IsOpen="False" IsClosable="True" Severity="Warning" Title="Notification settings" />
+                                  </StackPanel>
+                                </ContentControl>
                                 <StackPanel x:Name="AboutSettingsDetail" Spacing="4" Visibility="Collapsed">
                                     <settings:SettingsExpander x:Name="VersionCard" Header="CloudBay">
                                         <settings:SettingsExpander.HeaderIcon>

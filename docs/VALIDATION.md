@@ -1,5 +1,15 @@
 # CloudBay validation record
 
+## Native notifications and action buttons — 2026-10-05
+
+Windows notifications now group backup problems, folder changes, optional transfer-completion summaries, and update availability. Their buttons execute fixed client actions through the same-user, same-build activation pipe. Update actions carry an exact version checked inside the updater operation gate, so an older Notification Center button cannot install a newer candidate. Notification preferences merge without changing backup or account settings. Regular exit retains cold notification activation; permanent EXE/MSI uninstall clears the installed executable's notification registration after graceful shutdown.
+
+The integrated Release suite passed **611/611 with zero skips** in `artifacts/acceptance/notifications-final/notifications-final.trx`; the focused policy and actual named-pipe activation subset passed **39/39**. An earlier integrated run had one transient access-denied error in its native atomic file replacement fixture. Both replacement variants subsequently passed ten consecutive focused runs, followed by the complete 611-test pass, without changing the native code or weakening the test.
+
+A uniquely copied executable exercised real Windows notification registration, suppressed display, exact stored update-button arguments, group removal, and permanent registration cleanup. Evidence is in `artifacts/validation/notification-native-20261005T100051Z-e1661e26/Evidence/native-checks.json`; no account controller or popup was created. This validates the native payload and registration APIs; human interaction with Notification Center is distinct from this isolated probe. Real EXE/MSI update-worker and uninstall fixtures also passed in `artifacts/validation/installer-fixture-43a9fb5955e54a3ea41d5b79cbdd6ae0/installer-validation.json`.
+
+Release publishing now locates an existing unpublished draft by its authenticated release-list identity when GitHub's tag endpoint returns 404, and verifies uploaded assets through the release ID before publication. Cancellation cannot publish a release. Interrupted-upload recovery and the existing release gates passed **64 isolated assertions**; all four workflows passed actionlint. The empty, unpublished 1.0.0 draft from the cancelled earlier build was removed before rebuilding the new notification milestone; no public release was replaced.
+
 ## Public 1.0.0 baseline and update acceptance — 2026-10-05
 
 `version.json` now defines the public **1.0.0** baseline. Earlier 2.0.x entries below describe internal development milestones and remain as historical evidence. The release pipeline validates the central version, builds separate Debug and Release EXE/MSI/portable distributions, and publishes an immutable tag only after its gates pass. The Store workflow requires a reserved Partner Center identity before production packaging or submission.

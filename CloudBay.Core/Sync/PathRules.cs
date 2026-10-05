@@ -190,6 +190,7 @@ public static class PathRules
 
     public static void ValidateSettings(AppSettings settings)
     {
+        if (settings.Notifications is null) throw new InvalidDataException("The saved notification preferences are invalid.");
         if (settings.KeyId is null || settings.BucketId is null || settings.BucketName is null || settings.AccountId is null ||
             settings.RootPath is null || settings.Prefix is null || settings.Theme is null ||
             settings.Backups is null || settings.CustomBackups is null || settings.Exclusions is null ||

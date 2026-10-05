@@ -108,7 +108,7 @@ namespace CloudBay.Packaging
         [CustomAction]
         public static ActionResult StopBeforeUninstall(Session session) => Guard(session, () =>
         {
-            InstallerClientStop.Stop(Flavor(session), ValidateDirectory(session["INSTALLDIR"]));
+            InstallerClientStop.Stop(Flavor(session), ValidateDirectory(session["INSTALLDIR"]), removeNotifications: true);
             return ActionResult.Success;
         });
 
