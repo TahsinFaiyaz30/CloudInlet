@@ -55,7 +55,7 @@ public sealed record AppSettings
     public string BucketId { get; init; } = "";
     public string BucketName { get; init; } = "";
     public string AccountId { get; init; } = "";
-    public string RootPath { get; init; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "CloudBay");
+    public string RootPath { get; init; } = BuildInfo.DefaultRootPath;
     public string Prefix { get; init; } = "CloudBay/";
     public bool StartAtSignIn { get; init; } = true;
     public bool FilesOnDemand { get; init; } = true;

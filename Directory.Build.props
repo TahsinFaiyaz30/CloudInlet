@@ -1,0 +1,11 @@
+<Project>
+  <PropertyGroup>
+    <CloudBayVersionFile>$(MSBuildThisFileDirectory)version.json</CloudBayVersionFile>
+    <CloudBayBaseVersion>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(CloudBayVersionFile)')), '[0-9]+\.[0-9]+\.[0-9]+').Value)</CloudBayBaseVersion>
+    <Version Condition="'$(Version)' == ''">$(CloudBayBaseVersion)</Version>
+    <CloudBayBuildFlavor Condition="'$(CloudBayBuildFlavor)' == ''">$(Configuration)</CloudBayBuildFlavor>
+    <DefineConstants Condition="'$(CloudBayBuildFlavor)' == 'Debug'">$(DefineConstants);CLOUDBAY_DEBUG</DefineConstants>
+    <Company>CloudBay</Company>
+    <Product>CloudBay</Product>
+  </PropertyGroup>
+</Project>
