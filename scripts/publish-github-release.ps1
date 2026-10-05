@@ -54,7 +54,9 @@ else {
     # Distinguish a missing release from authentication, throttling, or service failures.
     $all = Invoke-Gh -Arguments @('api', "repos/$Repository/releases?per_page=100", '--paginate', '--slurp')
     $matching = @($all | ConvertFrom-Json | ForEach-Object { $_ } | ForEach-Object { $_ } | Where-Object { $_.tag_name -ceq $tag })
-    if ($matching.Count) { throw 'Could not inspect the existing release.' }
+    if ($matching.Count -gt 1) { throw 'Duplicate release tags are not allowed.' }
+    if ($matching.Count -eq 1) { $release = $matching[0] }
+    else {
     $notes = Join-Path $assetsRoot '.release-notes.md'
     @"
 CloudBay $($source.version) ships native Windows backup and Files On-Demand for Backblaze B2.
@@ -65,8 +67,15 @@ Signing status is recorded in release-validation.json. Unsigned installers can s
 "@ | Set-Content -LiteralPath $notes -Encoding utf8NoBOM
     try { Invoke-Gh -Arguments @('release', 'create', $tag, '--repo', $Repository, '--verify-tag', '--draft', '--title', "CloudBay $($source.version)", '--generate-notes', '--notes-file', $notes) | Out-Null }
     finally { if (Test-Path -LiteralPath $notes) { Remove-Item -LiteralPath $notes } }
-    $release = Invoke-Gh -Arguments @('api', "repos/$Repository/releases/tags/$tag") | ConvertFrom-Json
+    # The tag endpoint exposes published releases and can return 404 for a draft.
+    # Resolve the newly created draft through the authenticated release list.
+    $all = Invoke-Gh -Arguments @('api', "repos/$Repository/releases?per_page=100", '--paginate', '--slurp')
+    $matching = @($all | ConvertFrom-Json | ForEach-Object { $_ } | ForEach-Object { $_ } | Where-Object { $_.tag_name -ceq $tag })
+    if ($matching.Count -ne 1) { throw 'Could not resolve the newly created draft release.' }
+    $release = $matching[0]
+    }
 }
+if ($release.tag_name -cne $tag -or [long]$release.id -lt 1) { throw 'The release identity does not match its immutable tag.' }
 $remoteNames = @($release.assets | ForEach-Object { $_.name })
 if (@($remoteNames | Where-Object { $_ -cnotin $files.Name }).Count -or (!$release.draft -and $remoteNames.Count -ne $files.Count)) { throw 'The existing release has a different immutable asset inventory.' }
 foreach ($file in $files) {
@@ -78,7 +87,8 @@ foreach ($file in $files) {
     } elseif (!$release.draft) { throw 'A published release cannot receive new or replacement assets.' }
     else { Invoke-Gh -Arguments @('release', 'upload', $tag, $file.FullName, '--repo', $Repository) | Out-Null }
 }
-$ready = Invoke-Gh -Arguments @('api', "repos/$Repository/releases/tags/$tag") | ConvertFrom-Json
+$ready = Invoke-Gh -Arguments @('api', "repos/$Repository/releases/$($release.id)") | ConvertFrom-Json
+if ($ready.tag_name -cne $tag -or $ready.id -ne $release.id) { throw 'The verified release identity changed.' }
 if (@($ready.assets).Count -ne $files.Count -or @($ready.assets | Where-Object { $_.name -cnotin $files.Name }).Count) { throw 'Draft release inventory is incomplete or contains unexpected assets.' }
 foreach ($file in $files) {
     $remote = @($ready.assets | Where-Object { $_.name -ceq $file.Name })

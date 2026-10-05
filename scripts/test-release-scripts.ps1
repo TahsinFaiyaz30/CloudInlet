@@ -114,22 +114,27 @@ try {
     $evidence = @{ version = '1.0.0'; sourceRevision = $revision; configurations = @(@{configuration='Debug';buildSucceeded=$true;testsPassed=1;testsFailed=0;testsSkipped=0}, @{configuration='Release';buildSucceeded=$true;testsPassed=1;testsFailed=0;testsSkipped=0}) }
     $evidence | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $assets 'release-validation.json') -Encoding utf8NoBOM
     $env:GH_TOKEN = 'isolated-test-no-network'
-    $global:CloudBayReleaseTestState = @{ exists=$false; draft=$true; assets=[Collections.Generic.List[object]]::new(); uploads=0; publications=0; lookups=0 }
+    $global:CloudBayReleaseTestState = @{ exists=$false; draft=$true; assets=[Collections.Generic.List[object]]::new(); uploads=0; publications=0; lookups=0; byId=0; interruptAfter=2 }
     function global:gh {
         $arguments = @($args)
         $state = $global:CloudBayReleaseTestState
         $global:LASTEXITCODE = 0
         if ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudBay/releases/tags/v1.0.0') {
             $state.lookups++
-            if (!$state.exists) { $global:LASTEXITCODE = 1; return }
-            @{ draft=$state.draft;assets=@($state.assets) } | ConvertTo-Json -Depth 6 -Compress
+            if (!$state.exists -or $state.draft) { $global:LASTEXITCODE = 1; return }
+            @{ id=42;tag_name='v1.0.0';draft=$state.draft;assets=@($state.assets) } | ConvertTo-Json -Depth 6 -Compress
+        } elseif ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudBay/releases/42') {
+            $state.byId++
+            @{ id=42;tag_name='v1.0.0';draft=$state.draft;assets=@($state.assets) } | ConvertTo-Json -Depth 6 -Compress
         } elseif ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudBay/releases?per_page=100') {
             Assert-True ($arguments -contains '--slurp') 'Release lookup must parse all paginated JSON pages safely.'
-            '[[]]'
+            if ($state.exists) { '[[' + (@{id=42;tag_name='v1.0.0';draft=$state.draft;assets=@($state.assets)} | ConvertTo-Json -Depth 6 -Compress) + ']]' }
+            else { '[[]]' }
         } elseif ($arguments[0] -ceq 'release' -and $arguments[1] -ceq 'create') {
             Assert-True ($arguments -contains '--draft') 'Release creation must remain a draft until every asset passes verification.'
             $state.exists = $true
         } elseif ($arguments[0] -ceq 'release' -and $arguments[1] -ceq 'upload') {
+            if ($state.interruptAfter -gt 0 -and $state.uploads -eq $state.interruptAfter) { throw 'Simulated interrupted draft upload.' }
             $file = Get-Item -LiteralPath $arguments[3]
             $state.assets.Add(@{ name=$file.Name;size=$file.Length;digest=('sha256:' + (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant());state='uploaded' })
             $state.uploads++
@@ -138,8 +143,12 @@ try {
             $state.draft = $false; $state.publications++
         } else { throw 'Unexpected gh invocation in isolated tests. Network access is forbidden.' }
     }
+    Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } 'An interrupted upload leaves a private draft.' 'Simulated interrupted draft upload'
+    Assert-True ($global:CloudBayReleaseTestState.draft -and $global:CloudBayReleaseTestState.uploads -eq 2 -and $global:CloudBayReleaseTestState.publications -eq 0) 'Incomplete assets remain unpublished.'
+    $global:CloudBayReleaseTestState.interruptAfter = 0
     $url = & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision
     Assert-True ($url -ceq 'https://github.com/TahsinFaiyaz30/CloudBay/releases/tag/v1.0.0' -and $global:CloudBayReleaseTestState.uploads -eq 9 -and $global:CloudBayReleaseTestState.publications -eq 1) 'A complete release creates one draft, uploads the verified inventory, and publishes once.'
+    Assert-True ($global:CloudBayReleaseTestState.byId -ge 1) 'Draft integrity uses the release ID when the tag endpoint returns 404.'
     & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision | Out-Null
     Assert-True ($global:CloudBayReleaseTestState.uploads -eq 9 -and $global:CloudBayReleaseTestState.publications -eq 1) 'Re-running a published identical release never replaces or re-uploads bytes.'
     $global:CloudBayReleaseTestState.assets[0].digest = 'sha256:' + ('0' * 64)

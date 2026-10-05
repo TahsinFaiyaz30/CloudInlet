@@ -157,7 +157,7 @@ jobs:
   publish:
     needs: [prepare, installers, store-package]
     if: >-
-      always() && needs.prepare.outputs.publish == 'true' &&
+      always() && !cancelled() && needs.prepare.outputs.publish == 'true' &&
       needs.installers.result == 'success' &&
       (needs.store-package.result == 'success' || needs.store-package.result == 'skipped')
     runs-on: windows-2025
