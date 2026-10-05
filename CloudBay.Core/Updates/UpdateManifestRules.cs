@@ -10,7 +10,7 @@ public static class UpdateManifestRules
     public static readonly Uri FeedUri = new($"https://github.com/{Repository}/releases/latest/download/updates-v1.json");
     public static JsonSerializerOptions JsonOptions { get; } = new(JsonSerializerDefaults.Web)
     {
-        Converters = { new JsonStringEnumConverter(allowIntegerValues: false) },
+        Converters = { new NamedEnumConverter<UpdateBuildFlavor>(), new NamedEnumConverter<UpdateInstallerKind>() },
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
     };
 
@@ -70,5 +70,23 @@ public static class UpdateManifestRules
         var expectedName = $"CloudBay-{version}-win-{asset.Architecture}-{asset.BuildFlavor.ToString().ToLowerInvariant()}-{suffix}";
         if (suffix.Length == 0 || asset.FileName != expectedName)
             throw new InvalidDataException("The release installer name does not match its version and installed variant.");
+    }
+
+    private sealed class NamedEnumConverter<T> : JsonConverter<T> where T : struct, Enum
+    {
+        public override T Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            if (reader.TokenType == JsonTokenType.String)
+            {
+                var name = reader.GetString();
+                foreach (var value in Enum.GetValues<T>())
+                    if (string.Equals(name, value.ToString(), StringComparison.OrdinalIgnoreCase)) return value;
+            }
+            // JsonStringEnumConverter also accepts numeric strings such as "0". An immutable
+            // release variant must explicitly name its flavor and package type.
+            throw new JsonException("A release variant must use a recognized enum name.");
+        }
+        public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options) =>
+            writer.WriteStringValue(Enum.GetName(value) ?? throw new JsonException("A release variant is undefined."));
     }
 }

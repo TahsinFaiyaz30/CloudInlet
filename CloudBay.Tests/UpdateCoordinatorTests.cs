@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CloudBay.Core.Updates;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -12,6 +13,23 @@ namespace CloudBay.Tests;
 public sealed class UpdateCoordinatorTests
 {
     private static readonly byte[] Payload = Encoding.UTF8.GetBytes("verified installer fixture");
+
+    [TestMethod]
+    public async Task RepairedPreferencesStayValidAndRetainVerifiedDownloadAcrossRestart()
+    {
+        await using var fixture = new Fixture();
+        await fixture.Updater.InitializeAsync();
+        await File.WriteAllTextAsync(Path.Combine(fixture.Cache, "preferences.json"), "{interrupted");
+        await fixture.RestartAsync();
+        Assert.AreEqual(UpdateState.Error, fixture.Updater.Snapshot.State);
+        await fixture.Updater.CheckAsync();
+        await fixture.Updater.DownloadAsync();
+        Assert.AreEqual(UpdateState.Ready, fixture.Updater.Snapshot.State);
+        await fixture.RestartAsync();
+        Assert.AreEqual(UpdateState.Ready, fixture.Updater.Snapshot.State);
+        Assert.IsTrue(fixture.Updater.Preferences.AutomaticChecks);
+        Assert.IsFalse(fixture.Updater.Preferences.AutomaticallyInstall);
+    }
 
     [TestMethod]
     public async Task InstalledVariantSelectsOnlyMatchingDebugMsiWithoutCrossingChannels()
@@ -146,6 +164,171 @@ public sealed class UpdateCoordinatorTests
         Assert.AreEqual(UpdateState.Ready, fixture.Updater.Snapshot.State);
         Assert.IsTrue(File.Exists(fixture.Updater.Snapshot.ReadyPackagePath));
         Assert.AreEqual(1, Directory.GetFiles(fixture.Cache, "pending-*").Length);
+    }
+
+    [TestMethod]
+    public async Task DeleteDownloadsRemovesAllCurrentPreviousAndPartialVariantsWithoutDeletingPreferencesOrFeed()
+    {
+        await using var fixture = new Fixture();
+        var preferences = new UpdatePreferences(false, true, false, 12);
+        await fixture.Updater.SavePreferencesAsync(preferences);
+        await fixture.Updater.CheckAsync(); await fixture.Updater.DownloadAsync();
+        var current = fixture.Updater.Snapshot.ReadyPackagePath!;
+        foreach (var name in new[]
+        {
+            "pending-CloudBay-0.8.0-win-x64-release-setup.exe",
+            "pending-CloudBay-0.9.0-win-x64-debug-setup.msi",
+            "partial-CloudBay-1.1.0-win-x64-debug-setup.exe",
+            "PARTIAL-CLOUDBAY-0.9.0-win-x64-release-portable.zip"
+        }) await File.WriteAllBytesAsync(Path.Combine(fixture.Cache, name), Payload);
+        var unrelated = Path.Combine(fixture.Cache, "keep.txt");
+        await File.WriteAllTextAsync(unrelated, "keep");
+        var nested = Path.Combine(fixture.Cache, "personal"); Directory.CreateDirectory(nested);
+        await File.WriteAllBytesAsync(Path.Combine(nested, "pending-CloudBay-user-file.exe"), Payload);
+        var preferencesBefore = await File.ReadAllBytesAsync(Path.Combine(fixture.Cache, "preferences.json"));
+
+        await fixture.Updater.DeleteDownloadsAsync();
+
+        Assert.IsFalse(File.Exists(current));
+        Assert.IsFalse(Directory.GetFiles(fixture.Cache).Any(path => Path.GetFileName(path).StartsWith("pending-", StringComparison.OrdinalIgnoreCase) ||
+            Path.GetFileName(path).StartsWith("partial-", StringComparison.OrdinalIgnoreCase)));
+        CollectionAssert.AreEqual(preferencesBefore, await File.ReadAllBytesAsync(Path.Combine(fixture.Cache, "preferences.json")));
+        Assert.AreEqual("keep", await File.ReadAllTextAsync(unrelated));
+        Assert.IsTrue(File.Exists(Path.Combine(nested, "pending-CloudBay-user-file.exe")));
+        Assert.AreEqual(preferences, fixture.Updater.Preferences);
+        Assert.AreEqual(UpdateState.Available, fixture.Updater.Snapshot.State);
+        Assert.AreEqual("1.1.0", fixture.Updater.Snapshot.Candidate!.Version);
+        Assert.IsNull(fixture.Updater.Snapshot.ReadyPackagePath);
+        await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => fixture.Updater.InstallAsync());
+        await fixture.RestartAsync();
+        Assert.AreEqual(UpdateState.Available, fixture.Updater.Snapshot.State);
+        Assert.AreEqual(preferences, fixture.Updater.Preferences);
+        Assert.AreEqual("1.1.0", fixture.Updater.Snapshot.Candidate!.Version);
+    }
+
+    [TestMethod]
+    public async Task DeletedUpdateStaysSuppressedForAutomaticDownloadAcrossRestartUntilManualDownload()
+    {
+        await using var fixture = new Fixture();
+        await fixture.Updater.SavePreferencesAsync(new(false, true));
+        await fixture.Updater.CheckAsync(); await fixture.Updater.DownloadAsync();
+        await fixture.Updater.DeleteDownloadsAsync(); await fixture.RestartAsync();
+        fixture.Updater.Start();
+        await WaitUntilAsync(() => fixture.Clock.WaitingTimers == 1);
+        fixture.Clock.Advance(TimeSpan.FromMinutes(2));
+        await WaitUntilAsync(() => fixture.Clock.WaitingTimers == 1);
+        Assert.AreEqual(2, fixture.Requests.Count, "Deleting a download must not immediately trigger the same automatic download.");
+        Assert.AreEqual(UpdateState.Available, fixture.Updater.Snapshot.State);
+
+        await fixture.Updater.DownloadAsync();
+        Assert.AreEqual(3, fixture.Requests.Count);
+        Assert.AreEqual(UpdateState.Ready, fixture.Updater.Snapshot.State);
+        Assert.IsTrue(File.Exists(fixture.Updater.Snapshot.ReadyPackagePath));
+        await fixture.RestartAsync();
+        Assert.AreEqual(UpdateState.Ready, fixture.Updater.Snapshot.State);
+    }
+
+    [TestMethod]
+    public async Task NewReleaseCanAutomaticallyDownloadAfterThePreviousReleaseWasDeleted()
+    {
+        await using var fixture = new Fixture();
+        await fixture.Updater.SavePreferencesAsync(new(false, true));
+        await fixture.Updater.CheckAsync(); await fixture.Updater.DownloadAsync();
+        await fixture.Updater.DeleteDownloadsAsync(); await fixture.RestartAsync();
+        fixture.Clock.Advance(TimeSpan.FromMinutes(2)); fixture.Manifest = Manifest("1.2.0");
+        await fixture.Updater.CheckAsync();
+        fixture.Updater.Start();
+        await WaitUntilAsync(() => fixture.Updater.Snapshot.State == UpdateState.Ready);
+        Assert.AreEqual("1.2.0", fixture.Updater.Snapshot.Candidate!.Version);
+        Assert.AreEqual(4, fixture.Requests.Count);
+        Assert.AreEqual(1, Directory.GetFiles(fixture.Cache, "pending-*").Length);
+    }
+
+    [TestMethod]
+    public async Task DeleteDownloadsRejectsAnInstallerHandoffAndRetainsTheVerifiedPackage()
+    {
+        await using var fixture = new Fixture();
+        await fixture.Updater.CheckAsync(); await fixture.Updater.DownloadAsync();
+        var path = fixture.Updater.Snapshot.ReadyPackagePath!;
+        await fixture.Updater.InstallAsync();
+        await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => fixture.Updater.DeleteDownloadsAsync());
+        Assert.AreEqual(UpdateState.Installing, fixture.Updater.Snapshot.State);
+        Assert.AreEqual(path, fixture.Updater.Snapshot.ReadyPackagePath);
+        CollectionAssert.AreEqual(Payload, await File.ReadAllBytesAsync(path));
+    }
+
+    [TestMethod]
+    public async Task DeleteDownloadsRejectsAnActiveWorkerLockWithoutClearingReadyState()
+    {
+        await using var fixture = new Fixture();
+        await fixture.Updater.CheckAsync(); await fixture.Updater.DownloadAsync();
+        var path = fixture.Updater.Snapshot.ReadyPackagePath!;
+        using (new FileStream(Path.Combine(fixture.Cache, "update-install.lock"), FileMode.CreateNew,
+            FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose))
+        {
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => fixture.Updater.DeleteDownloadsAsync());
+            Assert.AreEqual(UpdateState.Ready, fixture.Updater.Snapshot.State);
+            Assert.AreEqual(path, fixture.Updater.Snapshot.ReadyPackagePath);
+            Assert.IsTrue(File.Exists(path));
+        }
+        await fixture.Updater.DeleteDownloadsAsync();
+        Assert.AreEqual(UpdateState.Available, fixture.Updater.Snapshot.State);
+        Assert.IsFalse(File.Exists(path));
+    }
+
+    [TestMethod]
+    public async Task InitializationRefusesToPruneDownloadsWhileAnUpdateWorkerOwnsTheCache()
+    {
+        await using var fixture = new Fixture();
+        await fixture.Updater.CheckAsync(); await fixture.Updater.DownloadAsync();
+        var path = fixture.Updater.Snapshot.ReadyPackagePath!;
+        await fixture.Updater.DisposeAsync();
+        var orphan = Path.Combine(fixture.Cache, "partial-CloudBay-0.9.0-win-x64-debug-setup.msi");
+        await File.WriteAllBytesAsync(orphan, Payload);
+        using (new FileStream(Path.Combine(fixture.Cache, "update-install.lock"), FileMode.CreateNew,
+            FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose))
+        {
+            fixture.CreateUpdater();
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => fixture.Updater.InitializeAsync());
+            Assert.IsTrue(File.Exists(path)); Assert.IsTrue(File.Exists(orphan));
+        }
+        await fixture.Updater.InitializeAsync();
+        Assert.AreEqual(UpdateState.Ready, fixture.Updater.Snapshot.State);
+        Assert.IsTrue(File.Exists(path)); Assert.IsFalse(File.Exists(orphan));
+    }
+
+    [TestMethod]
+    public async Task DeleteDownloadsHandlesAStaleWorkerLockAndAnEmptyCacheIdempotently()
+    {
+        await using var fixture = new Fixture();
+        await fixture.Updater.InitializeAsync();
+        await File.WriteAllTextAsync(Path.Combine(fixture.Cache, "update-install.lock"), "stale");
+        await fixture.Updater.DeleteDownloadsAsync(); await fixture.Updater.DeleteDownloadsAsync();
+        Assert.AreEqual(UpdateState.Idle, fixture.Updater.Snapshot.State);
+        Assert.IsNull(fixture.Updater.Snapshot.ReadyPackagePath);
+        Assert.AreEqual(0, fixture.Requests.Count);
+        Assert.IsFalse(File.Exists(Path.Combine(fixture.Cache, "preferences.json")));
+        Assert.IsTrue(File.Exists(Path.Combine(fixture.Cache, "state.json")));
+    }
+
+    [TestMethod]
+    public async Task DeleteDownloadsRefusesLinkedOrphansWithoutTouchingTheirTargets()
+    {
+        await using var fixture = new Fixture();
+        await fixture.Updater.CheckAsync(); await fixture.Updater.DownloadAsync();
+        var target = Path.Combine(fixture.Cache, "important.txt"); await File.WriteAllTextAsync(target, "keep");
+        var link = Path.Combine(fixture.Cache, "partial-CloudBay-0.9.0-win-x64-release-setup.exe");
+        File.CreateSymbolicLink(link, target);
+        try
+        {
+            await Assert.ThrowsExceptionAsync<IOException>(() => fixture.Updater.DeleteDownloadsAsync());
+            Assert.AreEqual("keep", await File.ReadAllTextAsync(target));
+            Assert.IsNull(fixture.Updater.Snapshot.ReadyPackagePath);
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => fixture.Updater.InstallAsync());
+        }
+        finally { File.Delete(link); }
+        await fixture.Updater.DeleteDownloadsAsync();
+        Assert.AreEqual(UpdateState.Available, fixture.Updater.Snapshot.State);
     }
 
     [TestMethod]
@@ -285,6 +468,49 @@ public sealed class UpdateCoordinatorTests
         Assert.AreEqual(UpdateState.Installing, fixture.Updater.Snapshot.State);
     }
 
+    [DataTestMethod]
+    [DataRow(false)] [DataRow(true)]
+    public async Task DisablingAutomaticUpdatesWinsBeforeAnAlreadyQueuedActionStarts(bool install)
+    {
+        await using var fixture = new Fixture();
+        await fixture.Updater.CheckAsync();
+        if (install) await fixture.Updater.DownloadAsync();
+        await fixture.Updater.SavePreferencesAsync(new(false, true, install));
+        var requestsBeforeQueuedAction = fixture.Requests.Count;
+        var queued = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
+        // A scheduler can decide to act immediately before the user's save enters the
+        // operation gate. Its already-decided action must honor that later save. The
+        // notification runs before SavePreferences releases its gate, so this queues
+        // the stale action deterministically instead of relying on thread timing.
+        fixture.Updater.Changed += _ =>
+        {
+            if (fixture.Updater.Preferences.AutomaticallyDownload || fixture.Updater.Preferences.AutomaticallyInstall || queued.Task.IsCompleted) return;
+            var action = (Task)typeof(UpdateCoordinator).GetMethod(install ? "InstallCoreAsync" : "DownloadCoreAsync",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(fixture.Updater, [false, CancellationToken.None])!;
+            if (action.IsCompleted) queued.TrySetException(new InvalidOperationException("The automatic action did not wait for the preference operation gate."));
+            else queued.TrySetResult(action);
+        };
+        var disable = fixture.Updater.SavePreferencesAsync(new(false, false, false));
+        var automatic = await queued.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.WhenAll(disable, automatic).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.IsFalse(fixture.Updater.Preferences.AutomaticallyDownload);
+        Assert.IsFalse(fixture.Updater.Preferences.AutomaticallyInstall);
+        Assert.AreEqual(requestsBeforeQueuedAction, fixture.Requests.Count,
+            "A queued automatic operation must honor the preference that wins the operation gate.");
+        Assert.AreEqual(0, fixture.Installer.Calls);
+        Assert.AreEqual(install ? UpdateState.Ready : UpdateState.Available, fixture.Updater.Snapshot.State);
+        if (install)
+        {
+            await fixture.Updater.InstallAsync(); Assert.AreEqual(1, fixture.Installer.Calls);
+        }
+        else
+        {
+            await fixture.Updater.DownloadAsync(); Assert.AreEqual(UpdateState.Ready, fixture.Updater.Snapshot.State);
+        }
+    }
+
     [TestMethod]
     public async Task FreshInstallationWithoutPublishedReleaseIsHandledWithoutRetryBurst()
     {
@@ -340,6 +566,24 @@ public sealed class UpdateCoordinatorTests
         fixture.Manifest = Manifest("1.1.0"); await fixture.Updater.CheckAsync();
         Assert.AreEqual(UpdateState.Error, fixture.Updater.Snapshot.State);
         Assert.AreEqual("1.2.0", fixture.Updater.Snapshot.Candidate!.Version);
+    }
+
+    [TestMethod]
+    public async Task ManifestJsonRejectsIntegerAndNumericStringPackageVariants()
+    {
+        foreach (var field in new[] { "buildFlavor", "installerKind" })
+            foreach (var value in new object[] { 0, "0", "1" })
+            {
+                await using var fixture = new Fixture();
+                var json = JsonNode.Parse(JsonSerializer.Serialize(fixture.Manifest, UpdateManifestRules.JsonOptions))!;
+                json["assets"]![0]![field] = JsonSerializer.SerializeToNode(value);
+                fixture.Responder = (_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                    { Content = new StringContent(json.ToJsonString(), Encoding.UTF8, "application/json") });
+                await fixture.Updater.CheckAsync();
+                Assert.AreEqual(UpdateState.Error, fixture.Updater.Snapshot.State);
+                Assert.IsNull(fixture.Updater.Snapshot.Candidate);
+                Assert.AreEqual(1, fixture.Requests.Count);
+            }
     }
 
     [TestMethod]
@@ -514,6 +758,12 @@ public sealed class UpdateCoordinatorTests
         return new(1, UpdateManifestRules.Repository, version, "v" + version, assets);
     }
 
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (!condition()) await Task.Delay(10, timeout.Token);
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         public InstalledUpdateIdentity Identity;
@@ -552,6 +802,7 @@ public sealed class UpdateCoordinatorTests
         private readonly object _gate = new();
         private readonly List<ManualTimer> _timers = [];
         private DateTimeOffset _now = new(2026, 10, 5, 0, 0, 0, TimeSpan.Zero);
+        public int WaitingTimers { get { lock (_gate) return _timers.Count(timer => timer.Due is not null); } }
         public override DateTimeOffset GetUtcNow() { lock (_gate) return _now; }
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {

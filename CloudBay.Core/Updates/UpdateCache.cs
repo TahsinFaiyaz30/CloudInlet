@@ -23,11 +23,24 @@ internal sealed class UpdateCache
             using var writer = new StreamWriter(output);
             writer.Write(OwnerText);
         }
-        if (File.ReadAllText(owner) != OwnerText) throw new IOException("The update cache ownership marker is invalid.");
+        if (new FileInfo(owner).Length != OwnerText.Length || File.ReadAllText(owner) != OwnerText)
+            throw new IOException("The update cache ownership marker is invalid.");
     }
 
     public FileStream AcquireLock() => new(PathFor("updater.lock"), FileMode.OpenOrCreate,
         FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
+    public FileStream AcquireInstallationLock()
+    {
+        try
+        {
+            return new FileStream(PathFor("update-install.lock"), FileMode.OpenOrCreate,
+                FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
+        }
+        catch (IOException error) when ((error.HResult & 0xffff) is 32 or 33)
+        {
+            throw new InvalidOperationException("An update installation is in progress. Wait for it to finish before changing downloaded files.", error);
+        }
+    }
     public string PackagePath(UpdateCandidate candidate) => PathFor("pending-" + candidate.Asset.FileName);
     public string PartialPath(UpdateCandidate candidate) => PathFor("partial-" + candidate.Asset.FileName);
 
@@ -61,8 +74,8 @@ internal sealed class UpdateCache
         foreach (var path in Directory.EnumerateFiles(_root))
         {
             var name = Path.GetFileName(path);
-            if ((name.StartsWith("pending-CloudBay-", StringComparison.Ordinal) ||
-                name.StartsWith("partial-CloudBay-", StringComparison.Ordinal)) &&
+            if ((name.StartsWith("pending-CloudBay-", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith("partial-CloudBay-", StringComparison.OrdinalIgnoreCase)) &&
                 !path.Equals(retained, StringComparison.OrdinalIgnoreCase)) DeletePath(path);
         }
     }

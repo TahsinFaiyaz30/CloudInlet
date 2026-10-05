@@ -9,7 +9,7 @@ public sealed class UpdateCoordinator : IAsyncDisposable
     private sealed record SavedState(int SchemaVersion, InstalledUpdateIdentity Identity, UpdateManifest? Manifest,
         string? ETag, UpdateCandidate? Pending, bool PendingReady, DateTimeOffset? LastCheckedUtc,
         DateTimeOffset? NextCheckUtc, DateTimeOffset? EarliestRequestUtc, int FailureCount,
-        DateTimeOffset? LastInstallAttemptUtc = null);
+        DateTimeOffset? LastInstallAttemptUtc = null, string? AutomaticDownloadSuppressedVersion = null);
 
     private readonly InstalledUpdateIdentity _identity;
     private readonly UpdateCache _cache;
@@ -31,6 +31,7 @@ public sealed class UpdateCoordinator : IAsyncDisposable
     private DateTimeOffset? _earliestRequest;
     private int _failureCount;
     private DateTimeOffset? _lastInstallAttempt;
+    private string? _automaticDownloadSuppressedVersion;
     private Task? _scheduler;
     private UpdateSnapshot _snapshot = new(UpdateState.Idle, "Updates have not been checked yet.");
     private UpdatePreferences _preferences = new();
@@ -58,6 +59,7 @@ public sealed class UpdateCoordinator : IAsyncDisposable
         {
             if (_initialized) return;
             _ownershipLock = _cache.AcquireLock();
+            using var installationLock = _cache.AcquireInstallationLock();
             try
             {
                 _preferences = (_cache.Read<UpdatePreferences>("preferences.json") ?? new()).Normalize();
@@ -66,11 +68,15 @@ public sealed class UpdateCoordinator : IAsyncDisposable
                 {
                     if (saved.Manifest is not null) _candidate = UpdateManifestRules.Select(saved.Manifest, _identity);
                     if (saved.Pending is not null) UpdateManifestRules.ValidateCandidate(saved.Pending, _identity);
+                    if (saved.AutomaticDownloadSuppressedVersion is not null &&
+                        !UpdateVersion.TryParse(saved.AutomaticDownloadSuppressedVersion, out _))
+                        throw new InvalidDataException("The saved update download preference is invalid.");
                     _manifest = saved.Manifest; _etag = saved.ETag;
                     _lastChecked = saved.LastCheckedUtc; _nextCheck = saved.NextCheckUtc;
                     _earliestRequest = saved.EarliestRequestUtc;
                     _failureCount = Math.Clamp(saved.FailureCount, 0, 8);
                     _lastInstallAttempt = saved.LastInstallAttemptUtc;
+                    _automaticDownloadSuppressedVersion = saved.AutomaticDownloadSuppressedVersion;
                     _pending = saved.Pending;
                     _ready = saved.PendingReady && _pending is not null &&
                         await _cache.VerifyAsync(_pending, cancellationToken).ConfigureAwait(false);
@@ -87,6 +93,7 @@ public sealed class UpdateCoordinator : IAsyncDisposable
                 // reserved installer files, then require a fresh manifest and download.
                 _manifest = null; _etag = null; _candidate = null; _pending = null; _ready = false;
                 _cache.RemovePackagesExcept(null); _initialized = true;
+                _cache.Write("preferences.json", _preferences);
                 Persist(); Publish(UpdateState.Error, "Cached update information was invalid. Check again to download a verified update.");
             }
         }
@@ -159,7 +166,10 @@ public sealed class UpdateCoordinator : IAsyncDisposable
         finally { _gate.Release(); }
     }
 
-    public async Task DownloadAsync(CancellationToken cancellationToken = default)
+    public Task DownloadAsync(CancellationToken cancellationToken = default) =>
+        DownloadCoreAsync(manual: true, cancellationToken);
+
+    private async Task DownloadCoreAsync(bool manual, CancellationToken cancellationToken)
     {
         using var operation = CreateOperation(cancellationToken);
         cancellationToken = operation.Token;
@@ -168,12 +178,17 @@ public sealed class UpdateCoordinator : IAsyncDisposable
         try
         {
             if (Snapshot.State == UpdateState.Installing) return;
+            if (!manual && !Preferences.AutomaticallyDownload) return;
             var candidate = _candidate ?? throw new InvalidOperationException("Check for an available update first.");
             if (_identity.InstallerKind is UpdateInstallerKind.Store or UpdateInstallerKind.Portable)
                 throw new InvalidOperationException("This installation must be updated through its original distribution method.");
             UpdateManifestRules.ValidateCandidate(candidate, _identity);
+            // Test the saved user choice inside the operation gate, so an automatic download
+            // already queued when Delete is clicked cannot recreate the deleted package.
+            if (!manual && candidate.Version == _automaticDownloadSuppressedVersion) return;
             if (_earliestRequest > _clock.GetUtcNow() && _failureCount > 0)
             { Publish(UpdateState.Deferred, "The update server requested a delay before another download."); return; }
+            if (manual) _automaticDownloadSuppressedVersion = null;
             if (_ready && _pending == candidate && await _cache.VerifyAsync(candidate, cancellationToken).ConfigureAwait(false))
             { PublishRestingState(); return; }
             // The newer candidate has been validated before removing an older ready installer.
@@ -205,7 +220,43 @@ public sealed class UpdateCoordinator : IAsyncDisposable
         finally { _gate.Release(); }
     }
 
-    public async Task InstallAsync(CancellationToken cancellationToken = default)
+    /// <summary>Removes current and orphaned installer downloads while retaining update preferences and the release feed.</summary>
+    public async Task DeleteDownloadsAsync(CancellationToken cancellationToken = default)
+    {
+        using var operation = CreateOperation(cancellationToken);
+        cancellationToken = operation.Token;
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (Snapshot.State == UpdateState.Installing)
+                throw new InvalidOperationException("An update installation is in progress. Wait for it to finish before deleting downloaded files.");
+            using var installationLock = _cache.AcquireInstallationLock();
+            cancellationToken.ThrowIfCancellationRequested();
+            _pending = null; _ready = false;
+            _automaticDownloadSuppressedVersion = _candidate?.Version;
+            // Invalidate installation authority before deleting any bytes. An interruption or
+            // a locked orphan must not leave an older package eligible for installation.
+            Persist();
+            try
+            {
+                _cache.RemovePackagesExcept(null);
+                PublishRestingState(_candidate is null ? "Downloaded update files were deleted." :
+                    $"Downloaded update files were deleted. CloudBay {_candidate.Version} remains available; choose Download to get it again.");
+            }
+            catch (IOException)
+            {
+                Publish(UpdateState.Error, "Some downloaded update files could not be deleted. Close the program using them and try Delete again.");
+                throw;
+            }
+        }
+        finally { _gate.Release(); }
+    }
+
+    public Task InstallAsync(CancellationToken cancellationToken = default) =>
+        InstallCoreAsync(manual: true, cancellationToken);
+
+    private async Task InstallCoreAsync(bool manual, CancellationToken cancellationToken)
     {
         using var operation = CreateOperation(cancellationToken);
         cancellationToken = operation.Token;
@@ -214,6 +265,8 @@ public sealed class UpdateCoordinator : IAsyncDisposable
         try
         {
             if (Snapshot.State == UpdateState.Installing) return;
+            if (!manual && (!Preferences.AutomaticallyInstall ||
+                _lastInstallAttempt >= _clock.GetUtcNow().AddHours(-1))) return;
             if (_installer is null || _identity.InstallerKind is UpdateInstallerKind.Store or UpdateInstallerKind.Portable)
                 throw new InvalidOperationException("Automatic installation is unavailable for this distribution.");
             if (!_ready || _pending is null || _pending != _candidate)
@@ -258,10 +311,10 @@ public sealed class UpdateCoordinator : IAsyncDisposable
                     if (Preferences.AutomaticChecks) await CheckAsync(manual: false, token).ConfigureAwait(false);
                     if (_identity.InstallerKind is UpdateInstallerKind.Exe or UpdateInstallerKind.Msi &&
                         Preferences.AutomaticallyDownload && Snapshot.State == UpdateState.Available)
-                        await DownloadAsync(token).ConfigureAwait(false);
+                        await DownloadCoreAsync(manual: false, token).ConfigureAwait(false);
                     if (Preferences.AutomaticallyInstall && _installer is not null && Snapshot.State == UpdateState.Ready &&
                         (_lastInstallAttempt is null || _lastInstallAttempt < _clock.GetUtcNow().AddHours(-1)))
-                        await InstallAsync(token).ConfigureAwait(false);
+                        await InstallCoreAsync(manual: false, token).ConfigureAwait(false);
                 }
                 await Task.Delay(TimeSpan.FromMinutes(1), _clock, token).ConfigureAwait(false);
             }
@@ -282,7 +335,8 @@ public sealed class UpdateCoordinator : IAsyncDisposable
     }
     private TimeSpan Jitter() => TimeSpan.FromSeconds(RandomNumberGenerator.GetInt32(0, 301));
     private void Persist() => _cache.Write("state.json", new SavedState(1, _identity, _manifest, _etag, _pending,
-        _ready, _lastChecked, _nextCheck, _earliestRequest, _failureCount, _lastInstallAttempt));
+        _ready, _lastChecked, _nextCheck, _earliestRequest, _failureCount, _lastInstallAttempt,
+        _automaticDownloadSuppressedVersion));
     private void PublishRestingState(string? message = null)
     {
         var state = _identity.InstallerKind == UpdateInstallerKind.Store ? UpdateState.StoreManaged :
