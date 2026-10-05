@@ -398,6 +398,9 @@ public sealed partial class MainWindow : Window
         // still wiring the named content panels.
         if (OverviewPage is null || !_navigationTemplateReady || _applyingNavigationRoute ||
             !_initialNavigationReady.Task.IsCompletedSuccessfully) return;
+        // WinUI can defer SelectionChanged until a container lays out. A
+        // superseded notification must not replace a newer user/tray route.
+        if (!ReferenceEquals(args.SelectedItem, sender.SelectedItem)) return;
         ShowPage(args.IsSettingsSelected ? "settings" : (args.SelectedItem as NavigationViewItem)?.Tag as string ?? "overview");
     }
 
@@ -1964,6 +1967,18 @@ public sealed partial class MainWindow : Window
             var suffix = theme == ElementTheme.Light ? "-light" : "";
             var initialHistory = ClientPreview.ActivityActions();
             SetPresentation(initialHistory, theme);
+            for (var round = 0; round < 4; round++)
+            {
+                RequestNavigationRoute("settings");
+                await Task.Delay(20);
+                RequestNavigationRoute("settings/account");
+                RequestNavigationRoute("activity");
+                await Task.Delay(100);
+                RootGrid.UpdateLayout();
+                AssertNavigationPresentation("activity");
+            }
+            await File.AppendAllTextAsync(Path.Combine(outputDirectory, "navigation-assertions.txt"),
+                $"PASS {theme}: rapid Settings/Account/Activity requests retain the latest native selection, heading and exclusive page after queued events.{Environment.NewLine}");
             ActivityFilterBox.SelectedIndex = 3;
             var retainedHistoryRow = _viewModel.Activity[0];
             var retainedHistorySource = _viewModel.ActivityRows;
@@ -2552,11 +2567,11 @@ public sealed partial class MainWindow : Window
 
         async Task CapturePageAsync(string page, string fileName, string settingsRoute = "home")
         {
-            Navigation.SelectedItem = page == "settings" ? Navigation.SettingsItem : Navigation.MenuItems.Cast<NavigationViewItem>().First(item => (string)item.Tag == page);
-            ShowPage(page);
-            if (page == "settings") OpenSettingsRoute(settingsRoute);
+            var requestedRoute = page == "settings" && settingsRoute != "home" ? "settings/" + settingsRoute : page;
+            RequestNavigationRoute(requestedRoute);
             await Task.Delay(500);
             RootGrid.UpdateLayout();
+            AssertNavigationPresentation(requestedRoute);
             // Verify the native NavigationView content layer at runtime. Its
             // rounded surface contains both the fixed header and task content;
             // there must not be another painted shell around the account form.
