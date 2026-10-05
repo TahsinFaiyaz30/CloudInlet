@@ -6,6 +6,7 @@
     <_CloudBayVersionDocumentValid>$([System.Text.RegularExpressions.Regex]::IsMatch('$(_CloudBayVersionDocument)', '$(_CloudBayVersionPattern)'))</_CloudBayVersionDocumentValid>
     <CloudBayBaseVersion Condition="'$(_CloudBayVersionDocumentValid)' == 'True'">$([System.Text.RegularExpressions.Regex]::Match('$(_CloudBayVersionDocument)', '$(_CloudBayVersionPattern)').Groups[1].Value)</CloudBayBaseVersion>
     <Version Condition="'$(Version)' == ''">$(CloudBayBaseVersion)</Version>
+    <Configuration Condition="'$(Configuration)' == ''">Debug</Configuration>
     <CloudBayBuildFlavor Condition="'$(CloudBayBuildFlavor)' == ''">$(Configuration)</CloudBayBuildFlavor>
     <DefineConstants Condition="'$(CloudBayBuildFlavor)' == 'Debug'">$(DefineConstants);CLOUDBAY_DEBUG</DefineConstants>
     <Company>CloudBay</Company>

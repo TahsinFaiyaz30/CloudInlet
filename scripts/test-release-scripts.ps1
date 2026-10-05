@@ -60,6 +60,12 @@ try {
     $diagnostics = @(& dotnet msbuild $validationProject -t:ValidateCloudBayVersion -nologo -verbosity:quiet 2>&1)
     Assert-True ($LASTEXITCODE -eq 0) 'The compiler accepts the maximum version shared by MSI, MSIX, and assemblies.'
     Set-FixtureVersion '1.0.0'
+    $defaultProject = Join-Path $fixture 'DefaultConfiguration.proj'
+    '<Project><Import Project="Directory.Build.props" /><Import Project="Directory.Build.targets" /></Project>' | Set-Content -LiteralPath $defaultProject -Encoding utf8NoBOM
+    $properties = & dotnet msbuild $defaultProject -getProperty:Configuration,CloudBayBuildFlavor,DefineConstants -nologo | ConvertFrom-Json
+    Assert-True ($LASTEXITCODE -eq 0 -and $properties.Properties.Configuration -ceq 'Debug' -and $properties.Properties.CloudBayBuildFlavor -ceq 'Debug' -and $properties.Properties.DefineConstants.Contains('CLOUDBAY_DEBUG')) 'Default Debug builds compile the separate Debug product identity.'
+    $properties = & dotnet msbuild $defaultProject -p:Configuration=Release -getProperty:CloudBayBuildFlavor,DefineConstants -nologo | ConvertFrom-Json
+    Assert-True ($LASTEXITCODE -eq 0 -and $properties.Properties.CloudBayBuildFlavor -ceq 'Release' -and !$properties.Properties.DefineConstants.Contains('CLOUDBAY_DEBUG')) 'Release builds retain the Release product identity.'
     Set-FixtureVersion '1.0.0'
     foreach ($component in @('Patch', 'Minor', 'Major')) {
         Set-FixtureVersion '1.0.0'
