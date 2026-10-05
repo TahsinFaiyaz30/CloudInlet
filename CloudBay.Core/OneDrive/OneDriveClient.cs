@@ -52,20 +52,46 @@ public sealed class OneDriveClient
 
     public async Task<IReadOnlyList<OneDriveDrive>> ListDrivesAsync(CancellationToken cancellationToken = default)
     {
-        var drives = new List<OneDriveDrive>();
+        // /me/drive identifies the user's actual primary OneDrive. Personal
+        // accounts can also expose unusable ObjectHandle entries in /me/drives.
+        using var primaryResult = await GetJsonAsync("me/drive?$select=id,name,owner", cancellationToken);
+        var primary = ParseDrive(primaryResult.RootElement);
+        var drives = new List<OneDriveDrive> { primary };
+        var includedIds = new HashSet<string>(StringComparer.Ordinal) { primary.Id };
+        var checkedIds = new HashSet<string>(includedIds, StringComparer.Ordinal);
         string? url = "me/drives?$select=id,name,owner";
         while (url is not null)
         {
             using var result = await GetJsonAsync(url, cancellationToken);
             foreach (var item in result.RootElement.GetProperty("value").EnumerateArray())
             {
-                var owner = item.TryGetProperty("owner", out var value) && value.TryGetProperty("user", out var user)
-                    ? OneDriveAuthClient.Text(user, "displayName") ?? "Microsoft account" : "Microsoft account";
-                drives.Add(new(item.GetProperty("id").GetString()!, OneDriveAuthClient.Text(item, "name") ?? "OneDrive", owner));
+                var id = item.GetProperty("id").GetString()!;
+                if (!checkedIds.Add(id)) continue;
+                try
+                {
+                    // Validate additional drives once per enumeration, through
+                    // the shared authenticated connection, before offering them.
+                    using var additionalResult = await GetJsonAsync($"drives/{Segment(id)}?$select=id,name,owner", cancellationToken);
+                    var additional = ParseDrive(additionalResult.RootElement);
+                    if (includedIds.Add(additional.Id)) drives.Add(additional);
+                }
+                catch (OneDriveApiException error) when (error.StatusCode is 403 or 404 ||
+                    error.StatusCode == 400 && error.Code.Equals("invalidRequest", StringComparison.OrdinalIgnoreCase))
+                {
+                    // An inaccessible, removed or invalid additional entry must
+                    // not prevent access to the verified primary OneDrive.
+                }
             }
             url = OneDriveAuthClient.Text(result.RootElement, "@odata.nextLink");
         }
         return drives;
+    }
+
+    private static OneDriveDrive ParseDrive(JsonElement item)
+    {
+        var owner = item.TryGetProperty("owner", out var value) && value.TryGetProperty("user", out var user)
+            ? OneDriveAuthClient.Text(user, "displayName") ?? "Microsoft account" : "Microsoft account";
+        return new(item.GetProperty("id").GetString()!, OneDriveAuthClient.Text(item, "name") ?? "OneDrive", owner);
     }
 
     public Task<OneDriveItem> GetRootAsync(string driveId, CancellationToken cancellationToken = default) =>
@@ -176,8 +202,10 @@ public sealed class OneDriveClient
     public async Task<OneDriveUploadSession> CreateUploadSessionAsync(string driveId, string parentId, string name,
         string conflictBehavior, string? replaceETag, CancellationToken cancellationToken = default)
     {
+        // The name is already authoritative in the URL. Personal OneDrive can
+        // reject the otherwise redundant item.name, so keep this body minimal.
         var body = JsonSerializer.Serialize(new Dictionary<string, object> { ["item"] = new Dictionary<string, object>
-            { ["name"] = name, ["@microsoft.graph.conflictBehavior"] = conflictBehavior } });
+            { ["@microsoft.graph.conflictBehavior"] = conflictBehavior } });
         using var response = await SendGraphAsync(() =>
         {
             var request = new HttpRequestMessage(HttpMethod.Post, GraphUri(ItemPath(driveId, parentId, name) + "/createUploadSession"));

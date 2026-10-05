@@ -70,6 +70,59 @@ public sealed class OneDriveTransferTests
     }
 
     [TestMethod]
+    public async Task DrivePickerStartsWithPrimaryOneDriveAndFiltersInvalidAdditionalEntriesAcrossPages()
+    {
+        var requests = new List<string>();
+        object Drive(string id, string name) => new { id, name, owner = new { user = new { displayName = "Test account" } } };
+        using var http = new HttpClient(new DelegateHandler((request, ct) =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            requests.Add(path + request.RequestUri.Query);
+            Assert.AreEqual("Bearer", request.Headers.Authorization?.Scheme);
+            if (path == "/v1.0/me/drive") return Task.FromResult(Json(Drive("personal", "Primary OneDrive")));
+            if (path == "/v1.0/me/drives")
+            {
+                if (request.RequestUri.Query.Contains("page=2"))
+                    return Task.FromResult(Json(new { value = new[] { Drive("phantom", "ObjectHandle"), Drive("personal", "OneDrive"),
+                        Drive("additional", "Additional library"), Drive("forbidden", "Unavailable"), Drive("deleted", "Removed") } }));
+                return Task.FromResult(Json(new Dictionary<string, object>
+                {
+                    ["value"] = new[] { Drive("phantom", "ObjectHandle"), Drive("personal", "OneDrive") },
+                    ["@odata.nextLink"] = "https://graph.microsoft.com/v1.0/me/drives?page=2"
+                }));
+            }
+            if (path == "/v1.0/drives/additional") return Task.FromResult(Json(Drive("additional", "Verified additional library")));
+            var status = path == "/v1.0/drives/forbidden" ? HttpStatusCode.Forbidden
+                : path == "/v1.0/drives/deleted" ? HttpStatusCode.NotFound : HttpStatusCode.BadRequest;
+            return Task.FromResult(Json(new { error = new { code = "invalidRequest" } }, status));
+        }));
+        var drives = await Client(http).ListDrivesAsync();
+        CollectionAssert.AreEqual(new[] { "personal", "additional" }, drives.Select(drive => drive.Id).ToArray());
+        Assert.AreEqual("Primary OneDrive", drives[0].Name);
+        Assert.AreEqual("Verified additional library", drives[1].Name);
+        Assert.AreEqual("/v1.0/me/drive?$select=id,name,owner", requests[0]);
+        Assert.AreEqual(1, requests.Count(path => path.StartsWith("/v1.0/drives/phantom?")));
+        Assert.AreEqual(1, requests.Count(path => path.StartsWith("/v1.0/drives/additional?")));
+        Assert.AreEqual(0, requests.Count(path => path.StartsWith("/v1.0/drives/personal?")));
+        Assert.AreEqual(2, requests.Count(path => path.StartsWith("/v1.0/me/drives?")));
+    }
+
+    [TestMethod]
+    public async Task DrivePickerDoesNotHideUnexpectedAdditionalDriveFailures()
+    {
+        using var http = new HttpClient(new DelegateHandler((request, ct) =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path == "/v1.0/me/drive") return Task.FromResult(Json(new { id = "personal", name = "OneDrive" }));
+            if (path == "/v1.0/me/drives") return Task.FromResult(Json(new { value = new[] { new { id = "additional" } } }));
+            return Task.FromResult(Json(new { error = new { code = "unsupportedQuery" } }, HttpStatusCode.BadRequest));
+        }));
+        var error = await Assert.ThrowsExceptionAsync<OneDriveApiException>(() => Client(http).ListDrivesAsync());
+        Assert.AreEqual(400, error.StatusCode);
+        Assert.AreEqual("unsupportedQuery", error.Code);
+    }
+
+    [TestMethod]
     public async Task SavedOneDrivePagesContinueAtCurrentFolderWithoutRescanningRoot()
     {
         var paths = new List<string>();
@@ -204,6 +257,36 @@ public sealed class OneDriveTransferTests
         await Assert.ThrowsExceptionAsync<TransferSourceChangedException>(() => Client(http).OpenReadAsync("drive",
             new("item", "test.txt", 8, "saved-etag", null, false, DateTimeOffset.UnixEpoch), 0, 8));
         Assert.AreEqual(0, payloadReads);
+    }
+
+    [DataTestMethod]
+    [DataRow("fail", null)]
+    [DataRow("replace", "destination-version")]
+    [DataRow("rename", null)]
+    public async Task PersonalUploadSessionUsesPathNameAndPreservesConflictAndVersionGuards(string conflictBehavior, string? replaceETag)
+    {
+        var requests = 0;
+        using var http = new HttpClient(new DelegateHandler(async (request, ct) =>
+        {
+            requests++;
+            Assert.AreEqual(HttpMethod.Post, request.Method);
+            Assert.AreEqual("Bearer", request.Headers.Authorization?.Scheme);
+            Assert.AreEqual("/v1.0/drives/drive/items/parent:/Nested Folder/large file.bin:/createUploadSession",
+                Uri.UnescapeDataString(request.RequestUri!.AbsolutePath));
+            Assert.AreEqual(replaceETag, request.Headers.TryGetValues("If-Match", out var values) ? values.Single() : null);
+            using var json = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
+            var item = json.RootElement.GetProperty("item");
+            Assert.AreEqual(conflictBehavior, item.GetProperty("@microsoft.graph.conflictBehavior").GetString());
+            // Matches the live personal-account response to a redundant name.
+            if (item.TryGetProperty("name", out _))
+                return Json(new { error = new { code = "invalidRequest" } }, HttpStatusCode.BadRequest);
+            return Json(new { uploadUrl = "https://upload.example.test/session", expirationDateTime = DateTimeOffset.UtcNow.AddHours(1),
+                nextExpectedRanges = new[] { "0-" } });
+        }));
+        var session = await Client(http).CreateUploadSessionAsync("drive", "parent", "Nested Folder/large file.bin", conflictBehavior, replaceETag);
+        Assert.AreEqual("https://upload.example.test/session", session.UploadUrl);
+        Assert.AreEqual(0L, session.NextOffset);
+        Assert.AreEqual(1, requests, "A compatible session request must succeed without a fallback round trip.");
     }
 
     [TestMethod]
