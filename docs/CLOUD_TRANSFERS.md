@@ -45,9 +45,17 @@ Tests use isolated generated namespaces and existing restricted test credentials
 - Latest complete durable-engine tiny benchmark: 24 × 1 KiB files, four workers, **10.036 seconds / 2.391 files per second**. It made 24 uploads, 24 source GETs, 48 immutable metadata checks, 25 name/discovery listings, one authorization and four reusable upload endpoints. Aggregate upload gaps totaled 398.7 ms; the longest was 250.0 ms. Separate runs varied with the network; these differences are not attributed solely to code changes.
 - Observed request send-to-header means were 913.6 ms for uploads (including streaming the source), 282.2 ms for source GETs, 206.1 ms for immutable metadata and 284.9 ms for name listings. Concurrent request totals overlap and cannot be added as elapsed time. Provider/network round trips dominate these tiny-file transfers; the implementation does not claim constant line-rate speed.
 - Cloud adapter source audit found no payload file-writing paths. Live relay state-directory audits and payload-marker/encrypted-session tests passed. These are application/source and scoped-directory checks; system-wide filesystem tracing and OS paging exclusion were not performed.
-- yxrcz tenant public-client authentication and real OneDrive drive discovery succeeded. The actual OneDrive/B2 write acceptance stopped **before creating its first test folder** with **HTTP 507 `quotaLimitReached`**. No OneDrive test payload was uploaded. Resolve that drive's storage quota, then rerun the opt-in test in [the OneDrive transport instructions](../CloudBay.Core/OneDrive/README.md). Successful sign-in is not reported as successful transfer acceptance.
+- yxrcz tenant public-client authentication and real OneDrive drive discovery succeeded. The actual OneDrive/B2 write acceptance stopped **before creating its first test folder** with **HTTP 507 `quotaLimitReached`**. A subsequent read-only Graph quota query returned a **10 GiB limit, 188.47 GiB used, zero remaining and state `exceeded`**; the filtered metadata report is `artifacts/validation/onedrive-quota.json`. No OneDrive test payload was uploaded. Resolve that drive's storage quota or select another isolated drive, then rerun the opt-in test in [the OneDrive transport instructions](../CloudBay.Core/OneDrive/README.md). Successful sign-in is not reported as successful transfer acceptance.
 
 The next release is prepared through the central version process. The published **1.0.0** tag and assets remain unchanged. Live OneDrive write/recovery acceptance is an outstanding release gate; do not publish a verified cloud-transfer release while it remains blocked.
+
+## Local build and UI validation
+
+`version.json` was advanced to **1.1.0** with `scripts/bump-version.ps1 -Component Minor -Commit`. Debug and Release solution builds completed with zero warnings or errors. The self-contained Windows x64 development payload is `artifacts/cloud-transfer-1.1.0`; it reports file version `1.1.0.0`. It is a local validation build, not a published release or installer.
+
+The final full Debug and Release test runs each passed **707 tests, zero failed, one opt-in live OneDrive test skipped** (708 total). Results are `CloudBay.Tests/TestResults/cloud-transfer-1.1.0-debug.trx` and `cloud-transfer-1.1.0-release.trx`. The separate attempted live OneDrive run failed at its first folder creation because of the confirmed quota state. A native multipart disconnect/reconnect regression also proves that the byte-identical journal and existing provider session survive disconnect, restoring the 200,000,000-byte acknowledged baseline and uploading only the final part.
+
+Fresh Dark and Light UI smoke suites completed, including live Activity, queued work, import history, transfer review, backup enable/stop review, all three disconnect choices, navigation widths and native tray actions. Compact 800 px and wide 1300 px transfer/disconnect captures were visually inspected. Completion markers and screenshots are in `artifacts/ui-smoke`. The installed 1.0.0 application and its account state were not replaced.
 
 ## Official API references
 
@@ -57,5 +65,6 @@ The next release is prepared through the central version process. The published 
 - [Graph upload sessions and acknowledgments](https://learn.microsoft.com/en-us/graph/api/driveitem-createuploadsession?view=graph-rest-1.0)
 - [Graph hashes](https://learn.microsoft.com/en-us/graph/api/resources/hashes?view=graph-rest-1.0)
 - [Graph conditional deletion](https://learn.microsoft.com/en-us/graph/api/driveitem-delete?view=graph-rest-1.0)
+- [Graph drive quota](https://learn.microsoft.com/en-us/graph/api/resources/quota?view=graph-rest-1.0)
 - [B2 upload checksum trailers](https://www.backblaze.com/apidocs/b2-upload-file)
 - [B2 parts and resumable upload](https://www.backblaze.com/apidocs/b2-upload-part)
