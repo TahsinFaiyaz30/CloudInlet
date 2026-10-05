@@ -12,6 +12,8 @@ Release publishing now locates an existing unpublished draft by its authenticate
 
 The notification review exposed a tray menu regression after replacing the hosted item source and toggling native check states. Geometry now measures the current source and retains the arranged check, icon and caption allocation before remeasurement. Capture acceptance also checks that the actual XAML viewport has consumed the native resize. Fresh Dark/Light tray acceptance passed with **40 captures**, including visually reviewed checked and unchecked quick settings, at `artifacts/validation/tray-menu-20261005T101340Z-dbeff0be/artifacts/ui-smoke-tray`. The earlier clipped capture is superseded by this run.
 
+The final policy audit added eight regressions for retained Notification Center entries and fast transfer completion. Disabling any category clears its previous-session group exactly once even if this session has not emitted it. Optional completion summaries coalesce tiny and late transfer records through a three-second quiet window, defer during an active cycle, and discard completion intent while disabled. The focused policy gate passed **40/40** after these fixes; final package gates run the expanded integrated suite separately.
+
 ## Public 1.0.0 baseline and update acceptance — 2026-10-05
 
 `version.json` now defines the public **1.0.0** baseline. Earlier 2.0.x entries below describe internal development milestones and remain as historical evidence. The release pipeline validates the central version, builds separate Debug and Release EXE/MSI/portable distributions, and publishes an immutable tag only after its gates pass. The Store workflow requires a reserved Partner Center identity before production packaging or submission.

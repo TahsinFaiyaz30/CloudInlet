@@ -86,10 +86,71 @@ public sealed class NotificationTests
         policy.Observe(State(ClientState.Syncing), [], null, prefs, Now);
         Assert.AreEqual(0, policy.Observe(State(ClientState.UpToDate), [], null, prefs, Now.AddSeconds(1)).Notices.Count);
         policy.Observe(State(ClientState.Syncing) with { ActiveTransfers = 1 }, [], null, prefs, Now.AddSeconds(2));
-        Assert.AreEqual(NotificationPolicy.SyncGroup, policy.Observe(State(ClientState.UpToDate), [], null, prefs, Now.AddSeconds(3)).Notices.Single().Group);
-        Assert.AreEqual(0, policy.Observe(State(ClientState.UpToDate), [], null, prefs, Now.AddSeconds(4)).Notices.Count);
-        policy.Observe(State(ClientState.Syncing) with { ActiveTransfers = 1 }, [], null, new(), Now.AddSeconds(5));
-        Assert.AreEqual(0, policy.Observe(State(ClientState.UpToDate), [], null, new(), Now.AddSeconds(6)).Notices.Count);
+        Assert.AreEqual(0, policy.Observe(State(ClientState.UpToDate), [], null, prefs, Now.AddSeconds(3)).Notices.Count);
+        Assert.AreEqual(NotificationPolicy.SyncGroup, policy.Observe(State(ClientState.UpToDate), [], null, prefs, Now.AddSeconds(6)).Notices.Single().Group);
+        Assert.AreEqual(0, policy.Observe(State(ClientState.UpToDate), [], null, prefs, Now.AddSeconds(7)).Notices.Count);
+        policy.Observe(State(ClientState.Syncing) with { ActiveTransfers = 1 }, [], null, new(), Now.AddSeconds(8));
+        Assert.AreEqual(0, policy.Observe(State(ClientState.UpToDate), [], null, new(), Now.AddSeconds(9)).Notices.Count);
+    }
+
+    [TestMethod]
+    public void TinyTransfersBetweenUpToDateObservationsProduceOneQuietCompletionSummary()
+    {
+        var completed = new ActivityEvent(Now, ActivityKind.Upload, "private-small-file", "secret", 1);
+        var next = new ActivityEvent(Now.AddSeconds(2), ActivityKind.Download, "another-private-file", "secret", 2);
+        var preferences = new NotificationPreferences(SyncCompleted: true);
+        var policy = new NotificationPolicy(State(ClientState.UpToDate), []);
+        Assert.AreEqual(0, policy.Observe(State(ClientState.UpToDate), [completed], null, preferences, Now).Notices.Count);
+        Assert.IsTrue(policy.HasPending, "The observed activity records a real cycle even when both snapshots are already idle.");
+        Assert.AreEqual(0, policy.Observe(State(ClientState.UpToDate), [completed, next], null, preferences, Now.AddSeconds(2)).Notices.Count);
+        Assert.AreEqual(0, policy.Observe(State(ClientState.UpToDate), [completed, next], null, preferences, Now.AddSeconds(3)).Notices.Count,
+            "The next tiny transfer extends the quiet window rather than generating another banner.");
+        var result = policy.Observe(State(ClientState.UpToDate), [completed, next], null, preferences, Now.AddSeconds(5));
+        Assert.AreEqual(NotificationPolicy.SyncGroup, result.Notices.Single().Group);
+        Assert.IsFalse(policy.HasPending);
+        Assert.AreEqual(0, policy.Observe(State(ClientState.UpToDate), [completed, next], null, preferences, Now.AddSeconds(30)).Notices.Count);
+        var quiet = new NotificationPolicy(State(ClientState.UpToDate), []);
+        quiet.Observe(State(ClientState.UpToDate), [completed, next], null, new(), Now);
+        Assert.IsFalse(quiet.HasPending);
+        Assert.AreEqual(0, quiet.Observe(State(ClientState.UpToDate), [completed, next], null, new(), Now.AddSeconds(30)).Notices.Count,
+            "Completion summaries remain off by default.");
+    }
+
+    [DataTestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public void EnablingCompletionAfterADisabledTransferDoesNotReplayIt(bool masterDisabled)
+    {
+        var policy = new NotificationPolicy(State(ClientState.UpToDate), []);
+        var disabled = masterDisabled ? new NotificationPreferences(Enabled: false, SyncCompleted: true) : new NotificationPreferences();
+        var completed = new ActivityEvent(Now.AddSeconds(1), ActivityKind.Upload, "private", "secret", 1);
+        policy.Observe(State(ClientState.Syncing) with { ActiveTransfers = 1 }, [], null, disabled, Now);
+        policy.Observe(State(ClientState.Syncing), [completed], null, disabled, Now.AddSeconds(1));
+        var enabled = new NotificationPreferences(SyncCompleted: true);
+        Assert.AreEqual(0, policy.Observe(State(ClientState.UpToDate), [completed], null, enabled, Now.AddSeconds(2)).Notices.Count);
+        Assert.IsFalse(policy.HasPending, "Disabled transfer intent must not survive the saved preference change.");
+        Assert.AreEqual(0, policy.Observe(State(ClientState.UpToDate), [completed], null, enabled, Now.AddSeconds(10)).Notices.Count);
+    }
+
+    [TestMethod]
+    public void LateCompletionActivityAndANewActiveCycleWaitForOneFinalQuietSummary()
+    {
+        var policy = new NotificationPolicy(State(ClientState.UpToDate), []);
+        var preferences = new NotificationPreferences(SyncCompleted: true);
+        var first = new ActivityEvent(Now.AddSeconds(1), ActivityKind.Upload, "first", "done", 1);
+        var second = new ActivityEvent(Now.AddSeconds(5), ActivityKind.Download, "second", "done", 2);
+        policy.Observe(State(ClientState.Syncing) with { ActiveTransfers = 1 }, [], null, preferences, Now);
+        Assert.AreEqual(0, policy.Observe(State(ClientState.UpToDate), [], null, preferences, Now.AddMilliseconds(500)).Notices.Count);
+        Assert.IsTrue(policy.HasPending);
+        Assert.AreEqual(0, policy.Observe(State(ClientState.UpToDate), [first], null, preferences, Now.AddSeconds(1)).Notices.Count);
+        policy.Observe(State(ClientState.Syncing) with { ActiveTransfers = 1 }, [first], null, preferences, Now.AddSeconds(2));
+        Assert.IsFalse(policy.HasPending, "A new active cycle defers completion without keeping an idle timer running.");
+        Assert.AreEqual(0, policy.Observe(State(ClientState.Syncing) with { ActiveTransfers = 1 }, [first], null, preferences, Now.AddSeconds(4)).Notices.Count);
+        Assert.AreEqual(0, policy.Observe(State(ClientState.UpToDate), [first, second], null, preferences, Now.AddSeconds(5)).Notices.Count);
+        var result = policy.Observe(State(ClientState.UpToDate), [first, second], null, preferences, Now.AddSeconds(8));
+        Assert.AreEqual(NotificationPolicy.SyncGroup, result.Notices.Single().Group);
+        Assert.IsFalse(policy.HasPending);
+        Assert.AreEqual(0, policy.Observe(State(ClientState.UpToDate), [first, second], null, preferences, Now.AddMinutes(1)).Notices.Count);
     }
 
     [TestMethod]
@@ -103,6 +164,33 @@ public sealed class NotificationTests
         Assert.IsFalse(policy.HasPending);
         CollectionAssert.Contains(disabled.ClearGroups.ToArray(), NotificationPolicy.UpdatesGroup);
         Assert.AreEqual(0, policy.Observe(State(ClientState.Attention), [], Update(UpdateState.Ready), new(Enabled: false), Now.AddMinutes(10)).Notices.Count);
+    }
+
+    [DataTestMethod]
+    [DataRow(NotificationPolicy.ProblemsGroup)]
+    [DataRow(NotificationPolicy.FoldersGroup)]
+    [DataRow(NotificationPolicy.SyncGroup)]
+    [DataRow(NotificationPolicy.UpdatesGroup)]
+    public void CategoryDisableRemovesPreviousSessionEntriesOnceWithoutCurrentSessionNotices(string group)
+    {
+        var policy = new NotificationPolicy(State(ClientState.UpToDate), []);
+        var enabled = new NotificationPreferences(SyncCompleted: true);
+        var baseline = policy.Observe(State(ClientState.UpToDate), [], null, enabled, Now);
+        Assert.AreEqual(0, baseline.Notices.Count, "This process has never shown a notice or tracked a visible group.");
+        var disabled = group switch
+        {
+            NotificationPolicy.ProblemsGroup => enabled with { BackupProblems = false },
+            NotificationPolicy.FoldersGroup => enabled with { FolderChanges = false },
+            NotificationPolicy.SyncGroup => enabled with { SyncCompleted = false },
+            _ => enabled with { Updates = false }
+        };
+        var changed = policy.Observe(State(ClientState.UpToDate), [], null, disabled, Now.AddSeconds(1));
+        CollectionAssert.AreEqual(new[] { group }, changed.ClearGroups.ToArray(),
+            "The category's entries from the previous Windows session must be removed on disable.");
+        var unrelated = policy.Observe(State(ClientState.Syncing), [], null, disabled, Now.AddSeconds(2));
+        Assert.AreEqual(0, unrelated.ClearGroups.Count, "An unrelated sync observation must not repeat group removal.");
+        var stillDisabled = policy.Observe(State(ClientState.UpToDate), [], null, disabled, Now.AddSeconds(3));
+        Assert.AreEqual(0, stillDisabled.ClearGroups.Count);
     }
 
     [TestMethod]

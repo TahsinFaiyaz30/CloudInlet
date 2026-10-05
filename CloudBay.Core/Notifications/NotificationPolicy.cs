@@ -19,10 +19,11 @@ public sealed class NotificationPolicy
     private int _folders;
     private bool _transferred;
     private bool _completionPending;
+    private DateTimeOffset? _completionDue;
     private string? _updateKey;
     private ClientState _state;
     private bool _firstObservation = true;
-    public bool HasPending => _problemDue is not null || _folderDue is not null;
+    public bool HasPending => _problemDue is not null || _folderDue is not null || _completionDue is not null;
 
     public NotificationPolicy(SyncSnapshot initial, IEnumerable<ActivityEvent> history)
     {
@@ -35,12 +36,14 @@ public sealed class NotificationPolicy
     {
         var notices = new List<NotificationNotice>();
         var clear = new HashSet<string>();
+        var newCompletedTransfer = false;
         foreach (var item in activity)
         {
             if (!Remember(item)) continue;
             if (item.Kind == ActivityKind.Backup && preferences.Enabled && preferences.FolderChanges)
             { _folders++; _folderDue ??= now.AddSeconds(3); }
-            if (item.Kind is ActivityKind.Upload or ActivityKind.Download && item.Completed) _transferred = true;
+            if (item.Kind is ActivityKind.Upload or ActivityKind.Download && item.Completed)
+            { _transferred = true; newCompletedTransfer = true; }
             if (item.Kind is ActivityKind.Error or ActivityKind.Conflict) ScheduleProblem();
         }
         if (snapshot.ActiveTransfers > 0) _transferred = true;
@@ -48,8 +51,16 @@ public sealed class NotificationPolicy
             (_firstObservation || snapshot.State != _state || !_previous.Enabled || !_previous.BackupProblems)) ScheduleProblem();
         else if (snapshot.State is not (ClientState.Attention or ClientState.Offline) && _state is ClientState.Attention or ClientState.Offline)
         { _problemDue = null; Clear(ProblemsGroup); }
-        if (snapshot.State == ClientState.UpToDate && _state != ClientState.UpToDate && _transferred)
+        if (snapshot.State == ClientState.UpToDate && (_state != ClientState.UpToDate || newCompletedTransfer) && _transferred)
         { _completionPending = true; _transferred = false; }
+        if (_completionPending && snapshot.State == ClientState.UpToDate)
+        {
+            // A tiny file can complete before a dispatcher observes Syncing.
+            // New completion events still count, with a quiet window so a burst
+            // produces one summary rather than one banner for each file.
+            if (_completionDue is null || newCompletedTransfer) _completionDue = now.AddSeconds(3);
+        }
+        else _completionDue = null;
         _state = snapshot.State;
 
         if (!preferences.Enabled)
@@ -57,15 +68,18 @@ public sealed class NotificationPolicy
             foreach (var group in _visible.ToArray()) Clear(group);
             if (_firstObservation || _previous.Enabled)
                 clear.UnionWith([ProblemsGroup, FoldersGroup, SyncGroup, UpdatesGroup]);
-            _folders = 0; _folderDue = null; _problemDue = null; _completionPending = false; _updateKey = null;
+            _folders = 0; _folderDue = null; _problemDue = null; _transferred = false; _completionPending = false; _completionDue = null; _updateKey = null;
             _previous = preferences;
             _firstObservation = false;
             return new(notices, clear.ToArray());
         }
-        if (!preferences.BackupProblems) { Clear(ProblemsGroup); if (_firstObservation) clear.Add(ProblemsGroup); _problemDue = null; }
-        if (!preferences.FolderChanges) { Clear(FoldersGroup); if (_firstObservation) clear.Add(FoldersGroup); _folders = 0; _folderDue = null; }
-        if (!preferences.SyncCompleted) { Clear(SyncGroup); if (_firstObservation) clear.Add(SyncGroup); _completionPending = false; }
-        if (!preferences.Updates) { Clear(UpdatesGroup); if (_firstObservation) clear.Add(UpdatesGroup); _updateKey = null; }
+        // Notification Center outlives this process. A true-to-false saved
+        // preference must remove the known group even when this session has
+        // not emitted it; unrelated observations should not repeat that work.
+        if (!preferences.BackupProblems) { Clear(ProblemsGroup); if (_firstObservation || _previous.BackupProblems) clear.Add(ProblemsGroup); _problemDue = null; }
+        if (!preferences.FolderChanges) { Clear(FoldersGroup); if (_firstObservation || _previous.FolderChanges) clear.Add(FoldersGroup); _folders = 0; _folderDue = null; }
+        if (!preferences.SyncCompleted) { Clear(SyncGroup); if (_firstObservation || _previous.SyncCompleted) clear.Add(SyncGroup); _transferred = false; _completionPending = false; _completionDue = null; }
+        if (!preferences.Updates) { Clear(UpdatesGroup); if (_firstObservation || _previous.Updates) clear.Add(UpdatesGroup); _updateKey = null; }
         if (_firstObservation && snapshot.State is not (ClientState.Attention or ClientState.Offline)) clear.Add(ProblemsGroup);
 
         if (preferences.BackupProblems && _problemDue <= now &&
@@ -84,11 +98,11 @@ public sealed class NotificationPolicy
                 new(NotificationAction.ManageBackup), [new("Manage backup", new(NotificationAction.ManageBackup)), new("Open folder", new(NotificationAction.OpenFolder))]));
             _folders = 0; _folderDue = null;
         }
-        if (preferences.SyncCompleted && _completionPending && snapshot.State == ClientState.UpToDate)
+        if (preferences.SyncCompleted && _completionPending && _completionDue <= now && snapshot.State == ClientState.UpToDate)
         {
             Add(new(SyncGroup, "complete", "Your files are up to date", "CloudBay finished transferring your files.",
                 new(NotificationAction.ViewActivity), [new("View activity", new(NotificationAction.ViewActivity)), new("Open folder", new(NotificationAction.OpenFolder))]));
-            _completionPending = false;
+            _completionPending = false; _completionDue = null;
         }
         if (preferences.Updates && update?.Candidate is { } candidate && update.State is UpdateState.Available or UpdateState.Ready)
         {
