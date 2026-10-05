@@ -11,7 +11,10 @@ using Windows.Storage.Provider;
 using ActivityEvent = CloudBay.Core.ActivityEvent;
 using ActivityKind = CloudBay.Core.ActivityKind;
 
+if (args.Contains("--onedrive-signin")) return await OneDriveSignIn.RunAsync(args);
 if (args.Contains("--transfer-worker")) return await TransferAcceptance.RunWorkerAsync(args);
+if (args.Contains("--cloud-relay-worker")) return await CloudRelayAcceptance.RunWorkerEntryAsync(args);
+if (args.Contains("--cloud-relay-cleanup")) return await CloudRelayAcceptance.CleanupOldRunAsync(args);
 if (args.Contains("--repair-folder-icons")) return await FolderIconRepair.RunAsync();
 return await Validation.RunAsync(args);
 
@@ -55,7 +58,7 @@ internal static class Validation
             bucket = buckets[0]; BucketName = bucket.Name;
             Prefix = (account.AllowedNamePrefix ?? "") + Prefix;
             var type = transport.BucketTypes.GetValueOrDefault(bucket.Id);
-            if (args.Contains("--transfers") && type != "allPrivate")
+            if ((args.Contains("--transfers") || args.Contains("--cloud-relay") || args.Contains("--cloud-relay-tiny")) && type != "allPrivate")
                 throw new InvalidOperationException("Fresh-process transfer checks require the restricted test bucket to be private.");
             if (type != "allPrivate")
             {
@@ -64,7 +67,12 @@ internal static class Validation
                 if (!empty) throw new InvalidOperationException("The restricted test bucket is not empty and its privacy could not be verified.");
             }
             Directory.CreateDirectory(temp);
-            if (args.Contains("--transfers"))
+            if (args.Contains("--cloud-relay") || args.Contains("--cloud-relay-tiny"))
+            {
+                credentials = null!;
+                await CloudRelayAcceptance.RunAsync(store, bucket, account.AccountId, Prefix, Id, temp, CheckAsync, ct, args.Contains("--cloud-relay-tiny"));
+            }
+            else if (args.Contains("--transfers"))
             {
                 credentials = null!;
                 await TransferAcceptance.RunAsync(store, bucket, Prefix, Id, temp, CheckAsync, ct);
@@ -196,6 +204,8 @@ internal static class Validation
                 try { await CheckAsync("cleanup_hides_only_isolated_test_objects", async () =>
                 {
                     using var cleanup = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+                    if (args.Contains("--cloud-relay") || args.Contains("--cloud-relay-tiny"))
+                        await CloudRelayAcceptance.CleanupAsync(store, bucket.Id, Prefix, temp, cleanup.Token);
                     var remaining = await List(store, bucket.Id, cleanup.Token);
                     foreach (var file in remaining.Where(f => f.Action == "upload"))
                     {
@@ -341,6 +351,8 @@ internal static class Validation
 
 internal sealed class CountingHandler : DelegatingHandler
 {
+    public ConcurrentDictionary<string, int> HttpVersions { get; } = new(StringComparer.Ordinal);
+    public ConcurrentDictionary<string, double> RequestMilliseconds { get; } = new(StringComparer.Ordinal);
     public ConcurrentDictionary<string, int> Counts { get; } = new(StringComparer.Ordinal);
     public ConcurrentDictionary<string, int> SuccessCounts { get; } = new(StringComparer.Ordinal);
     public ConcurrentDictionary<string, string> BucketTypes { get; } = new(StringComparer.Ordinal);
@@ -361,6 +373,7 @@ internal sealed class CountingHandler : DelegatingHandler
         // Counters store only an API operation name. Actual URLs, headers, and credentials are never logged.
         var operation = request.RequestUri!.AbsolutePath.Split('/').FirstOrDefault(p => p.StartsWith("b2_", StringComparison.Ordinal)) ?? "other";
         Counts.AddOrUpdate(operation, 1, (_, old) => old + 1);
+        var started = Stopwatch.GetTimestamp();
         string? tokenKey = null;
         if (operation is "b2_upload_file" or "b2_upload_part")
         {
@@ -371,6 +384,7 @@ internal sealed class CountingHandler : DelegatingHandler
         try
         {
             var response = await base.SendAsync(request, cancellationToken);
+            HttpVersions.AddOrUpdate(response.Version.ToString(), 1, (_, old) => old + 1);
             if (response.IsSuccessStatusCode) SuccessCounts.AddOrUpdate(operation, 1, (_, old) => old + 1);
             if (operation == "b2_list_buckets" && response.IsSuccessStatusCode)
             {
@@ -381,6 +395,11 @@ internal sealed class CountingHandler : DelegatingHandler
             }
             return response;
         }
-        finally { if (tokenKey is not null) _activeTokens.TryRemove(tokenKey, out _); }
+        finally
+        {
+            var elapsed = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            RequestMilliseconds.AddOrUpdate(operation, elapsed, (_, old) => old + elapsed);
+            if (tokenKey is not null) _activeTokens.TryRemove(tokenKey, out _);
+        }
     }
 }

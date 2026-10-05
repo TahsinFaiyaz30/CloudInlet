@@ -1,4 +1,4 @@
-# CloudBay 1.0.0
+# CloudBay
 
 CloudBay is a native Windows backup and sync client for **Backblaze B2**. It runs in the background, uses **WinUI 3 Mica Alt**, and integrates with File Explorer through the Windows Cloud Files API. Mountain Duck is not required.
 
@@ -15,12 +15,13 @@ The previous mounted-drive migration helper is preserved on the **`legacy` branc
 - Reviewed imports from local folders, external drives, mounted drives, and existing Windows cloud folders. Whole-account shortcuts appear on Folder backup; personal-folder setup shows only matching folders from each account. Independent folder choices stay available while another change is queued or applying.
 - Stopping personal-folder backup offers a selected local or existing cloud location with Copy or Move, or stopping without restoring files. Optional freeing of downloaded CloudBay copies keeps B2 files; unsynced local contents remain on this PC. Verified moves retain changed or blocked originals and report them. Moving out of CloudBay removes its current B2 copies through normal deletion sync; older versions follow bucket policy.
 - Direct server-side import from Backblaze B2 buckets accessible to the connected account, with immutable source versions, explicit destination review, and interrupted-import history. Additional direct cloud connectors are shown as Coming soon; their existing Windows folders can be imported now.
+- Direct OneDrive ↔ Backblaze B2 transfers through CloudBay, with real cloud accounts and folder browsing, Copy/Move, exclusions, conflict review, durable progress and bounded RAM streaming. The same endpoint adapters also support explicit local sources and destinations. See [cloud transfer behavior and validation](docs/CLOUD_TRANSFERS.md).
 - Persistent B2 connections, reusable exclusive upload sessions for small files, resumable multipart uploads, parallel resumable downloads, separate upload/download concurrency, and shared speed caps.
 - Original Windows and custom folder icons are retained when personal folders are backed up. Standard Windows compatibility junctions inside Documents are skipped without following their targets.
 - Durable sync state, conflict copies, exact-set review of large deletion batches, version-preserving B2 deletion, empty-folder sync, and previous-version restore.
 - Visual exclusions: browse for files or folders, choose file types, match names, or assemble advanced path patterns from named parts. Rules can apply to all backups, one backup, or a specific folder, and can be edited, disabled, or removed.
 - Optional pause on metered connections or Battery Saver, sign-in startup, and Windows light/dark/system themes.
-- Application keys encrypted with current-user Windows DPAPI. Account disconnect downloads and converts cloud files into normal local files before removing provider registrations.
+- Application keys, OneDrive tokens and upload-session checkpoints protected with current-user Windows DPAPI. Account disconnect offers **Disconnect only**, **Download files, then disconnect**, and **Remove local cloud copies, then disconnect**. Disconnect only is the default; local cleanup removes only verified unchanged copies and retains other files.
 - GitHub updates retain the installed Debug/Release flavor and EXE/MSI installer. Settings → About CloudBay offers manual checks, an automatic check interval, optional automatic download, and optional silent installation. Microsoft Store packages use Store updates.
 
 ## Run
@@ -34,7 +35,7 @@ dotnet build CloudBay.sln -c Release
 
 Windows 11 on x64 is recommended for Mica Alt. The project minimum is Windows 10 build 19041; Files On-Demand requires a **local fixed NTFS drive**. The release includes its .NET and Windows App SDK runtime files. Keep all files in the release's `App` folder together.
 
-For a per-user installation, run **`Install.ps1` from the extracted release folder**. It adds a Start menu shortcut and a Windows Installed apps entry, without elevation. Before uninstalling, disconnect the account in CloudBay Settings so all local data becomes independent of the provider.
+For a per-user installation, run **`Install.ps1` from the extracted release folder**. It adds a Start menu shortcut and a Windows Installed apps entry, without elevation. Before uninstalling, choose **Download files, then disconnect** if online-only files need to become independent local files.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1

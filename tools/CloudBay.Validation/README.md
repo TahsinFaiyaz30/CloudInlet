@@ -9,6 +9,7 @@ dotnet run --project tools/CloudBay.Validation/CloudBay.Validation.csproj -c Rel
 dotnet run --project tools/CloudBay.Validation/CloudBay.Validation.csproj -c Release -- --b2 --native
 dotnet run --project tools/CloudBay.Validation/CloudBay.Validation.csproj -c Release -- --b2 --controller
 dotnet run --project tools/CloudBay.Validation/CloudBay.Validation.csproj -c Release -- --b2 --transfers
+dotnet run --project tools/CloudBay.Validation/CloudBay.Validation.csproj -c Release -- --b2 --cloud-relay
 ```
 
 `--list` only checks authorization and prints accessible bucket names. Live writes require a key restricted to exactly one private or empty bucket. Every run uses an isolated `CloudBayValidation/<GUID>/` cloud prefix, appending it to any key prefix restriction. It checks reusable small-file sessions, concurrent session exclusivity, pagination of both current names and historical versions, version history, restore/hide behavior, a streamed 205 MiB multipart upload and verified download, precise byte ranges, and canceled multipart cleanup. It hides the run's objects afterward while retaining their B2 versions.
@@ -24,6 +25,12 @@ Add `--quick` to rerun the smaller B2 and native checks without repeating multip
 Safe acceptance reports go to `artifacts/validation/b2-<GUID>.json`. They contain test results, timings, API operation counters, token-exclusivity violation counts, and the process peak working set. Operation counters never retain request URLs or headers. The console uses temporary disk files for multipart validation and deletes them on completion. Multipart validation transfers approximately 410 MiB plus the beginning of one canceled upload.
 
 Restart reports also include `transfer-processes-<GUID>.json` and one safe report per worker. They record process IDs, confirmed part numbers, range offsets and peak active downloads. Cleanup is confined to the generated GUID cloud prefix and local validation directory.
+
+`--cloud-relay` requires the restricted private test bucket and exercises the shared RAM-only adapter against live B2. It generates a 64 MiB source directly in RAM streams, uploads with provider-verified SHA1 trailers, then relays actual immutable B2 range downloads through the middleman into a second B2 object. Separate worker processes interrupt after one acknowledged part and resume only the remaining range; the destination is streamed back for content verification. A lost successful small-upload acknowledgment is injected on the actual provider response and must reconcile its operation receipt without another payload upload. A 24-file, four-worker tiny-file benchmark reports elapsed files/second, payload throughput, reused authorization/upload endpoints, and aggregate upload idle gaps. The generated state directory is checked for only small JSON records. This checks the implementation and its scoped directory; it does not claim OS-level tracing of every disk write. Reports go to `cloud-relay-<GUID>.json`, and ordinary cleanup hides only generated test objects. The fixture and relay use about 256 MiB of payload traffic; no payload file is generated on disk.
+
+Use `--b2 --cloud-relay-tiny` to repeat only the RAM seed, tiny-file benchmark, storage audit and scoped cleanup. The report records the actual negotiated HTTP versions; requesting HTTP/2 does not guarantee that a provider supports it.
+
+For isolated OneDrive sign-in, run `--onedrive-signin --client-id <public-client-ID> --tenant-id <tenant-ID-or-domain>`. Enable **Allow public client flows** in the Microsoft app registration. The helper prints a short-lived Microsoft device code, saves tokens only in Windows DPAPI at `%LOCALAPPDATA%\CloudBay\Validation\OneDrive`, and returns safe account/drive selections for the opt-in acceptance test. Run the helper as a hidden background process when sign-in must survive chat or terminal interruptions. No client secret is needed.
 
 To repair icons on personal folders already backed up by this installation, run:
 
