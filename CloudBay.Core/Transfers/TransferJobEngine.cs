@@ -103,7 +103,7 @@ public sealed class TransferJobEngine : IAsyncDisposable
             Publish(jobId);
             var wake = Channel.CreateBounded<bool>(new BoundedChannelOptions(PipelineWorkers)
             { FullMode = BoundedChannelFullMode.DropWrite, SingleReader = false, SingleWriter = true });
-            var verification = Channel.CreateBounded<JournalItem>(new BoundedChannelOptions(PipelineWorkers * 2)
+            var verification = Channel.CreateBounded<VerificationWork>(new BoundedChannelOptions(PipelineWorkers * 2)
             { FullMode = BoundedChannelFullMode.Wait, SingleReader = false, SingleWriter = false });
             var discoveryDone = job.DiscoveryComplete ? 1 : 0;
 
@@ -154,7 +154,7 @@ public sealed class TransferJobEngine : IAsyncDisposable
                             TransferValidation.ValidateReceipt(item.Entry, item.Receipt, request.OperationId);
                             if (item.Receipt.RelativePath != request.RelativePath) throw new InvalidDataException("The saved receipt points to a different destination path.");
                             live.State = TransferItemState.Verifying;
-                            await verification.Writer.WriteAsync(item, token).ConfigureAwait(false);
+                            await verification.Writer.WriteAsync(new(item, file), token).ConfigureAwait(false);
                             continue;
                         }
                         TransferReceipt? receipt;
@@ -184,7 +184,7 @@ public sealed class TransferJobEngine : IAsyncDisposable
                         _journal.SaveReceipt(jobId, item.Entry, receipt, request.OperationId);
                         live.Bytes = live.AcknowledgedBytes = item.Entry.Size;
                         live.State = TransferItemState.Verifying;
-                        await verification.Writer.WriteAsync(item with { Receipt = receipt, Bytes = item.Entry.Size }, token).ConfigureAwait(false);
+                        await verification.Writer.WriteAsync(new(item with { Receipt = receipt, Bytes = item.Entry.Size }, file), token).ConfigureAwait(false);
                     }
                     catch (TransferSkippedException)
                     {
@@ -198,11 +198,12 @@ public sealed class TransferJobEngine : IAsyncDisposable
 
             async Task VerifyAsync()
             {
-                await foreach (var item in verification.Reader.ReadAllAsync(token).ConfigureAwait(false))
+                await foreach (var work in verification.Reader.ReadAllAsync(token).ConfigureAwait(false))
                 {
+                    var item = work.Item;
                     try
                     {
-                        var file = source.OpenSource(item.Entry);
+                        var file = work.Source;
                         if (item.Receipt is null) throw new InvalidDataException("Verification requires a durable destination receipt.");
                         if (item.DeleteStarted && item.Verified && await source.IsSourceDeletedAsync(item.Entry, token).ConfigureAwait(false))
                         {
@@ -378,6 +379,7 @@ public sealed class TransferJobEngine : IAsyncDisposable
         public TransferSpeedMeter Speed { get; } = new();
         public long PayloadBytes;
     }
+    private sealed record VerificationWork(JournalItem Item, ITransferSourceFile Source);
     private sealed class LiveItem(TransferEntry entry, long baseline)
     {
         public object Gate { get; } = new();

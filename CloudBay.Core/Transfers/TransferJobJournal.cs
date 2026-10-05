@@ -348,9 +348,10 @@ public static class TransferValidation
         if (plan.Source.Provider == plan.Destination.Provider && plan.Source.AccountId == plan.Destination.AccountId &&
             plan.Source.ContainerId == plan.Destination.ContainerId)
         {
-            var source = plan.Source.Path.TrimEnd('/','\\') + "/";
-            var destination = plan.Destination.Path.TrimEnd('/','\\') + "/";
-            if (plan.Source.FolderId == plan.Destination.FolderId || source.StartsWith(destination, StringComparison.OrdinalIgnoreCase) ||
+            var source = plan.Source.Path.Replace('\\', '/').TrimEnd('/') + "/";
+            var destination = plan.Destination.Path.Replace('\\', '/').TrimEnd('/') + "/";
+            if (plan.Source.FolderId.Length > 0 && plan.Source.FolderId == plan.Destination.FolderId ||
+                source == "/" || destination == "/" || source.StartsWith(destination, StringComparison.OrdinalIgnoreCase) ||
                 destination.StartsWith(source, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Choose source and destination folders that do not overlap.");
         }

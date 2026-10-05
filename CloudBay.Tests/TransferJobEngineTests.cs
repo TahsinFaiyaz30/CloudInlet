@@ -262,6 +262,19 @@ public sealed class TransferJobEngineTests
         Assert.AreEqual(request, TransferJobEngine.Request(plan, file));
     }
 
+    [TestMethod]
+    public void PlansRejectNestedWindowsFoldersAndAllowDistinctB2Prefixes()
+    {
+        var plan = new TransferJobPlan(Guid.NewGuid().ToString("N"), LocalTransferEndpoint.ForFolder(@"C:\Example\Source"),
+            LocalTransferEndpoint.ForFolder(@"C:\Example\Source\Nested"), TransferOperation.Copy, TransferConflictPolicy.Fail, [], DateTimeOffset.UtcNow);
+        Assert.ThrowsException<InvalidDataException>(() => TransferValidation.ValidatePlan(plan));
+        TransferValidation.ValidatePlan(plan with
+        {
+            Source = new("b2", "account", "bucket", "", "source/", "Source"),
+            Destination = new("b2", "account", "bucket", "", "destination/", "Destination")
+        });
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         public string DirectoryPath { get; } = Path.Combine(Path.GetTempPath(), "CloudBayTransferTests-" + Guid.NewGuid().ToString("N"));
