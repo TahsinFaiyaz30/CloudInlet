@@ -131,6 +131,7 @@ public sealed partial class ClientController
                     throw new IOException("Review this folder backup again. The account or folder selection changed.");
             if (Settings.Backups.Any(folder => folder.Name.Equals(reviewed.Name, StringComparison.OrdinalIgnoreCase)))
                 throw new IOException("This Windows folder is already backed up.");
+            ValidateCloudBackupReclaim(reviewed.Name);
             if (Settings.CustomBackups.Any(folder => IsNested(folder.SourcePath, reviewed.OriginalWindowsPath) || IsNested(reviewed.OriginalWindowsPath, folder.SourcePath)))
                 throw new IOException("Stop the custom backup inside this Windows folder before changing its location.");
             if (reviewed.AdditionalFiles is { } extra &&
@@ -143,6 +144,7 @@ public sealed partial class ClientController
             var applied = await Task.Run(() => KnownFolderBackup.ApplyEnableReviewedAsync(reviewed, operation.Token), operation.Token);
             Settings = Settings with { Backups = [.. Settings.Backups, applied.Folder] };
             _storage.SaveSettings(Settings);
+            ReclaimCloudBackupRoot(reviewed.Name);
             _storage.ClearBackupIntent();
             _engine.Configure(Settings);
             var detail = reviewed.TransferMode switch

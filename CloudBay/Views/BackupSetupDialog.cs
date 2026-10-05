@@ -31,6 +31,7 @@ internal sealed class BackupSetupDialog : ContentDialog
     private readonly Button _browse = new() { Content = "Choose another folder…", HorizontalAlignment = HorizontalAlignment.Left };
     private readonly RadioButton _none;
     private readonly RadioButton _bring;
+    private readonly RadioButton _cloud;
     private RadioButton? _manual;
     private bool _working, _closed;
     private bool _discoveryStarted, _disposed;
@@ -41,7 +42,8 @@ internal sealed class BackupSetupDialog : ContentDialog
     internal string? SourcePath => _stopping || TransferMode == BackupTransferMode.None || SamePath(_selectedPath, _currentPath) ? null : _selectedPath;
     internal string? DestinationPath => _stopping ? _selectedPath : null;
     internal bool IncludeCurrentFiles => !_stopping && TransferMode != BackupTransferMode.None && SamePath(_selectedPath, _currentPath);
-    internal BackupTransferMode TransferMode => _none.IsChecked == true ? BackupTransferMode.None :
+    internal bool DirectCloudTransferRequested => _cloud?.IsChecked == true;
+    internal BackupTransferMode TransferMode => _none.IsChecked == true || DirectCloudTransferRequested ? BackupTransferMode.None :
         _mode.SelectedIndex == 1 ? BackupTransferMode.Move : BackupTransferMode.Copy;
     internal bool FreeLocalSpace => _stopping && TransferMode != BackupTransferMode.Move && _freeSpace.IsChecked == true;
     internal FrameworkElement CaptureContent => _body;
@@ -67,8 +69,11 @@ internal sealed class BackupSetupDialog : ContentDialog
             Content = stopping ? "Copy or move files to another location" : "Bring existing files" };
         _none = new RadioButton { GroupName = _group + "action",
             Content = stopping ? "Turn off without restoring files" : "Turn on without importing files" };
+        _cloud = new RadioButton { GroupName = _group + "action",
+            Content = stopping ? "Transfer B2 files directly to OneDrive" : "Bring files directly from OneDrive" };
         _bring.Checked += (_, _) => UpdateEffect(); _none.Checked += (_, _) => UpdateEffect();
-        _body.Children.Add(_bring); _body.Children.Add(_none);
+        _cloud.Checked += (_, _) => UpdateEffect();
+        _body.Children.Add(_bring); _body.Children.Add(_cloud); _body.Children.Add(_none);
         _locationHeading = SourceImportDialog.Text(stopping ? "Windows will open " + name + " here" : "Choose a source", false);
         _body.Children.Add(_locationHeading);
         AddLocation(stopping ? "Previous Windows location" : "Current Windows location", _currentPath, true);
@@ -203,6 +208,8 @@ internal sealed class BackupSetupDialog : ContentDialog
                 : TransferMode == BackupTransferMode.Move
                     ? "Files are copied and verified before their originals are removed. If the source is in another cloud app, removing originals can delete them from that cloud too. Windows will use CloudBay."
                     : "Files are copied and verified. Originals stay in the chosen source. Windows will use CloudBay; other locations are not imported automatically.";
+            if (DirectCloudTransferRequested)
+                _effect.Text = "Next, browse the actual OneDrive account and folder and choose Copy or Move. Files transfer directly into this folder's B2 backup before Windows starts using CloudBay.";
         }
         else
         {
@@ -213,6 +220,11 @@ internal sealed class BackupSetupDialog : ContentDialog
                 : TransferMode == BackupTransferMode.Move
                     ? "Verified files move to the selected Windows location. Removing originals from CloudBay also removes their current B2 copies through sync. Another cloud app manages uploads at its own location."
                     : "Verified files are copied to the selected Windows location. CloudBay and B2 copies stay available. Another cloud app manages uploads at its own location.";
+            if (DirectCloudTransferRequested)
+            {
+                _freeSpace.IsEnabled = false; _freeSpace.IsChecked = false;
+                _effect.Text = "Next, choose the OneDrive destination and transfer options. Windows first uses the local location selected above; no files are restored there. CloudBay stops syncing the old folder, then transfers its B2 contents directly to OneDrive.";
+            }
         }
     }
 
@@ -230,7 +242,7 @@ internal sealed class BackupSetupDialog : ContentDialog
     {
         var selected = _locationButtons.Where(button => button.IsChecked == true).ToArray();
         if (selected.Length != 1 || selected[0].Tag is not string path || !SamePath(path, _selectedPath) ||
-            (_bring.IsChecked == true) == (_none.IsChecked == true))
+            new[] { _bring, _none, _cloud }.Count(button => button.IsChecked == true) != 1)
             throw new InvalidOperationException("The visible backup selection must match its reviewed source, destination and action.");
     }
 }

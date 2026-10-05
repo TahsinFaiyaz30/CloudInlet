@@ -20,8 +20,12 @@
     <Compile Include="../CloudBay/Application/ClientController.Imports.cs" Link="Application/ClientController.Imports.cs" />
     <Compile Include="../CloudBay/Application/ImportJournal.cs" Link="Application/ImportJournal.cs" />
     <Compile Include="../CloudBay/Application/ClientController.CloudImports.cs" Link="Application/ClientController.CloudImports.cs" />
+    <Compile Include="../CloudBay/Application/ClientController.CloudAccounts.cs" Link="Application/ClientController.CloudAccounts.cs" />
+    <Compile Include="../CloudBay/Application/ClientController.CloudTransfers.cs" Link="Application/ClientController.CloudTransfers.cs" />
+    <Compile Include="../CloudBay/Application/ClientController.Disconnect.cs" Link="Application/ClientController.Disconnect.cs" />
     <Compile Include="../CloudBay/Application/CloudImportJournal.cs" Link="Application/CloudImportJournal.cs" />
     <Compile Include="../CloudBay/Application/ClientStorage.cs" Link="Application/ClientStorage.cs" />
+    <Compile Include="../CloudBay/Application/DisconnectMode.cs" Link="Application/DisconnectMode.cs" />
     <Compile Include="../CloudBay/Windows/SystemIntegration.cs" Link="Native/SystemIntegration.cs" />
     <Compile Include="../CloudBay/Windows/UpdateInstallation.cs" Link="Windows/UpdateInstallation.cs" />
     <Compile Include="../CloudBay/Windows/WindowsUpdateInstaller.cs" Link="Windows/WindowsUpdateInstaller.cs" />

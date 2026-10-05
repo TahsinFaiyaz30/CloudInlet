@@ -102,6 +102,21 @@ public static class NativePlaceholderSmokeTest
             Require(service.IsPlaceholder(localPath) && service.IsHydrated(localPath), "Uploaded local files must convert without discarding local content.");
             checks.Add("Converted an uploaded regular file into an in-sync hydrated cloud placeholder.");
 
+            var removePath = Path.Combine(root, "remove-online.bin");
+            var removeFile = file with { FileId = "smoke-remove", Key = "remove-online.bin" };
+            await service.CreateOrUpdateAsync(removePath, removeFile, true, cancellationToken);
+            var beforeRemovalDownloads = Volatile.Read(ref downloads);
+            Require(!await service.TryRemoveVerifiedOnlinePlaceholderAsync(removePath, removeFile with { FileId = "wrong-version" }, cancellationToken),
+                "A mismatched cloud identity must not remove an online-only file.");
+            Require(File.Exists(removePath), "A refused removal must preserve the placeholder.");
+            Require(await service.TryRemoveVerifiedOnlinePlaceholderAsync(removePath, removeFile, cancellationToken),
+                "An exact unchanged online-only placeholder must be removable without fetching its contents.");
+            Require(!File.Exists(removePath) && Volatile.Read(ref downloads) == beforeRemovalDownloads,
+                "Removing an online-only placeholder must not cause a cloud download.");
+            Require(!await service.TryRemoveVerifiedOnlinePlaceholderAsync(localPath, local, cancellationToken) && File.Exists(localPath),
+                "Online-only cleanup must retain resident local files for independent content verification.");
+            checks.Add("Exact online-only cleanup refused a changed identity and resident data, and removed cloud metadata without downloading payloads.");
+
             var failurePath = Path.Combine(root, "offline.bin");
             await service.CreateOrUpdateAsync(failurePath, file with { FileId = "smoke-failure" }, true, cancellationToken);
             refused = false;

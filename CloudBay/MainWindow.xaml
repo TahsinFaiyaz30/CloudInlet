@@ -370,6 +370,12 @@
                                 <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
                             <StackPanel Spacing="12">
+                                <Button x:Name="CloudTransferAction" Content="Transfer between clouds" Click="CloudTransfer_Click"
+                                        HorizontalAlignment="Left" />
+                                <ScrollViewer x:Name="CloudTransferJobsPanel" MaxHeight="280" Visibility="Collapsed"
+                                              HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                                    <StackPanel x:Name="CloudTransferJobRows" Spacing="8" />
+                                </ScrollViewer>
                                 <ComboBox x:Name="ActivityFilterBox" Width="200" HorizontalAlignment="Left" SelectedIndex="0"
                                           AutomationProperties.Name="Activity filter" SelectionChanged="ActivityFilter_SelectionChanged">
                                     <ComboBoxItem Content="All activity" Tag="All" />
@@ -494,7 +500,12 @@
                                     </settings:SettingsCard>
                                 </settings:SettingsExpander.Items>
                             </settings:SettingsExpander>
-                            <settings:SettingsCard x:Name="ImportFilesCard" Header="Import from another location" Description="Choose a local folder, mounted cloud drive, or Backblaze B2 bucket."
+                            <settings:SettingsCard x:Name="BackupCloudTransferCard" Header="Transfer between clouds"
+                                                   Description="Browse OneDrive and B2 directly. Copy or move files through this PC's memory."
+                                                   IsClickEnabled="True" Click="CloudTransfer_Click">
+                                <settings:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE753;" /></settings:SettingsCard.HeaderIcon>
+                            </settings:SettingsCard>
+                            <settings:SettingsCard x:Name="ImportFilesCard" Header="Import from another location" Description="Choose a local folder, mounted cloud drive, OneDrive account, or Backblaze B2 bucket."
                                                    IsClickEnabled="True" Click="ImportFiles_Click">
                                 <settings:SettingsCard.HeaderIcon>
                                     <FontIcon Glyph="&#xE896;" />
@@ -1021,7 +1032,7 @@
                                                     </settings:SettingsCard>
                                                     <settings:SettingsCard
                                                         Header="Disconnect account"
-                                                        Description="Download your files and restore Windows folder locations."
+                                                        Description="Keep local copies, download files, or remove verified local cloud copies."
                                                         x:Name="DisconnectAccountCard">
                                                         <Button
                                                             x:Name="DisconnectButton"

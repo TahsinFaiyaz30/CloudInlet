@@ -2,11 +2,17 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using CloudBay.Core;
+using CloudBay.Core.OneDrive;
+using CloudBay.Core.Transfers;
 
 namespace CloudBay.Application;
 
 public sealed class ClientStorage
 {
+    public sealed record OneDriveConnection(string Id, string Name, string ClientId, string Tenant, OneDriveTokenSet Tokens);
+    public sealed record CloudBackupStopIntent(string Name, string RestorePath, TransferJobPlan Plan);
+    public sealed record CloudBackupRelinquishedRoot(string Name, string RootPath, string RelativePath, bool AddedExclusion);
+    public sealed record AccountDisconnectIntent(DisconnectMode Mode, string AccountId, string BucketId, string RootPath);
     public sealed record BackupIntent(BackupFolder Folder, bool Enable, string? RestorePath = null);
     public string DirectoryPath { get; }
     public string DiagnosticsPath => Path.Combine(DirectoryPath, "activity.jsonl");
@@ -50,6 +56,42 @@ public sealed class ClientStorage
         return File.Exists(path) ? JsonSerializer.Deserialize<BackupIntent>(File.ReadAllText(path)) : null;
     }
     public void ClearBackupIntent() => File.Delete(Path.Combine(DirectoryPath, "backup-pending.json"));
+    public void SaveAccountDisconnectIntent(AccountDisconnectIntent intent) => AtomicWrite(Path.Combine(DirectoryPath, "disconnect-pending.json"),
+        JsonSerializer.SerializeToUtf8Bytes(intent));
+    public AccountDisconnectIntent? LoadAccountDisconnectIntent()
+    {
+        var path = Path.Combine(DirectoryPath, "disconnect-pending.json");
+        return File.Exists(path) ? JsonSerializer.Deserialize<AccountDisconnectIntent>(File.ReadAllText(path))
+            ?? throw new InvalidDataException("The interrupted account disconnect record could not be read.") : null;
+    }
+    public void ClearAccountDisconnectIntent() => File.Delete(Path.Combine(DirectoryPath, "disconnect-pending.json"));
+    public void SaveCloudBackupStopIntent(CloudBackupStopIntent intent) => AtomicWrite(Path.Combine(DirectoryPath, "cloud-backup-stop.json"),
+        JsonSerializer.SerializeToUtf8Bytes(intent));
+    public CloudBackupStopIntent? LoadCloudBackupStopIntent()
+    {
+        var path = Path.Combine(DirectoryPath, "cloud-backup-stop.json");
+        return File.Exists(path) ? JsonSerializer.Deserialize<CloudBackupStopIntent>(File.ReadAllText(path)) : null;
+    }
+    public void ClearCloudBackupStopIntent() => File.Delete(Path.Combine(DirectoryPath, "cloud-backup-stop.json"));
+    public IReadOnlyList<string> LoadPolicyPausedCloudTransfers()
+    {
+        var path = Path.Combine(DirectoryPath, "cloud-transfer-policy-paused.json");
+        var ids = File.Exists(path) ? JsonSerializer.Deserialize<string[]>(File.ReadAllText(path))
+            ?? throw new InvalidDataException("Automatic transfer pause records could not be read.") : [];
+        if (ids.Length > 100_000 || ids.Any(id => !Guid.TryParseExact(id, "N", out _)))
+            throw new InvalidDataException("Automatic transfer pause records contain invalid job identities.");
+        return ids;
+    }
+    public void SavePolicyPausedCloudTransfers(IReadOnlyList<string> ids) => AtomicWrite(
+        Path.Combine(DirectoryPath, "cloud-transfer-policy-paused.json"), JsonSerializer.SerializeToUtf8Bytes(ids));
+    public IReadOnlyList<CloudBackupRelinquishedRoot> LoadCloudBackupRelinquishedRoots()
+    {
+        var path = Path.Combine(DirectoryPath, "cloud-backup-stopped.json");
+        return File.Exists(path) ? JsonSerializer.Deserialize<List<CloudBackupRelinquishedRoot>>(File.ReadAllText(path))
+            ?? throw new InvalidDataException("Stopped cloud-backup ownership could not be read.") : [];
+    }
+    public void SaveCloudBackupRelinquishedRoots(IReadOnlyList<CloudBackupRelinquishedRoot> roots) => AtomicWrite(
+        Path.Combine(DirectoryPath, "cloud-backup-stopped.json"), JsonSerializer.SerializeToUtf8Bytes(roots));
     public void ClearCredentials()
     {
         File.Delete(Path.Combine(DirectoryPath, "credentials.dpapi"));
@@ -71,6 +113,28 @@ public sealed class ClientStorage
         if (!File.Exists(path)) return null;
         var plaintext = ProtectedData.Unprotect(File.ReadAllBytes(path), "CloudBay.B2.v1"u8.ToArray(), DataProtectionScope.CurrentUser);
         try { return JsonSerializer.Deserialize<B2Credentials>(plaintext); }
+        finally { CryptographicOperations.ZeroMemory(plaintext); }
+    }
+    public IReadOnlyList<OneDriveConnection> LoadOneDriveConnections()
+    {
+        var path = Path.Combine(DirectoryPath, "onedrive.dpapi");
+        if (!File.Exists(path)) return [];
+        var plaintext = ProtectedData.Unprotect(File.ReadAllBytes(path), "CloudBay.OneDrive.v1"u8.ToArray(), DataProtectionScope.CurrentUser);
+        try
+        {
+            return JsonSerializer.Deserialize<List<OneDriveConnection>>(plaintext)
+                ?? throw new InvalidDataException("The OneDrive account vault could not be read. Its original file was preserved.");
+        }
+        finally { CryptographicOperations.ZeroMemory(plaintext); }
+    }
+    public void SaveOneDriveConnections(IReadOnlyList<OneDriveConnection> accounts)
+    {
+        var plaintext = JsonSerializer.SerializeToUtf8Bytes(accounts);
+        try
+        {
+            var protectedBytes = ProtectedData.Protect(plaintext, "CloudBay.OneDrive.v1"u8.ToArray(), DataProtectionScope.CurrentUser);
+            AtomicWrite(Path.Combine(DirectoryPath, "onedrive.dpapi"), protectedBytes);
+        }
         finally { CryptographicOperations.ZeroMemory(plaintext); }
     }
     public IReadOnlyList<ActivityEvent> Activity { get { lock (_logGate) return _activity.AsEnumerable().Reverse().ToArray(); } }

@@ -357,6 +357,7 @@ public sealed partial class MainWindow : Window
         RecentActivitySection.Visibility = settings.IsConfigured && _viewModel.HasActivity ? Visibility.Visible : Visibility.Collapsed;
         ActivityEmpty.Visibility = _viewModel.HasActivityRows ? Visibility.Collapsed : Visibility.Visible;
         ActivityQueueCoverage.Visibility = _viewModel.HasQueueCoverage ? Visibility.Visible : Visibility.Collapsed;
+        RefreshCloudTransferJobs();
         OverviewStatusDetail.Visibility = _viewModel.HasStatusDetail ? Visibility.Visible : Visibility.Collapsed;
         OverviewLastSync.Visibility = _viewModel.HasLastSync ? Visibility.Visible : Visibility.Collapsed;
         UpdatePageHeader();
@@ -1081,6 +1082,22 @@ public sealed partial class MainWindow : Window
             if (await ShowModalAsync(setup, () => SetFolderBackupStatus(name, "Choosing files and location…")) != ContentDialogResult.Primary) return;
             token.ThrowIfCancellationRequested();
             SetFolderBackupStatus(name, "Queued for review…");
+            CloudTransferDialog? cloudChoice = null;
+            if (setup.DirectCloudTransferRequested)
+            {
+                var endpoint = enabling
+                    ? _controller.GetB2TransferRoot(DisplaySettings.BucketId, DisplaySettings.BucketName, DisplaySettings.Prefix + name + "/")
+                    : _controller.GetBackupTransferLocation(name);
+                cloudChoice = await PickCloudTransferAsync(enabling ? null : endpoint, enabling ? endpoint : null);
+                if (cloudChoice is null) return;
+                if (enabling)
+                {
+                    SetFolderBackupStatus(name, "Cloud transfer running · see Activity…");
+                    var transferId = await _controller.StartCloudTransferAsync(cloudChoice.Source!, cloudChoice.Destination!,
+                        cloudChoice.Operation, cloudChoice.Conflicts, cloudChoice.Exclusions, token);
+                    await _controller.WaitForCloudTransferAsync(transferId, token);
+                }
+            }
             if (enabling)
             {
                 var review = await _controller.PreviewBackupAsync(name, setup.SourcePath, setup.TransferMode, setup.IncludeCurrentFiles, token);
@@ -1108,7 +1125,12 @@ public sealed partial class MainWindow : Window
                 SetFolderBackupStatus(name, "Waiting for review…");
                 if (await ShowModalAsync(dialog, () => SetFolderBackupStatus(name, "Reviewing the stop choice…")) != ContentDialogResult.Primary) return;
                 SetFolderBackupStatus(name, "Queued to turn backup off…");
-                var warning = await _controller.DisableReviewedBackupAsync(review, token, BackupProgress(name), setup.FreeLocalSpace);
+                var warning = cloudChoice is null
+                    ? await _controller.DisableReviewedBackupAsync(review, token, BackupProgress(name), setup.FreeLocalSpace)
+                    : null;
+                if (cloudChoice is not null)
+                    await _controller.StopBackupAndStartCloudTransferAsync(review, cloudChoice.Source!, cloudChoice.Destination!,
+                        cloudChoice.Operation, cloudChoice.Conflicts, cloudChoice.Exclusions, token);
                 if (!_closed)
                 {
                     if (warning is not null)
@@ -1116,7 +1138,8 @@ public sealed partial class MainWindow : Window
                         _backupResultWarnings[name] = warning;
                         ShowWarning($"{name} backup is off", warning);
                     }
-                    else ShowInfo($"{name} backup is off. Windows now uses the reviewed location.");
+                    else ShowInfo(cloudChoice is null ? $"{name} backup is off. Windows now uses the reviewed location."
+                        : $"{name} backup is off. The B2 → OneDrive transfer is running; view Activity for its progress.");
                 }
             }
         }
@@ -1215,6 +1238,11 @@ public sealed partial class MainWindow : Window
                 UpdateBackupBusyFooter();
             }) != ContentDialogResult.Primary) return;
             token.ThrowIfCancellationRequested();
+            if (dialog.DirectCloudTransferRequested)
+            {
+                await OpenCloudTransferAsync();
+                return;
+            }
             _importStatus = "Import in progress; transfers start when ready.";
             UpdateBackupBusyFooter();
             if (dialog.ResumeCloudId is { } id) await _controller.ResumeCloudImportAsync(id, token);
@@ -1358,22 +1386,24 @@ public sealed partial class MainWindow : Window
         }
         await RunAsync("Preparing your files before disconnecting…", async () =>
         {
-            var dialog = new ContentDialog
+            var dialog = new DisconnectReviewDialog
             {
                 XamlRoot = RootGrid.XamlRoot,
                 RequestedTheme = RootGrid.RequestedTheme,
-                Title = "Disconnect this account?",
-                Content = "CloudBay will download all cloud files in your sync and backup folders, restore backed-up Windows folders to their original local locations, and then disconnect. Other personal folders stay in their current locations. Your files in Backblaze B2 are retained. Keep CloudBay running until this finishes; it may take time and use disk space.",
-                PrimaryButtonText = "Download and disconnect",
-                CloseButtonText = "Cancel",
-                DefaultButton = ContentDialogButton.Close
             };
             if (await ShowModalAsync(dialog) != ContentDialogResult.Primary) return;
-            await _controller.DisconnectAsync();
+            var selectedMode = dialog.Mode;
+            var outcome = await _controller.DisconnectAsync(selectedMode);
             ApplicationKeyBox.Password = "";
             LoadSettings(reloadAccount: true, reloadPreferences: true);
             RefreshBackups(refreshMetadata: true);
-            ShowInfo("The account is disconnected. Your local files and B2 files were retained.");
+            if (outcome?.RetentionWarning is { } retained) ShowWarning("Account disconnected", retained);
+            else ShowInfo(selectedMode switch
+            {
+                DisconnectMode.DisconnectOnly => "The account is disconnected. Local files were retained without downloading; online-only files need reconnection.",
+                DisconnectMode.RemoveLocalCopyAndDisconnect => $"The account is disconnected. {outcome!.RemovedFileCount:N0} verified local copies removed; other personal files and all B2 files were retained.",
+                _ => "The account is disconnected. Downloaded local files and all B2 files were retained."
+            });
         });
     }
 
@@ -2337,6 +2367,18 @@ public sealed partial class MainWindow : Window
                 if (cloudReview.CloudPlan != cloudPlan || !cloudReview.IsPrimaryButtonEnabled)
                     throw new InvalidOperationException("A cloud review must retain its immutable source versions and exact destination plan.");
                 await CaptureImportDialogAsync(cloudReview, $"import-b2-review-{importWidth}{suffix}");
+                var directReview = new CloudTransferDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this),
+                    new("onedrive", "synthetic-account", "synthetic-drive", "synthetic-folder", "Documents", "OneDrive · Personal"),
+                    new("b2", "synthetic-b2", "synthetic-bucket", "", "Cloud archive/Documents/", "Backblaze B2 · Personal archive"))
+                { XamlRoot = RootGrid.XamlRoot, RequestedTheme = theme };
+                await directReview.ShowReviewPresentationAsync();
+                if (!directReview.IsPrimaryButtonEnabled || directReview.Source?.Provider != "onedrive" || directReview.Destination?.Provider != "b2")
+                    throw new InvalidOperationException("A direct cloud review must retain provider locations without creating a local destination.");
+                await CaptureImportDialogAsync(directReview, $"cloud-transfer-review-{importWidth}{suffix}");
+                var disconnectReview = new DisconnectReviewDialog { XamlRoot = RootGrid.XamlRoot, RequestedTheme = theme };
+                if (disconnectReview.Mode != DisconnectMode.DisconnectOnly || disconnectReview.PrimaryButtonText != "Disconnect only")
+                    throw new InvalidOperationException("Disconnect only must be the visible default in the account disconnect review.");
+                await CaptureImportDialogAsync(disconnectReview, $"disconnect-options-{importWidth}{suffix}");
                 var syntheticPlan = new CloudBay.Core.Sync.FolderImportPlan(@"C:\Users\Example\OneDrive\Documents",
                     @"C:\Users\Example\CloudBay\Documents", "presentation-only", 1248, 2_742_910_976L, 128_849_018_880L, true);
                 var review = new SourceImportDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this), presentationCandidates: candidates)

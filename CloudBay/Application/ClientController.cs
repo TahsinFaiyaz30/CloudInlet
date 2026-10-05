@@ -37,6 +37,7 @@ public sealed partial class ClientController : IAsyncDisposable
     private readonly SemaphoreSlim _operations = new(1, 1);
     private readonly Action<string> _unregisterSyncRoot;
     private readonly bool _manageStartup;
+    private readonly Func<AppSettings, string?> _cloudPauseReason;
     private readonly CancellationTokenSource _lifetime = new();
     private B2CloudStore? _cloud;
     private WindowsPlaceholderService? _placeholders;
@@ -66,12 +67,14 @@ public sealed partial class ClientController : IAsyncDisposable
     public string DiagnosticsPath => _storage.DiagnosticsPath;
     public event EventHandler? Changed;
 
-    public ClientController(ClientStorage? storage = null, Action<string>? unregisterSyncRoot = null, bool manageStartup = true)
+    public ClientController(ClientStorage? storage = null, Action<string>? unregisterSyncRoot = null, bool manageStartup = true,
+        Func<AppSettings, string?>? cloudPauseReason = null)
     {
         _storage = storage ?? new();
         _unregisterSyncRoot = unregisterSyncRoot ?? global::Windows.Storage.Provider.StorageProviderSyncRootManager.Unregister;
         _manageStartup = manageStartup;
-        try { Settings = _storage.LoadSettings(); PathRules.ValidateSettings(Settings); RecoverBackupIntent(); }
+        _cloudPauseReason = cloudPauseReason ?? SystemIntegration.GetPauseReason;
+        try { Settings = _storage.LoadSettings(); PathRules.ValidateSettings(Settings); RecoverBackupIntent(); RecoverAccountDisconnectIntent(); }
         catch (Exception error)
         {
             _settingsRecoveryError = error.Message;
@@ -79,15 +82,22 @@ public sealed partial class ClientController : IAsyncDisposable
             Snapshot = new(ClientState.Attention, "Settings need recovery: " + error.Message);
             _storage.Log(new(DateTimeOffset.UtcNow, ActivityKind.Error, "", Snapshot.Message));
         }
+        InitializeCloudTransfers();
         _reconnectLoop = Task.Run(ReconnectAsync);
         _transferPulse = Task.Run(RefreshTransferSpeedsAsync);
     }
 
     public async Task StartAsync()
     {
+        if (_pendingDisconnectMode is { } pendingMode)
+        {
+            await DisconnectAsync(pendingMode, _lifetime.Token);
+            return;
+        }
         await _operations.WaitAsync(_lifetime.Token);
         try
         {
+            EnsureSettingsHealthy();
             if (_disconnecting) return;
             if (!Settings.IsConfigured) { await ReadStartupPreferenceAsync(); return; }
             if (_engine is not null)
@@ -105,7 +115,11 @@ public sealed partial class ClientController : IAsyncDisposable
             await OpenConnectionAsync(credentials, Settings, _lifetime.Token);
         }
         catch (Exception error) { await CloseConnectionAsync(); SetStatus(new(ClientState.Attention, error.Message)); }
-        finally { _operations.Release(); }
+        finally
+        {
+            _operations.Release();
+            ObserveCloudControl(RecoverCloudTransfersAsync(_lifetime.Token));
+        }
     }
 
     private async Task ReconnectAsync()
@@ -116,6 +130,7 @@ public sealed partial class ClientController : IAsyncDisposable
             {
                 await Task.Delay(TimeSpan.FromSeconds(30), _lifetime.Token);
                 if (Settings.IsConfigured && !_disconnecting && (_engine is null || _customRoots.Count < Settings.CustomBackups.Count)) await StartAsync();
+                if (!_disconnecting) await RecoverCloudTransfersAsync(_lifetime.Token);
             }
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
@@ -144,6 +159,7 @@ public sealed partial class ClientController : IAsyncDisposable
         string prefix, CancellationToken cancellationToken = default)
     {
         EnsureSettingsHealthy();
+        if (_pendingDisconnectMode is not null) throw new IOException("Finish the pending account disconnect before changing this connection. Choose Disconnect only to retain local files without downloading.");
         using var operation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
         cancellationToken = operation.Token;
         if (string.IsNullOrWhiteSpace(keyId) || string.IsNullOrWhiteSpace(applicationKey) || string.IsNullOrWhiteSpace(bucketName))
@@ -157,6 +173,7 @@ public sealed partial class ClientController : IAsyncDisposable
             PathRules.ValidateSettings(settings);
             if ((Settings.Backups.Count > 0 || Settings.CustomBackups.Count > 0) && (!Settings.RootPath.Equals(settings.RootPath, StringComparison.OrdinalIgnoreCase) || Settings.BucketName != settings.BucketName || Settings.Prefix != settings.Prefix))
                 throw new IOException("Stop system folder backups before changing the account, bucket, prefix, or sync folder.");
+            await ResetB2CloudTransferConnectionAsync(cancellationToken);
             await CloseConnectionAsync();
             var credentials = new B2Credentials(settings.KeyId, applicationKey);
             await OpenConnectionAsync(credentials, settings, cancellationToken);
@@ -176,7 +193,7 @@ public sealed partial class ClientController : IAsyncDisposable
     private async Task OpenConnectionAsync(B2Credentials credentials, AppSettings settings, CancellationToken ct)
     {
         SetStatus(new(ClientState.Connecting, "Connecting to Backblaze B2"));
-        var cloud = new B2CloudStore();
+        var cloud = new B2CloudStore(bandwidthBudget: _transferBandwidth);
         WindowsPlaceholderService? placeholders = null;
         try
         {
@@ -229,7 +246,7 @@ public sealed partial class ClientController : IAsyncDisposable
                     AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Error, folder.Name, "Custom folder backup could not start: " + error.Message));
                 }
             }
-            ApplyManualPause(_engine);
+            if (_disconnecting) _engine.Pause(); else ApplyManualPause(_engine);
             _engine.Start();
             _transferMaintenanceCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
             _transferMaintenance = Task.Run(() => MaintainUploadCheckpointsAsync(cloud, _transferMaintenanceCancellation.Token));
@@ -314,6 +331,7 @@ public sealed partial class ClientController : IAsyncDisposable
             SelectedExclusions = update.SelectedExclusions?.ToList() ?? previous.SelectedExclusions,
             GuidedExclusions = update.GuidedExclusions?.ToList() ?? previous.GuidedExclusions
         };
+        settings = PreserveReleasedCloudBackupRoots(settings);
         PathRules.ValidateSettings(settings);
         var transferChanged = previous.UploadConcurrency != settings.UploadConcurrency || previous.DownloadConcurrency != settings.DownloadConcurrency || previous.UploadMode != settings.UploadMode ||
             previous.UploadBytesPerSecond != settings.UploadBytesPerSecond || previous.DownloadBytesPerSecond != settings.DownloadBytesPerSecond;
@@ -372,7 +390,11 @@ public sealed partial class ClientController : IAsyncDisposable
         Settings = settings;
         if (transferChanged)
         {
+            var limits = TransferLimits.For(settings);
+            _cloudTransferEngine?.ConfigureWorkers(Math.Max(limits.Uploads, limits.Downloads));
             if (_cloud is { } cloud) ConfigureTransport(cloud, settings);
+            if (_cloudTransferB2 is { } transferCloud) ConfigureTransport(transferCloud, settings);
+            foreach (var client in _oneDriveClients.Values) ConfigureOneDriveTransport(client, settings);
             var downloadWorkers = TransferLimits.For(settings).Downloads;
             _placeholders?.ConfigureTransferLimits(downloadWorkers);
             foreach (var runtime in _customRoots.Values) runtime.Placeholders.ConfigureTransferLimits(downloadWorkers);
@@ -396,6 +418,7 @@ public sealed partial class ClientController : IAsyncDisposable
             if (!Settings.IsConfigured || _engine is null) throw new IOException("Connect your B2 account before enabling system folder backup.");
             var current = Settings.Backups.SingleOrDefault(b => b.Name == name);
             if ((current is not null) == enabled) return;
+            if (enabled) ValidateCloudBackupReclaim(name);
             var systemSource = enabled ? KnownFolderBackup.GetPath(name) : current!.DestinationPath;
             if (Settings.CustomBackups.Any(folder => IsNested(folder.SourcePath, systemSource)))
                 throw new IOException("A custom backup is inside this system folder. Stop that custom backup before changing the Windows folder location.");
@@ -411,6 +434,7 @@ public sealed partial class ClientController : IAsyncDisposable
                 folders.Add(folder);
                 Settings = Settings with { Backups = folders };
                 _storage.SaveSettings(Settings);
+                ReclaimCloudBackupRoot(name);
                 _storage.ClearBackupIntent();
             }
             else
@@ -466,7 +490,7 @@ public sealed partial class ClientController : IAsyncDisposable
                 () => SystemIntegration.GetPauseReason(Settings), folder.Name);
             if (!_customRoots.TryAdd(folder.Name, new(folder, placeholders, engine)))
                 throw new IOException("A custom backup with this name is already active.");
-            try { ApplyManualPause(engine); engine.Start(); }
+            try { if (_disconnecting) engine.Pause(); else ApplyManualPause(engine); engine.Start(); }
             catch { _customRoots.TryRemove(folder.Name, out _); await engine.DisposeAsync(); throw; }
         }
         catch { await placeholders.DisposeAsync(); throw; }
@@ -534,63 +558,25 @@ public sealed partial class ClientController : IAsyncDisposable
         finally { EndMaintenance(resume: true); _operations.Release(); }
     }
 
-    public async Task DisconnectAsync(CancellationToken cancellationToken = default)
-    {
-        using var operation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
-        cancellationToken = operation.Token;
-        await _operations.WaitAsync(cancellationToken);
-        _disconnecting = true;
-        try
-        {
-            if (_cloud is null && Settings.IsConfigured)
-            {
-                var credentials = _storage.LoadCredentials() ?? throw new IOException("Enter your B2 application key to reconnect before disconnecting safely.");
-                await OpenConnectionAsync(credentials, Settings, cancellationToken);
-            }
-            EnsureConnected();
-            _maintenance = true;
-            if (_engine is not null) { await _engine.QuiesceAsync(cancellationToken); }
-            foreach (var root in _customRoots.Values) await root.Engine.QuiesceAsync(cancellationToken);
-            SetStatus(Snapshot with { State = ClientState.Syncing, Message = "Downloading all files before disconnecting" });
-            await _placeholders!.SetPinAsync(Settings.RootPath, PinMode.AlwaysAvailable, cancellationToken);
-            foreach (var folder in Settings.Backups.ToArray())
-            {
-                _storage.SaveBackupIntent(folder, false);
-                await Task.Run(() => KnownFolderBackup.DisableAsync(folder, cancellationToken), cancellationToken);
-                Settings = Settings with { Backups = Settings.Backups.Where(b => b.Name != folder.Name).ToList() };
-                _storage.SaveSettings(Settings); _storage.ClearBackupIntent();
-            }
-            var registration = _placeholders.RegistrationId;
-            await _placeholders.PrepareForUnregisterAsync(cancellationToken);
-            var customRegistrations = new List<string>();
-            foreach (var root in _customRoots.Values)
-            {
-                await root.Placeholders.PrepareForUnregisterAsync(cancellationToken);
-                if (root.Placeholders.RegistrationId is { } customRegistration) customRegistrations.Add(customRegistration);
-            }
-            await _cloud!.CancelPendingUploadsAsync(cancellationToken);
-            await CloseConnectionAsync();
-            if (registration is not null) _unregisterSyncRoot(registration);
-            foreach (var customRegistration in customRegistrations) _unregisterSyncRoot(customRegistration);
-            _storage.ClearCredentials();
-            Settings = Settings with { KeyId = "", AccountId = "", BucketId = "", BucketName = "", Backups = [], CustomBackups = [] };
-            _storage.SaveSettings(Settings);
-            await ConfigureStartupAsync(false);
-            SetStatus(new(ClientState.NotConnected, "Account disconnected. Local and B2 files were retained."));
-            AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Information, "", "Disconnected the account after downloading cloud files and restoring system folders."));
-        }
-        catch (Exception error) { SetStatus(Snapshot with { State = ClientState.Attention, Message = "Disconnect stopped: " + error.Message }); throw; }
-        finally { EndMaintenance(resume: false); _disconnecting = false; _operations.Release(); }
-    }
+    public Task DisconnectAsync(CancellationToken cancellationToken = default) => DisconnectAsync(DisconnectMode.DisconnectOnly, cancellationToken);
 
     public void Pause(TimeSpan? duration = null)
     {
         Interlocked.Exchange(ref _manualPauseUntilTicks, duration.HasValue ? (DateTimeOffset.UtcNow + duration.Value).UtcTicks : long.MaxValue);
         _engine?.Pause(duration); foreach (var root in _customRoots.Values) root.Engine.Pause(duration);
+        PauseAllCloudTransfers();
+        ScheduleCloudTransferResume(duration);
     }
     public void Resume()
     {
+        if (_pendingDisconnectMode is not null)
+        {
+            SetStatus(new(ClientState.Attention, "Finish the pending account disconnect before resuming native sync."));
+            return;
+        }
         Interlocked.Exchange(ref _manualPauseUntilTicks, 0);
+        Interlocked.Increment(ref _cloudPauseGeneration);
+        ResumeAllCloudTransfers();
         if (_maintenance) return;
         _engine?.Resume(); foreach (var root in _customRoots.Values) root.Engine.Resume();
     }
@@ -615,7 +601,9 @@ public sealed partial class ClientController : IAsyncDisposable
         foreach (var root in _customRoots.Values)
             if (_customSnapshots.TryGetValue(root.Folder.Name, out var status) && status.Message.StartsWith("Review required:", StringComparison.Ordinal)) root.Engine.ApproveDeletions();
     }
-    public Task SyncNowAsync() => Task.WhenAll(new[] { _engine?.SyncNowAsync(_lifetime.Token) ?? Task.CompletedTask }
+    public Task SyncNowAsync() => _pendingDisconnectMode is not null
+        ? Task.FromException(new IOException("Finish the pending account disconnect before syncing this account."))
+        : Task.WhenAll(new[] { _engine?.SyncNowAsync(_lifetime.Token) ?? Task.CompletedTask }
         .Concat(_customRoots.Values.Select(root => root.Engine.SyncNowAsync(_lifetime.Token))));
     public void LaunchFolder(string? backupName = null) => SystemIntegration.OpenFolder(backupName is null ? Settings.RootPath : GetCustom(backupName).Folder.SourcePath);
     public Task<IReadOnlyList<CloudObject>> GetVersionsAsync(string relativePath, string? backupName = null)
@@ -698,9 +686,11 @@ public sealed partial class ClientController : IAsyncDisposable
             BytesPerSecond = item.Phase == TransferPhase.Downloading && _hydrationSpeeds.TryGetValue(item.Id, out var speed)
                 ? speed.BytesPerSecond : 0
         }).ToArray();
-        var all = _customSnapshots.Select(pair => (Name: pair.Key, Snapshot: pair.Value)).Prepend((Name: "", Snapshot: _rootSnapshot)).ToArray();
+        var all = _customSnapshots.Select(pair => (Name: pair.Key, Snapshot: pair.Value))
+            .Concat(_cloudTransferSnapshots.Select(pair => (Name: "Cloud transfer", Snapshot: pair.Value)))
+            .Prepend((Name: "", Snapshot: _rootSnapshot)).ToArray();
         static int Rank(ClientState state) => state switch { ClientState.Attention => 6, ClientState.Offline => 5,
-            ClientState.Connecting => 4, ClientState.Syncing => 3, ClientState.Paused => 2, _ => 1 };
+            ClientState.Connecting => 4, ClientState.Syncing => 3, ClientState.Paused => 2, ClientState.NotConnected => 0, _ => 1 };
         var selected = all.MaxBy(item => Rank(item.Snapshot.State));
         var message = selected.Snapshot.Message;
         var reviewed = all.Where(item => item.Snapshot.Message.StartsWith("Review required:", StringComparison.Ordinal)).ToArray();
@@ -884,6 +874,7 @@ public sealed partial class ClientController : IAsyncDisposable
             while (true)
             {
                 await Task.Delay(TimeSpan.FromSeconds(1), _lifetime.Token);
+                ObserveCloudControl(RefreshCloudPausePolicyAsync());
                 if (Snapshot.ActiveTransfers == 0) continue;
                 _engine?.RefreshTransferStatus();
                 foreach (var runtime in _customRoots.Values) runtime.Engine.RefreshTransferStatus();
@@ -913,6 +904,9 @@ public sealed partial class ClientController : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _lifetime.Cancel();
+        if (_cloudTransferEngine is not null) await _cloudTransferEngine.DisposeAsync();
+        await Task.WhenAll(_cloudTransferRuns.Values);
+        _cloudTransferB2?.Dispose();
         _engine?.Pause();
         foreach (var root in _customRoots.Values) { root.Engine.Pause(); await root.Placeholders.DisconnectAsync(); }
         if (_placeholders is not null) await _placeholders.DisconnectAsync();

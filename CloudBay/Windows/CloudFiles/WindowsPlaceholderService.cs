@@ -566,6 +566,50 @@ public sealed class WindowsPlaceholderService : IPlaceholderService
         finally { _connectionGate.Release(); }
     }
 
+    /// <summary>Deletes the exact clean online-only identity without recalling its payload.</summary>
+    public Task<bool> TryRemoveVerifiedOnlinePlaceholderAsync(string fullPath, CloudObject expected, CancellationToken cancellationToken = default)
+    {
+        var path = ValidateFilePath(fullPath);
+        return Task.Run(async () =>
+        {
+            await _residencyGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                ValidateFilePath(path);
+                using var handle = CreateFileW(path, 0x00010080, 1, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
+                if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+                if (!GetFileInformationByHandleEx(handle, 9, out var tag, 8)) throw new Win32Exception(Marshal.GetLastWin32Error());
+                var state = CfGetPlaceholderStateFromAttributeTag(tag.Attributes, tag.Tag);
+                if (state == uint.MaxValue || (state & Placeholder) == 0 || Core.Sync.VerifiedCloudCopyCleanup.HasNamedStreams(path)) return false;
+                const int capacity = 4160;
+                var buffer = Marshal.AllocHGlobal(capacity);
+                try
+                {
+                    Check(GetRemovalPlaceholderInfo(handle, 1, buffer, capacity, out var returned));
+                    var info = Marshal.PtrToStructure<StandardInfo>(buffer);
+                    if (info.InSyncState != 1 || info.ModifiedDataSize != 0 || info.OnDiskDataSize != 0 || info.ValidatedDataSize != 0 ||
+                        info.FileIdentityLength is 0 or > 4096 || returned < 60 + info.FileIdentityLength) return false;
+                    var identity = new byte[info.FileIdentityLength];
+                    Marshal.Copy(IntPtr.Add(buffer, 60), identity, 0, identity.Length);
+                    var current = JsonSerializer.Deserialize<CloudObject>(identity);
+                    if (current != expected) return false;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    uint disposition = 0x11; // Delete plus ignore-read-only, applied to this locked file identity.
+                    if (!SetRemovalDisposition(handle, 21, ref disposition, 4)) throw new Win32Exception(Marshal.GetLastWin32Error());
+                    return true;
+                }
+                finally { Marshal.FreeHGlobal(buffer); }
+            }
+            finally { _residencyGate.Release(); }
+        }, cancellationToken);
+    }
+    [DllImport("cldapi.dll", EntryPoint = "CfGetPlaceholderInfo")]
+    private static extern int GetRemovalPlaceholderInfo(Microsoft.Win32.SafeHandles.SafeFileHandle handle, uint infoClass,
+        IntPtr buffer, uint length, out uint returned);
+    [DllImport("kernel32.dll", EntryPoint = "SetFileInformationByHandle", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetRemovalDisposition(Microsoft.Win32.SafeHandles.SafeFileHandle handle, int infoClass, ref uint flags, uint length);
+
     private async Task DrainWorkersAsync()
     {
         // A defective or unavailable transport must not hold shutdown forever. Native callbacks

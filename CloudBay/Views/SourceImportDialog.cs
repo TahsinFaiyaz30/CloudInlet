@@ -51,6 +51,7 @@ internal sealed class SourceImportDialog : ContentDialog
     internal CloudImportPlan? CloudPlan { get; private set; }
     internal string? ResumeCloudId { get; private set; }
     internal string? SelectedFolderPath { get; private set; }
+    internal bool DirectCloudTransferRequested { get; private set; }
     internal FrameworkElement CaptureContent => _body;
 
     internal SourceImportDialog(ClientController controller, nint owner, bool chooseFolderOnly = false,
@@ -97,6 +98,7 @@ internal sealed class SourceImportDialog : ContentDialog
         CloudPlan = null;
         ResumeCloudId = null;
         _reviewedResumeId = null;
+        DirectCloudTransferRequested = false;
         UpdatePrimary();
     }
 
@@ -110,7 +112,7 @@ internal sealed class SourceImportDialog : ContentDialog
         AddAsyncChoice("Files from another app", "Choose an existing Windows cloud folder, including OneDrive.", "\uE753", ShowExistingFoldersAsync);
         if (!_chooseFolderOnly)
         {
-            AddChoice("Cloud storage", "Import from Backblaze B2 using your connected account.", "\uE753", ShowProviders);
+            AddChoice("Cloud storage", "Browse OneDrive accounts directly or import from a Backblaze B2 bucket.", "\uE753", ShowProviders);
             if (_presentationCandidates is null)
             {
                 // History is secondary navigation. Loading it happens only when requested,
@@ -226,8 +228,15 @@ internal sealed class SourceImportDialog : ContentDialog
         BeginStage("providers", "Cloud storage");
         _body.Children.Add(Text("Your connected B2 account can import from the buckets its application key is allowed to access.", true));
         AddAsyncChoice("Backblaze B2", "Connected account · Available now", "\uE753", ShowB2Async);
+        AddChoice("OneDrive ↔ Backblaze B2", "Connect an account and browse actual cloud folders. Choose Copy or Move, exclusions, and conflicts.", "\uE753", () =>
+        {
+            BeginStage("direct", "Direct cloud transfer", "Choose cloud locations");
+            DirectCloudTransferRequested = true;
+            _body.Children.Add(Text("Choose a source and destination in OneDrive and Backblaze B2. CloudBay streams content through bounded memory and verifies each copy. Activity keeps recoverable job progress.", true));
+            UpdatePrimary();
+        });
         var planned = new StackPanel { Spacing = 8 };
-        foreach (var provider in ProductCatalog.Providers.Where(item => !item.Available))
+        foreach (var provider in ProductCatalog.Providers.Where(item => !item.Available && item.Id != "onedrive"))
         {
             var row = new SettingsCard { Header = provider.Name, Description = provider.Group,
                 Content = Text("Coming soon", true), IsEnabled = false };
@@ -409,6 +418,7 @@ internal sealed class SourceImportDialog : ContentDialog
 
     private async void Primary_Click(ContentDialog sender, ContentDialogButtonClickEventArgs args)
     {
+        if (_stage == "direct") return;
         if (_stage == "review") { ResumeCloudId = _reviewedResumeId; return; }
         if (_stage == "folder" && _chooseFolderOnly) { SelectedFolderPath = _folder; return; }
         args.Cancel = true;
@@ -478,7 +488,7 @@ internal sealed class SourceImportDialog : ContentDialog
         UpdatePrimary();
     }
 
-    private void UpdatePrimary() => IsPrimaryButtonEnabled = !_working && (_stage == "review" ||
+    private void UpdatePrimary() => IsPrimaryButtonEnabled = !_working && (_stage is "review" or "direct" ||
         _stage == "folder" && (_chooseFolderOnly || !string.IsNullOrWhiteSpace(_destination.Text)) ||
         _stage == "cloud" && _bucket.SelectedItem is CloudBucket && !string.IsNullOrWhiteSpace(_destination.Text));
 

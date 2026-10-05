@@ -16,6 +16,6 @@ public sealed class NativePlaceholderTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
         var checks = await NativePlaceholderSmokeTest.RunAsync(timeout.Token);
         foreach (var check in checks) TestContext.WriteLine("PASS " + check);
-        Assert.AreEqual(12, checks.Count, "Every native smoke scenario must execute.");
+        Assert.AreEqual(13, checks.Count, "Every native smoke scenario must execute.");
     }
 }
