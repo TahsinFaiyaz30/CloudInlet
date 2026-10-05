@@ -32,6 +32,19 @@ jobs:
       - name: Test transport and reconciliation
         # Hosted Server runners are not a desktop Cloud Files acceptance environment.
         run: dotnet test CloudBay.Tests/CloudBay.Tests.csproj -c Release --no-build --filter "FullyQualifiedName!~Native" -v:minimal --logger "trx;LogFileName=windows-ci.trx" --results-directory artifacts/ci-tests
+      - name: Test silent EXE and MSI installation and updates
+        run: .\scripts\test-installers.ps1
+      - name: Retain installer acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: CloudBay-installer-acceptance
+          path: |
+            artifacts/validation/installer-host-*/result.json
+            artifacts/validation/installer-host-*/transcript.txt
+            artifacts/validation/installer-fixture-*/installer-validation.json
+            artifacts/validation/installer-fixture-*/*.log
+          if-no-files-found: ignore
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
