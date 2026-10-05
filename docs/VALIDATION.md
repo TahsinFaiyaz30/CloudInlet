@@ -10,6 +10,8 @@ A uniquely copied executable exercised real Windows notification registration, s
 
 Release publishing now locates an existing unpublished draft by its authenticated release-list identity when GitHub's tag endpoint returns 404, and verifies uploaded assets through the release ID before publication. Cancellation cannot publish a release. Interrupted-upload recovery and the existing release gates passed **64 isolated assertions**; all four workflows passed actionlint. The empty, unpublished 1.0.0 draft from the cancelled earlier build was removed before rebuilding the new notification milestone; no public release was replaced.
 
+The notification review exposed a tray menu regression after replacing the hosted item source and toggling native check states. Geometry now measures the current source and retains the arranged check, icon and caption allocation before remeasurement. Capture acceptance also checks that the actual XAML viewport has consumed the native resize. Fresh Dark/Light tray acceptance passed with **40 captures**, including visually reviewed checked and unchecked quick settings, at `artifacts/validation/tray-menu-20261005T101340Z-dbeff0be/artifacts/ui-smoke-tray`. The earlier clipped capture is superseded by this run.
+
 ## Public 1.0.0 baseline and update acceptance — 2026-10-05
 
 `version.json` now defines the public **1.0.0** baseline. Earlier 2.0.x entries below describe internal development milestones and remain as historical evidence. The release pipeline validates the central version, builds separate Debug and Release EXE/MSI/portable distributions, and publishes an immutable tag only after its gates pass. The Store workflow requires a reserved Partner Center identity before production packaging or submission.

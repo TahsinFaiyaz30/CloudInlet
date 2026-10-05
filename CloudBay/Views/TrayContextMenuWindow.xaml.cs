@@ -165,6 +165,19 @@ public sealed partial class TrayContextMenuWindow : Window
 
     private double MeasureNaturalWidth(bool useRenderedColumns)
     {
+        var items = (MenuPresenter.ItemsSource as IEnumerable<MenuFlyoutItemBase> ?? MenuPresenter.Items.OfType<MenuFlyoutItemBase>())
+            .Where(item => item.Visibility == Visibility.Visible).ToArray();
+        // Read the arranged allocation before an unconstrained measure changes
+        // the stock check/icon state. ItemsSource is the currently hosted menu;
+        // the presenter's item collection can still reflect its previous source
+        // while a replacement menu's templates are loading.
+        var rendered = useRenderedColumns ? items.Select(item =>
+        {
+            var caption = Caption(item);
+            return caption is { ActualWidth: > 0 } && item.ActualWidth > 0
+                ? (Required: MeasureCaptionWidth(caption), Reserved: Math.Max(0, item.ActualWidth - caption.ActualWidth))
+                : (Required: 0d, Reserved: 0d);
+        }).ToArray() : [];
         // A closed presenter initially reports only its minimum width. Measure
         // the actual stock item templates without a width constraint so longer
         // captions retain the checkbox/icon columns and submenu arrow space.
@@ -174,17 +187,10 @@ public sealed partial class TrayContextMenuWindow : Window
         var chrome = MenuPresenter.Padding.Left + MenuPresenter.Padding.Right +
             MenuPresenter.BorderThickness.Left + MenuPresenter.BorderThickness.Right;
         var width = MenuPresenter.MinWidth;
-        foreach (var item in MenuPresenter.Items.OfType<MenuFlyoutItemBase>().Where(item => item.Visibility == Visibility.Visible))
+        foreach (var allocation in rendered)
+            width = Math.Max(width, allocation.Required + allocation.Reserved + chrome);
+        foreach (var item in items)
         {
-            // Preserve the arranged column allocation before remeasuring. Item
-            // DesiredSize alone can omit the check/icon placeholders on a cold
-            // Loaded pass, even though the caption is subsequently trimmed.
-            if (useRenderedColumns && Caption(item) is { } caption)
-            {
-                var reserved = Math.Max(0, item.ActualWidth - caption.ActualWidth);
-                var required = MeasureCaptionWidth(caption);
-                width = Math.Max(width, required + reserved + chrome);
-            }
             item.ApplyTemplate();
             item.Measure(new global::Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
             width = Math.Max(width, item.DesiredSize.Width + chrome);
@@ -374,6 +380,10 @@ public sealed partial class TrayContextMenuWindow : Window
             ShowAt(new PointInt32(work.X + work.Width - 12, work.Y + work.Height - 12));
             await Task.Delay(180);
             MenuRoot.UpdateLayout();
+            // Checked/unchecked template transitions may finish after ShowAt's
+            // first queued pass. Measure the actual hosted menu once settled.
+            UpdateGeometry(new PointInt32(work.X + work.Width - 12, work.Y + work.Height - 12), useRenderedColumns: true);
+            await WaitForGeometryAsync();
             AssertCaptionsFit(Path.GetDirectoryName(Path.GetFullPath(path))!, Path.GetFileNameWithoutExtension(path));
             verify?.Invoke(MenuPresenter);
             await SaveMenuCaptureAsync(path);
@@ -425,9 +435,24 @@ public sealed partial class TrayContextMenuWindow : Window
         try
         {
             MenuPresenter.Style = (Style)MenuRoot.Resources["MenuCaptureSurfaceStyle"];
+            await WaitForGeometryAsync();
             await UiSmokeCapture.SaveAsync(MenuRoot, path);
         }
         finally { MenuPresenter.Style = previousStyle; }
+    }
+
+    private async Task WaitForGeometryAsync()
+    {
+        // MoveAndResize updates the HWND immediately; XAML consumes its size
+        // on a later dispatcher turn. Caption bounds alone do not prove that
+        // the containing viewport is wide enough to display those captions.
+        for (var attempt = 0; attempt < 25; attempt++)
+        {
+            MenuRoot.UpdateLayout();
+            if (MenuRoot.ActualWidth + 1 >= MenuPresenter.Width && MenuRoot.ActualHeight + 1 >= MenuPresenter.ActualHeight) return;
+            await Task.Delay(20);
+        }
+        throw new InvalidOperationException("The Fluent menu viewport did not settle to its measured command width.");
     }
 
     private static IEnumerable<DependencyObject> Descendants(DependencyObject parent)
