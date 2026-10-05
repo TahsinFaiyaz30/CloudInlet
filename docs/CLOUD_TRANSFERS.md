@@ -5,7 +5,7 @@ CloudBay is the middleman for OneDrive → Backblaze B2 and B2 → OneDrive. The
 ## Product flows
 
 - Open **Folder backup → Transfer between clouds**, or **Import files → Cloud storage → OneDrive ↔ Backblaze B2**.
-- Connect OneDrive with a registered public-client application ID. Enable **Allow public client flows**; use the tenant ID/domain for a work account or the appropriate Microsoft common/consumer authority. Tokens and refresh-token rotations are stored with current-user Windows DPAPI.
+- Connect OneDrive with **Sign in with Microsoft**, choose a personal or work account and approve access. CloudBay supplies its registered public-client application ID automatically; ordinary users do not open Entra or enter application/tenant IDs. Optional **Advanced connection settings** support custom deployments and the supplied yxrcz tenant. Tokens and refresh-token rotations are stored with current-user Windows DPAPI.
 - Browse the source account/folder and destination account/folder. Review Copy or Move, exclusions and Fail/Skip/Replace/Rename conflicts before starting.
 - A cloud destination keeps its provider identity. Only an explicit **This PC** destination creates local files.
 - Personal-folder enable can import directly from OneDrive into the selected B2 backup before changing the Windows folder mapping. Stop can transfer the former B2 backup to OneDrive after separately reviewing the Windows local mapping. Native sync relinquishes that cloud source durably before a Move.

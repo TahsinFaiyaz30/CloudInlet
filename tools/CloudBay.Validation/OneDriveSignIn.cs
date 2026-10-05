@@ -17,12 +17,17 @@ internal static class OneDriveSignIn
         var storage=new ClientStorage(directory);
         using var cancellation=new CancellationTokenSource(TimeSpan.FromMinutes(15));
         var id=Guid.NewGuid().ToString("N");
+        void SaveProfile(string name, OneDriveTokenSet tokens)
+        {
+            var profile=new ClientStorage.OneDriveConnection(id,name,clientId,tenant,tokens);
+            storage.SaveOneDriveConnections(storage.LoadOneDriveConnections().Where(account=>account.Id!=id).Append(profile).ToArray());
+        }
         try
         {
             var auth=new OneDriveAuthClient(clientId,tenant,persist:(tokens,ct)=>
             {
                 ct.ThrowIfCancellationRequested();
-                storage.SaveOneDriveConnections([new(id,"Microsoft test account",clientId,tenant,tokens)]);
+                SaveProfile("Microsoft test account",tokens);
                 return Task.CompletedTask;
             });
             var code=await auth.BeginDeviceSignInAsync(cancellation.Token);
@@ -30,7 +35,8 @@ internal static class OneDriveSignIn
             var tokens=await auth.CompleteDeviceSignInAsync(code,cancellation.Token);
             var client=new OneDriveClient(auth);
             var drives=await client.ListDrivesAsync(cancellation.Token);
-            storage.SaveOneDriveConnections([new(id,drives.FirstOrDefault()?.Owner??"Microsoft test account",clientId,tenant,tokens)]);
+            // Listing drives may rotate access/refresh tokens; keep the current secure-store token set.
+            SaveProfile(drives.FirstOrDefault()?.Owner??"Microsoft test account",storage.LoadOneDriveConnections().Single(account=>account.Id==id).Tokens);
             Console.WriteLine(JsonSerializer.Serialize(new { signedIn=true,accountId=id,driveIds=drives.Select(d=>d.Id).ToArray(),clientData=directory }));
             return 0;
         }

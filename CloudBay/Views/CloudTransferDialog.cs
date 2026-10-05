@@ -25,7 +25,7 @@ internal sealed class CloudTransferDialog : ContentDialog
     private readonly TransferLocation? _fixedSource, _fixedDestination;
     private static readonly (string Source, string Destination)[] Directions = [("onedrive", "b2"), ("b2", "onedrive"),
         ("local", "b2"), ("b2", "local"), ("local", "onedrive"), ("onedrive", "local")];
-    private bool _review, _working, _closed;
+    private bool _review, _working, _closed, _signInPresentation;
     private int _pending;
     internal TransferLocation? Source => _source.Location;
     internal TransferLocation? Destination => _destination.Location;
@@ -55,7 +55,7 @@ internal sealed class CloudTransferDialog : ContentDialog
         PrimaryButtonClick += Primary_Click;
         SecondaryButtonClick += (_, args) => { args.Cancel = true; _review = false; RenderChoices(); };
         Closed += (_, _) => { _closed = true; _lifetime.Cancel(); DisposeWhenIdle(); };
-        Loaded += async (_, _) => { if (_source.Location is null) await ConfigureLocationsAsync(); };
+        Loaded += async (_, _) => { if (!_signInPresentation && _source.Location is null) await ConfigureLocationsAsync(); };
         RenderChoices();
     }
 
@@ -120,6 +120,15 @@ internal sealed class CloudTransferDialog : ContentDialog
         if (!Environment.GetCommandLineArgs().Contains("--ui-smoke")) throw new InvalidOperationException("Cloud transfer presentation requires isolated UI validation.");
         await ConfigureLocationsAsync();
         RenderReview();
+    }
+    internal void ShowSignInPresentation(bool advanced = false)
+    {
+        if (!Environment.GetCommandLineArgs().Contains("--ui-smoke")) throw new InvalidOperationException("Sign-in presentation requires isolated UI validation.");
+        _signInPresentation = true;
+        Title = "Connect OneDrive"; PrimaryButtonText = ""; SecondaryButtonText = "";
+        _body.Children.Clear();
+        _source.ShowSignIn(advanced);
+        _body.Children.Add(_source.View); _body.Children.Add(_error);
     }
 
     private sealed class CloudFolderSelector : IDisposable
@@ -246,35 +255,44 @@ internal sealed class CloudTransferDialog : ContentDialog
             _changed();
         });
 
-        private void ShowSignIn()
+        internal void ShowSignIn(bool showAdvanced = false)
         {
             Location = null; _changed();
-            var clientId = new TextBox { Header = "Microsoft application (client) ID", Text = Environment.GetEnvironmentVariable("CLOUDBAY_ONEDRIVE_CLIENT_ID") ?? "",
-                PlaceholderText = "Application ID for a public client with delegated Files.ReadWrite access" };
-            var tenant = new TextBox { Header = "Tenant", Text = "common", PlaceholderText = "common, consumers, or your organization tenant" };
-            var status = SourceImportDialog.Text("Sign in with your Microsoft account. CloudBay stores its refresh token encrypted for your Windows account.", true);
-            var signIn = new Button { Content = "Sign in" };
+            var clientId = new TextBox { Header = "Microsoft application ID", Text = Environment.GetEnvironmentVariable(OneDriveSignInConfiguration.ClientIdEnvironmentVariable) ?? OneDriveSignInConfiguration.DefaultClientId };
+            var tenant = new TextBox { Header = "Sign-in authority", Text = Environment.GetEnvironmentVariable(OneDriveSignInConfiguration.TenantEnvironmentVariable) ?? OneDriveSignInConfiguration.DefaultTenant,
+                PlaceholderText = "common, consumers, or an organization tenant" };
+            var organization = new Button { Content = "Use yxrcz organization" };
+            organization.Click += (_, _) => tenant.Text = OneDriveSignInConfiguration.YxrczTenantId;
+            var settings = new StackPanel { Spacing = 8 };
+            settings.Children.Add(SourceImportDialog.Text("Change these only when using a custom Microsoft application or organization-specific sign-in.", true));
+            settings.Children.Add(clientId); settings.Children.Add(tenant); settings.Children.Add(organization);
+            var advanced = new Expander { Header = "Advanced connection settings", Content = settings, IsExpanded = showAdvanced,
+                HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+            var status = SourceImportDialog.Text("Connect your personal or work Microsoft account. Microsoft will ask you to approve access to your OneDrive. Your sign-in is stored securely for this Windows account.", true);
+            var signIn = new Button { Content = "Sign in with Microsoft" };
             var back = new Button { Content = "Back to accounts" };
+            var link = new HyperlinkButton { Content = "Open Microsoft sign-in", Visibility = Visibility.Collapsed };
             View.Children.Clear(); View.Children.Add(SourceImportDialog.Text(_heading + " · Connect OneDrive"));
-            View.Children.Add(clientId); View.Children.Add(tenant); View.Children.Add(status); View.Children.Add(signIn); View.Children.Add(back);
+            View.Children.Add(status); View.Children.Add(signIn); View.Children.Add(link); View.Children.Add(advanced); View.Children.Add(back);
             back.Click += async (_, _) => await ConfigureAsync("onedrive", null);
             signIn.Click += async (_, _) =>
             {
                 // Keep the verification link interactive while the token endpoint is polled.
-                _pending++; _changed(); signIn.IsEnabled = false; back.IsEnabled = false;
+                _pending++; _changed(); signIn.IsEnabled = false; back.IsEnabled = false; advanced.IsEnabled = false;
+                link.Visibility = Visibility.Collapsed;
                 try
                 {
-                    var code = await _controller.BeginOneDriveSignInAsync(clientId.Text, tenant.Text, _lifetime.Token);
+                    var options = OneDriveSignInConfiguration.Resolve(clientId.Text, tenant.Text);
+                    var code = await _controller.BeginOneDriveSignInAsync(options.ClientId, options.Tenant, _lifetime.Token);
                     status.Text = code.Message;
-                    var link = new HyperlinkButton { Content = "Open Microsoft sign-in · " + code.UserCode, NavigateUri = code.VerificationUri };
-                    View.Children.Insert(View.Children.Count - 2, link);
-                    var account = await _controller.CompleteOneDriveSignInAsync(clientId.Text, tenant.Text, code, _lifetime.Token);
+                    link.Content = "Open Microsoft sign-in · " + code.UserCode; link.NavigateUri = code.VerificationUri; link.Visibility = Visibility.Visible;
+                    var account = await _controller.CompleteOneDriveSignInAsync(options.ClientId, options.Tenant, code, _lifetime.Token);
                     await ConfigureAsync("onedrive", null);
                     _account.SelectedItem = _controller.OneDriveAccounts.Single(item => item.Id == account.Id);
                 }
                 catch (OperationCanceledException) { }
                 catch (Exception error) { if (!_lifetime.IsCancellationRequested) _error(error); }
-                finally { _pending--; signIn.IsEnabled = true; back.IsEnabled = true; _changed(); DisposeWhenIdle(); }
+                finally { _pending--; signIn.IsEnabled = true; back.IsEnabled = true; advanced.IsEnabled = true; _changed(); DisposeWhenIdle(); }
             };
         }
         public void Dispose() { if (_disposed) return; _disposed = true; _lifetime.Cancel(); DisposeWhenIdle(); }

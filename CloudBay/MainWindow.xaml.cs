@@ -2375,6 +2375,13 @@ public sealed partial class MainWindow : Window
                 if (!directReview.IsPrimaryButtonEnabled || directReview.Source?.Provider != "onedrive" || directReview.Destination?.Provider != "b2")
                     throw new InvalidOperationException("A direct cloud review must retain provider locations without creating a local destination.");
                 await CaptureImportDialogAsync(directReview, $"cloud-transfer-review-{importWidth}{suffix}");
+                foreach (var advanced in new[] { false, true })
+                {
+                    var signInPresentation = new CloudTransferDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this))
+                    { XamlRoot = RootGrid.XamlRoot, RequestedTheme = theme };
+                    signInPresentation.ShowSignInPresentation(advanced);
+                    await CaptureImportDialogAsync(signInPresentation, $"onedrive-signin-{(advanced ? "advanced" : "normal")}-{importWidth}{suffix}");
+                }
                 var disconnectReview = new DisconnectReviewDialog { XamlRoot = RootGrid.XamlRoot, RequestedTheme = theme };
                 if (disconnectReview.Mode != DisconnectMode.DisconnectOnly || disconnectReview.PrimaryButtonText != "Disconnect only")
                     throw new InvalidOperationException("Disconnect only must be the visible default in the account disconnect review.");
