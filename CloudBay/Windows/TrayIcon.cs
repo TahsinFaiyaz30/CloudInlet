@@ -9,6 +9,7 @@ public sealed record TrayIconActions(Action ShowApp, Action OpenFolder, Action T
 {
     public Func<TrayMenuAvailability>? Availability { get; init; }
     public Action? BeforeMenuOpen { get; init; }
+    public Action<global::Windows.Graphics.PointInt32>? ShowContextMenu { get; init; }
     public Action<Exception>? Error { get; init; }
 }
 
@@ -37,7 +38,6 @@ public sealed class TrayIcon : IDisposable
     private bool _version4;
     private bool _shellRegistered;
     private bool _animationEnabled;
-    private bool _menuOpen;
     private bool _disposed;
 
     public TrayIcon(IntPtr window, string iconPath, Action show, Action open, TrayIconActions? actions = null)
@@ -197,44 +197,16 @@ public sealed class TrayIcon : IDisposable
 
     private void ShowContextMenu()
     {
-        if (_menuOpen || _disposed) return;
-        var menu = CreatePopupMenu();
-        if (menu == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
-        _menuOpen = true;
-        uint command = 0;
-        try
-        {
-            var availability = _actions?.Availability?.Invoke() ?? new TrayMenuAvailability(false, false);
-            Append(menu, 1, "Open CloudBay", true);
-            Append(menu, 2, "Open CloudBay folder", _actions is not null && availability.CanOpenFolder);
-            AppendSeparator(menu);
-            Append(menu, 3, availability.IsPaused ? "Resume syncing" : "Pause syncing", _actions is not null && availability.CanPause);
-            Append(menu, 4, "Settings", _actions is not null);
-            AppendSeparator(menu);
-            Append(menu, 5, "Quit CloudBay", _actions is not null);
-            _actions?.BeforeMenuOpen?.Invoke();
-            var position = ContextMenuPosition();
-            // Foreground ownership and WM_NULL make native notification menus
-            // dismiss reliably instead of staying open/behind the taskbar.
-            SetForegroundWindow(_window);
-            command = TrackPopupMenuEx(menu, 0x100 | 0x80 | 0x8 | 0x2, position.X, position.Y, _window, IntPtr.Zero);
-        }
-        finally
-        {
-            DestroyMenu(menu);
-            _menuOpen = false;
-            PostMessage(_window, 0, UIntPtr.Zero, IntPtr.Zero);
-            if (!_disposed && command == 0) ShellNotifyIcon(3, ref _data); // NIM_SETFOCUS after cancellation
-        }
-        if (_disposed || command == 0) return;
-        switch (command)
-        {
-            case 1: (_actions?.ShowApp ?? _open)(); break;
-            case 2: _actions?.OpenFolder(); break;
-            case 3: _actions?.TogglePause(); break;
-            case 4: _actions?.Settings(); break;
-            case 5: _actions?.Quit(); break;
-        }
+        if (_disposed) return;
+        _actions?.BeforeMenuOpen?.Invoke();
+        var position = ContextMenuPosition();
+        if (_actions?.ShowContextMenu is { } show) show(new(position.X, position.Y));
+        else _open();
+    }
+
+    public void ReturnKeyboardFocus()
+    {
+        if (!_disposed && _shellRegistered) ShellNotifyIcon(3, ref _data);
     }
 
     private Point ContextMenuPosition()
@@ -253,14 +225,6 @@ public sealed class TrayIcon : IDisposable
         return point;
     }
 
-    private static void Append(IntPtr menu, uint command, string label, bool enabled)
-    {
-        if (!AppendMenu(menu, enabled ? 0u : 3u, command, label)) throw new Win32Exception(Marshal.GetLastWin32Error());
-    }
-    private static void AppendSeparator(IntPtr menu)
-    {
-        if (!AppendMenu(menu, 0x800, 0, null)) throw new Win32Exception(Marshal.GetLastWin32Error());
-    }
     private static bool ClientAnimationEnabled()
     {
         var animated = true;
@@ -281,7 +245,6 @@ public sealed class TrayIcon : IDisposable
         if (_animationTimer != UIntPtr.Zero) KillTimer(_window, _animationTimer);
         if (_restoreTimer != UIntPtr.Zero) KillTimer(_window, _restoreTimer);
         _animationTimer = UIntPtr.Zero; _restoreTimer = UIntPtr.Zero;
-        if (_menuOpen) EndMenu();
         ShellNotifyIcon(2, ref _data);
         RemoveWindowSubclass(_window, _callback, 0xCB02);
         _images?.Dispose(); DestroyIcon(_icon);
@@ -310,14 +273,7 @@ public sealed class TrayIcon : IDisposable
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern uint RegisterWindowMessage(string message);
     [DllImport("user32.dll", SetLastError = true)] private static extern UIntPtr SetTimer(IntPtr window, UIntPtr id, uint interval, IntPtr callback);
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool KillTimer(IntPtr window, UIntPtr id);
-    [DllImport("user32.dll", SetLastError = true)] private static extern IntPtr CreatePopupMenu();
-    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool AppendMenu(IntPtr menu, uint flags, UIntPtr id, string? text);
-    [DllImport("user32.dll", SetLastError = true)] private static extern uint TrackPopupMenuEx(IntPtr menu, uint flags, int x, int y, IntPtr owner, IntPtr parameters);
-    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool DestroyMenu(IntPtr menu);
-    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool EndMenu();
-    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetForegroundWindow(IntPtr window);
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetCursorPos(out Point point);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool PostMessage(IntPtr window, uint message, UIntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll", EntryPoint = "SystemParametersInfoW")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SystemParametersInfo(uint action, uint parameter, [MarshalAs(UnmanagedType.Bool)] ref bool value, uint flags);
     [DllImport("user32.dll", EntryPoint = "SystemParametersInfoW")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SystemParametersInfo(uint action, uint parameter, ref HighContrast value, uint flags);
     [DllImport("comctl32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetWindowSubclass(IntPtr window, SubclassProc callback, UIntPtr id, UIntPtr data);

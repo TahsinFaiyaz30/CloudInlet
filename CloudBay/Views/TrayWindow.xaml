@@ -166,11 +166,15 @@
                         <ToggleMenuFlyoutItem
                             x:Name="MeteredQuickSetting"
                             Text="Pause on metered connections"
-                            Click="MeteredQuickSetting_Click" />
+                            Click="MeteredQuickSetting_Click">
+                            <ToggleMenuFlyoutItem.Icon><FontIcon Glyph="&#xE701;" /></ToggleMenuFlyoutItem.Icon>
+                        </ToggleMenuFlyoutItem>
                         <ToggleMenuFlyoutItem
                             x:Name="BatteryQuickSetting"
                             Text="Pause with Battery Saver"
-                            Click="BatteryQuickSetting_Click" />
+                            Click="BatteryQuickSetting_Click">
+                            <ToggleMenuFlyoutItem.Icon><FontIcon Glyph="&#xE850;" /></ToggleMenuFlyoutItem.Icon>
+                        </ToggleMenuFlyoutItem>
                         <MenuFlyoutSeparator />
                         <MenuFlyoutItem x:Name="QuickOpenFolder" Text="Open CloudBay folder" Click="OpenFolder_Click">
                             <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8B7;" /></MenuFlyoutItem.Icon>

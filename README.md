@@ -48,7 +48,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1
 
 Closing the main window keeps CloudBay running. Use the tray menu's **Quit CloudBay** to exit. A second launch opens the running app.
 
-Right-click the notification icon for **Open CloudBay**, **Open CloudBay folder**, **Pause/Resume syncing**, **Settings**, and **Quit CloudBay**. The icon moves during active file work; periodic checking, up-to-date, paused, offline, and attention states have distinct still badges. Windows' reduced-motion and high-contrast preferences suppress animation.
+Right-click the notification icon for a Fluent menu with **Open CloudBay**, **Open folder**, **Pause/Resume syncing**, **Settings**, and **Quit CloudBay**. The activity window and menu request foreground input when opened by the user, support keyboard focus, and dismiss when another window becomes active. The icon moves during active file work; periodic checking, up-to-date, paused, offline, and attention states have distinct still badges. Windows' reduced-motion and high-contrast preferences suppress animation.
 
 Activity rows offer **Open folder** when their local folder is available. **View in cloud** opens that exact file's retained B2 versions in CloudBay's Files page. Actions retain the event's backup root, bucket, and prefix and are hidden when those no longer match. Old history without saved location identity remains readable without guessing a destination.
 
@@ -82,7 +82,7 @@ dotnet test CloudBay.Tests\CloudBay.Tests.csproj -c Release --no-build -v:minima
 .\scripts\build-release.ps1
 ```
 
-The release script creates `artifacts\release\CloudBay-2.0.4-win-x64.zip`, an extracted package, and its SHA256 checksum. `CloudBay.exe --ui-smoke` captures the UI into `artifacts\ui-smoke` using fresh processes for both themes, isolated storage, and presentation fixtures for all seven client states. It checks focused Settings routes, retained drafts, keyboard focus, activity scrolling, provider discovery, and tray action reachability. These fixtures do not connect to a provider or modify the controller's account. The [live validation CLI](tools/CloudBay.Validation/README.md) uses a separately provisioned bucket-restricted key and a generated test prefix; it never redirects real Windows personal folders.
+The release script creates `artifacts\release\CloudBay-2.0.5-win-x64.zip`, an extracted package, and its SHA256 checksum. `CloudBay.exe --ui-smoke` captures the UI into `artifacts\ui-smoke` using fresh processes for both themes, isolated storage, and presentation fixtures for all seven client states. It checks focused Settings routes, retained drafts, keyboard focus, activity scrolling, provider discovery, and tray action reachability. These fixtures do not connect to a provider or modify the controller's account. The [live validation CLI](tools/CloudBay.Validation/README.md) uses a separately provisioned bucket-restricted key and a generated test prefix; it never redirects real Windows personal folders.
 
 See [architecture and primary documentation](docs/ARCHITECTURE.md), [Windows 11 interface design](docs/UI-DESIGN.md), and [verified release scope](docs/VALIDATION.md). Public distribution needs the publisher's code-signing certificate; this local release is unsigned.
 

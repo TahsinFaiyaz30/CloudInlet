@@ -17,6 +17,8 @@ public partial class App : Microsoft.UI.Xaml.Application
     public static MainWindow? MainWindow { get; private set; }
     private ClientController? _controller;
     private TrayWindow? _trayWindow;
+    private TrayContextMenuWindow? _trayContextMenu;
+    private TrayIconActions? _trayActions;
     private TrayIcon? _trayIcon;
     private Mutex? _singleInstance;
     private CancellationTokenSource _lifetime = new();
@@ -66,6 +68,22 @@ public partial class App : Microsoft.UI.Xaml.Application
         _isUiSmoke = isSmoke;
         _isUiLive = isLive;
         _smokeTheme = smokeTheme;
+        if (isSmoke && commandLine.Contains("--tray-focus-smoke"))
+        {
+            try
+            {
+                Environment.ExitCode = await TrayFocusValidation.RunAsync(Path.Combine(Environment.CurrentDirectory, "artifacts", "tray-focus-smoke")) ? 0 : 1;
+            }
+            catch (Exception error)
+            {
+                var output = Path.Combine(Environment.CurrentDirectory, "artifacts", "tray-focus-smoke");
+                Directory.CreateDirectory(output);
+                await File.WriteAllTextAsync(Path.Combine(output, "failure.txt"), DescribeIsolatedFailure(error, "Validate native tray focus"));
+                Environment.ExitCode = 1;
+            }
+            Exit();
+            return;
+        }
         if (isSmoke && smokeTheme is not (null or "Dark" or "Light"))
         {
             Environment.ExitCode = 64;
@@ -121,17 +139,20 @@ public partial class App : Microsoft.UI.Xaml.Application
             _startupStage = "Create tray window";
             _trayWindow = new TrayWindow(_controller, () => { MainWindow.ShowSettings(); MainWindow.ShowWindow(); }, () => _ = QuitAsync());
             _startupStage = "Register notification icon";
-            _trayIcon = new TrayIcon(WinRT.Interop.WindowNative.GetWindowHandle(MainWindow),
-                Path.Combine(AppContext.BaseDirectory, "Assets", "CloudBay.ico"), () => _trayWindow.ShowAtTray(), MainWindow.ShowWindow,
-                new TrayIconActions(MainWindow.ShowWindow, () => _controller.LaunchFolder(),
+            var trayActions = new TrayIconActions(MainWindow.ShowWindow, () => _controller.LaunchFolder(),
                     () => { if (_controller.Snapshot.State == ClientState.Paused) _controller.Resume(); else _controller.Pause(); },
                     () => { MainWindow.ShowSettings(); MainWindow.ShowWindow(); }, () => _ = QuitAsync())
                 {
                     Availability = () => new(_controller.Settings.IsConfigured, _controller.Settings.IsConfigured,
                         _controller.Snapshot.State == ClientState.Paused),
                     BeforeMenuOpen = () => _trayWindow.AppWindow.Hide(),
+                    ShowContextMenu = point => ShowTrayContextMenu(point),
                     Error = error => _ = ShowTrayCommandErrorAsync(error)
-                });
+                };
+            _trayActions = trayActions;
+            _trayIcon = new TrayIcon(WinRT.Interop.WindowNative.GetWindowHandle(MainWindow),
+                Path.Combine(AppContext.BaseDirectory, "Assets", "CloudBay.ico"),
+                () => { _trayContextMenu?.Hide(); _trayWindow.ShowAtTray(); }, MainWindow.ShowWindow, trayActions);
             _trayIcon.Update(_controller.Snapshot);
             _controller.Changed += Controller_Changed;
             _ = ListenForActivationAsync();
@@ -171,6 +192,9 @@ public partial class App : Microsoft.UI.Xaml.Application
             {
                 if (!commandLine.Contains("--ui-smoke-tray")) await MainWindow.RunUiSmokeAsync(output);
                 await _trayWindow.RunUiSmokeAsync(output);
+                var menu = GetTrayContextMenu();
+                await menu.RunUiValidationAsync(output);
+                await _trayWindow.RunQuickSettingsAlignmentValidationAsync(menu, output);
                 await File.WriteAllTextAsync(completionPath, $"{smokeTheme} {(commandLine.Contains("--ui-smoke-tray") ? "tray" : "UI")} capture completed");
             }
             catch (Exception error)
@@ -346,6 +370,19 @@ public partial class App : Microsoft.UI.Xaml.Application
             if (!_exiting && _controller is not null) _trayIcon?.Update(_controller.Snapshot);
         })) Interlocked.Exchange(ref _trayUpdatePending, 0);
     }
+    private TrayContextMenuWindow GetTrayContextMenu()
+    {
+        if (_trayContextMenu is not null) return _trayContextMenu;
+        if (_trayActions is null || _controller is null) throw new InvalidOperationException("Tray commands are not ready.");
+        _trayContextMenu = new TrayContextMenuWindow(_trayActions.Availability!, _trayActions, () => _controller.Settings.Theme)
+        {
+            ReturnKeyboardFocus = () => _trayIcon?.ReturnKeyboardFocus()
+        };
+        return _trayContextMenu;
+    }
+
+    private void ShowTrayContextMenu(global::Windows.Graphics.PointInt32 point) => GetTrayContextMenu().ShowAt(point);
+
     private async Task ShowTrayCommandErrorAsync(Exception error)
     {
         if (_exiting || MainWindow?.Content is not FrameworkElement content) return;
@@ -366,6 +403,7 @@ public partial class App : Microsoft.UI.Xaml.Application
         _lifetime.Cancel();
         if (_controller is not null) _controller.Changed -= Controller_Changed;
         _trayIcon?.Dispose();
+        _trayContextMenu?.Close();
         if (_controller is not null) await _controller.DisposeAsync();
         _trayWindow?.Close();
         if (MainWindow is not null) { MainWindow.AllowClose = true; MainWindow.Close(); }

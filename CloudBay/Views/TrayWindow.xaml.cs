@@ -20,6 +20,7 @@ public sealed partial class TrayWindow : Window
     private readonly Action _quit;
     private bool _menuOpen;
     private bool _active;
+    private bool _opening;
     private bool _busy;
     private bool _closed;
     private int _refreshPending;
@@ -50,6 +51,12 @@ public sealed partial class TrayWindow : Window
         _quit = quit;
         InitializeComponent();
         TrayRoot.ActualThemeChanged += TrayRoot_ActualThemeChanged;
+        TrayRoot.KeyDown += (_, args) =>
+        {
+            if (args.Key != global::Windows.System.VirtualKey.Escape || _menuOpen) return;
+            AppWindow.Hide();
+            args.Handled = true;
+        };
         _settingsPressedHandler = QuickSettings_PointerPressed;
         _settingsReleasedHandler = QuickSettings_PointerReleased;
         QuickSettingsButton.AddHandler(UIElement.PointerPressedEvent, _settingsPressedHandler, handledEventsToo: true);
@@ -90,8 +97,11 @@ public sealed partial class TrayWindow : Window
         Activated += (_, args) =>
         {
             ApplyNativeFrame();
-            _active = args.WindowActivationState != WindowActivationState.Deactivated;
-            if (args.WindowActivationState == WindowActivationState.Deactivated && !_menuOpen && !_keepOpenForInspection) AppWindow.Hide();
+            // WinUI can deliver a queued activation notification from initial
+            // XAML loading after the native foreground handoff has completed.
+            // Current HWND ownership takes precedence over that stale event.
+            _active = GetForegroundWindow() == _frameWindow;
+            if (args.WindowActivationState == WindowActivationState.Deactivated && !_active && !_opening && !_menuOpen && !_keepOpenForInspection) AppWindow.Hide();
         };
         Closed += (_, _) =>
         {
@@ -106,7 +116,7 @@ public sealed partial class TrayWindow : Window
         Refresh();
     }
 
-    public void ShowAtTray(bool keepOpenForInspection = false)
+    public void ShowAtTray(bool keepOpenForInspection = false, bool forceActivationForValidation = false)
     {
         if (_closed) return;
         _keepOpenForInspection = keepOpenForInspection;
@@ -142,8 +152,34 @@ public sealed partial class TrayWindow : Window
         var sideTaskbar = cursor.X < work.X || cursor.X >= work.X + work.Width;
         _anchorToTop = cursor.Y < work.Y || (sideTaskbar && cursor.Y < work.Y + work.Height && y <= work.Y + margin);
         AppWindow.MoveAndResize(new RectInt32(x, y, width, height));
-        AppWindow.Show(!Environment.GetCommandLineArgs().Contains("--ui-smoke"));
-        if (!Environment.GetCommandLineArgs().Contains("--ui-smoke")) Activate();
+        var requestActivation = forceActivationForValidation || !Environment.GetCommandLineArgs().Contains("--ui-smoke");
+        _opening = true;
+        try
+        {
+            AppWindow.Show(false);
+            if (requestActivation)
+            {
+                // Visibility/topmost placement and WinUI Activate are not a
+                // foreground-input handoff from Explorer. Request it once,
+                // synchronously while handling the user's tray click.
+                Activate();
+                SetForegroundWindow(_frameWindow);
+                FocusInitialAction();
+                // On the first show the XAML content may not be loaded yet.
+                // This focuses only an already-foreground window, never
+                // retries foreground acquisition or steals later input.
+                DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, FocusInitialAction);
+            }
+        }
+        finally { _opening = false; }
+    }
+
+    internal FocusState FocusStateForValidation => QuickSettingsButton.FocusState;
+
+    private void FocusInitialAction()
+    {
+        if (!_closed && AppWindow.IsVisible && GetForegroundWindow() == _frameWindow)
+            QuickSettingsButton.Focus(FocusState.Programmatic);
     }
 
     private void Controller_Changed(object? sender, EventArgs args)
@@ -216,12 +252,21 @@ public sealed partial class TrayWindow : Window
         // corners and shadow; only the standard non-client frame is removed.
         // https://learn.microsoft.com/windows/win32/winmsg/wm-nccalcsize
         if (!_closed && message == 0x0083) return 0;
+        if (message == 0x0006 && (wParam & 0xffff) == 0) // WM_ACTIVATE / WA_INACTIVE
+            DispatcherQueue.TryEnqueue(DismissIfInactive);
         // Desktop accessibility changes arrive through WM_SETTINGCHANGE.
         // The UWP HighContrastChanged event can fail to register in an
         // unpackaged desktop app, preventing notification-icon startup.
         if (message is 0x001A or 0x031A)
             DispatcherQueue.TryEnqueue(() => ApplyNativeFrame());
         return DefSubclassProc(window, message, wParam, lParam);
+    }
+
+    private void DismissIfInactive()
+    {
+        if (!_closed && AppWindow.IsVisible && !_opening && !_menuOpen && !_keepOpenForInspection &&
+            GetForegroundWindow() != _frameWindow)
+            AppWindow.Hide();
     }
 
     private static bool UseContrastFrame()
@@ -294,7 +339,7 @@ public sealed partial class TrayWindow : Window
     private void QuickSettings_Closed(object sender, object args)
     {
         _menuOpen = false;
-        if (!_active) AppWindow.Hide();
+        if (GetForegroundWindow() != _frameWindow) AppWindow.Hide();
     }
 
     private void PauseFor_Click(object sender, RoutedEventArgs args)
@@ -623,6 +668,47 @@ public sealed partial class TrayWindow : Window
         Refresh();
     }
 
+    internal async Task RunQuickSettingsAlignmentValidationAsync(TrayContextMenuWindow host, string outputDirectory)
+    {
+        var theme = Environment.GetCommandLineArgs().Any(arg => arg == "--ui-smoke-theme=Light") ? "Light" : "Dark";
+        var suffix = theme == "Light" ? "-light" : "";
+        var priorPreview = _viewModel.Preview;
+        try
+        {
+            QuickSettingsMenu.Hide();
+            foreach (var enabled in new[] { false, true })
+            {
+                var preview = ClientPreview.Connected();
+                _viewModel.SetPreview(preview with { Settings = preview.Settings with
+                {
+                    Theme = theme, PauseOnMetered = enabled, PauseOnBatterySaver = enabled
+                } });
+                Refresh();
+                await host.CaptureMenuAsync(QuickSettingsMenu,
+                    Path.Combine(outputDirectory, $"tray-quick-settings-{(enabled ? "checked" : "unchecked")}{suffix}.png"), theme,
+                    presenter =>
+                    {
+                        var rows = QuickSettingsMenu.Items.OfType<MenuFlyoutItemBase>().Where(item => item.Visibility == Visibility.Visible)
+                            .Where(item => item is MenuFlyoutItem or MenuFlyoutSubItem).ToArray();
+                        var positions = rows.Select(item =>
+                        {
+                            var caption = item is MenuFlyoutSubItem submenu ? submenu.Text : ((MenuFlyoutItem)item).Text;
+                            var label = FindActivityDescendant<TextBlock>(item, block => block.Text == caption && block.ActualWidth > 0)
+                                ?? throw new InvalidOperationException("A quick-settings menu label was not rendered: " + caption);
+                            return label.TransformToVisual(presenter).TransformPoint(new global::Windows.Foundation.Point()).X;
+                        }).ToArray();
+                        if (positions.Length != 7 || positions.Max() - positions.Min() > 0.5 ||
+                            MeteredQuickSetting.IsChecked != enabled || BatteryQuickSetting.IsChecked != enabled ||
+                            MeteredQuickSetting.Icon is null || BatteryQuickSetting.Icon is null)
+                            throw new InvalidOperationException("Quick-settings normal, submenu and toggle labels must share one aligned text column.");
+                    });
+                await File.AppendAllTextAsync(Path.Combine(outputDirectory, "tray-quick-settings-assertions.txt"),
+                    $"PASS {theme} {(enabled ? "checked" : "unchecked")}: seven labels share the same text column; pause options have native network/battery icons and independent checkbox state.{Environment.NewLine}");
+            }
+        }
+        finally { _viewModel.SetPreview(priorPreview); Refresh(); }
+    }
+
     private void AssertTrayLayout(ClientState state, string outputDirectory)
     {
         var clientOrigin = new Point();
@@ -748,6 +834,8 @@ public sealed partial class TrayWindow : Window
     [DllImport("user32.dll", EntryPoint = "SystemParametersInfoW")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SystemParametersInfo(uint action, uint parameter, ref HighContrast value, uint flags);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern nint GetWindowLongPtr(nint window, int index);
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetWindowPos(nint window, nint insertAfter, int x, int y, int width, int height, uint flags);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetForegroundWindow(nint window);
+    [DllImport("user32.dll")] private static extern nint GetForegroundWindow();
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetWindowRect(nint window, out Rectangle rectangle);
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetClientRect(nint window, out Rectangle rectangle);
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool ClientToScreen(nint window, ref Point point);
