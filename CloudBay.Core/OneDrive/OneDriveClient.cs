@@ -71,8 +71,11 @@ public sealed class OneDriveClient
     public Task<OneDriveItem> GetRootAsync(string driveId, CancellationToken cancellationToken = default) =>
         GetItemAtAsync($"drives/{Segment(driveId)}/root?$select={ItemFields}", cancellationToken);
 
+    // Personal OneDrive can omit the preauthenticated download URL when $select is
+    // present, even if it explicitly includes that annotation. Fresh transfer
+    // metadata must request the full item so this remains one metadata round trip.
     public Task<OneDriveItem> GetItemAsync(string driveId, string itemId, CancellationToken cancellationToken = default) =>
-        GetItemAtAsync($"drives/{Segment(driveId)}/items/{Segment(itemId)}?$select={ItemFields}", cancellationToken);
+        GetItemAtAsync($"drives/{Segment(driveId)}/items/{Segment(itemId)}", cancellationToken);
 
     public async Task<OneDriveItem?> GetByPathAsync(string driveId, string folderId, string relativePath, CancellationToken cancellationToken = default)
     {

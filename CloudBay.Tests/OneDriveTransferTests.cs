@@ -153,13 +153,53 @@ public sealed class OneDriveTransferTests
     }
 
     [TestMethod]
-    public async Task RangeReadsRejectChangedSourceBeforeDownloadingPayload()
+    public async Task PersonalOneDriveRangeReadsGetDownloadUrlInOneFullMetadataRequest()
+    {
+        var metadataRequests = 0;
+        var payloadRequests = 0;
+        using var http = new HttpClient(new DelegateHandler((request, ct) =>
+        {
+            if (request.RequestUri!.Host == "graph.microsoft.com")
+            {
+                metadataRequests++;
+                Assert.AreEqual("/v1.0/drives/drive/items/item", request.RequestUri.AbsolutePath);
+                Assert.AreEqual("Bearer", request.Headers.Authorization?.Scheme);
+                // Matches the observed personal-account behavior: a selected
+                // item omits this annotation even when it is in the selection.
+                var selected = Uri.UnescapeDataString(request.RequestUri.Query).Contains("$select=", StringComparison.OrdinalIgnoreCase);
+                return Task.FromResult(Json(Item("item", "test.txt", 8, "saved-etag", false,
+                    downloadUrl: selected ? null : "https://my.microsoftpersonalcontent.com/signed/item")));
+            }
+            payloadRequests++;
+            Assert.AreEqual("my.microsoftpersonalcontent.com", request.RequestUri.Host);
+            Assert.IsNull(request.Headers.Authorization, "Microsoft Graph bearer tokens must not reach the signed content host.");
+            Assert.AreEqual("bytes=2-4", request.Headers.Range?.ToString());
+            Assert.IsFalse(request.Headers.Contains("If-Match"));
+            var response = new HttpResponseMessage(HttpStatusCode.PartialContent)
+                { Content = new ByteArrayContent("345"u8.ToArray()) };
+            response.Content.Headers.ContentRange = new(2, 4, 8);
+            return Task.FromResult(response);
+        }));
+        await using var stream = await Client(http).OpenReadAsync("drive",
+            new("item", "test.txt", 8, "saved-etag", null, false, DateTimeOffset.UnixEpoch), 2, 3);
+        var buffer = new byte[64];
+        Assert.AreEqual(3, await stream.ReadAsync(buffer));
+        CollectionAssert.AreEqual("345"u8.ToArray(), buffer[..3]);
+        Assert.AreEqual(0, await stream.ReadAsync(buffer), "A range stream must finish at its requested length.");
+        Assert.AreEqual(1, metadataRequests, "Avoid a selected metadata request followed by another request for the download URL.");
+        Assert.AreEqual(1, payloadRequests);
+    }
+
+    [DataTestMethod]
+    [DataRow(8L, "changed-etag")]
+    [DataRow(9L, "saved-etag")]
+    public async Task RangeReadsRejectChangedSourceBeforeDownloadingPayload(long currentSize, string currentETag)
     {
         var payloadReads = 0;
         using var http = new HttpClient(new DelegateHandler((request, ct) =>
         {
             if (request.RequestUri!.Host != "graph.microsoft.com") payloadReads++;
-            return Task.FromResult(Json(Item("item", "test.txt", 8, "changed-etag", false, downloadUrl: "https://download.example.test/item")));
+            return Task.FromResult(Json(Item("item", "test.txt", currentSize, currentETag, false, downloadUrl: "https://download.example.test/item")));
         }));
         await Assert.ThrowsExceptionAsync<TransferSourceChangedException>(() => Client(http).OpenReadAsync("drive",
             new("item", "test.txt", 8, "saved-etag", null, false, DateTimeOffset.UnixEpoch), 0, 8));
