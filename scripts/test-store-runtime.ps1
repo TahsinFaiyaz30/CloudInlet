@@ -54,6 +54,8 @@ namespace CloudBay.StoreRuntimeTests {
 '@
 }
 $registered = $null
+$process = $null
+$processId = $null
 function Get-ClientStateSnapshot {
     $state = [ordered]@{}
     foreach ($relative in @('Client', 'Debug/Client')) {
@@ -80,21 +82,36 @@ try {
     New-Item -ItemType Directory -Path $resultDirectory | Out-Null
     $arguments = '--ui-smoke --store-runtime-smoke "--validation-output=' + $resultDirectory + '"'
     $processId = [CloudBay.StoreRuntimeTests.Activation]::Launch($aumid, $arguments)
+    $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
+    if ($process) {
+        $null = $process.Handle # Retain the process handle so exit checks cannot follow a reused PID.
+        if (!$process.HasExited) {
+            $activatedPath = $process.Path
+            if ($activatedPath -and !$activatedPath.Equals((Join-Path $payload 'CloudBay.exe'), [StringComparison]::OrdinalIgnoreCase)) { throw 'The Store validation activation returned an unexpected executable.' }
+        }
+    }
     $deadline = [DateTime]::UtcNow.AddSeconds(60)
     do {
         if ((Test-Path -LiteralPath (Join-Path $resultDirectory 'complete.json')) -or (Test-Path -LiteralPath (Join-Path $resultDirectory 'failure.txt'))) { break }
+        if (!$process -or $process.HasExited) { break }
         Start-Sleep -Milliseconds 250
     } while ([DateTime]::UtcNow -lt $deadline)
     $failure = Join-Path $resultDirectory 'failure.txt'
     if (Test-Path -LiteralPath $failure) { throw "The packaged app reported a runtime failure. Inspect $failure" }
     $completion = Join-Path $resultDirectory 'complete.json'
-    if (!(Test-Path -LiteralPath $completion)) { throw "The packaged app did not complete the isolated runtime probe. Activation process: $processId; diagnostics: $resultDirectory" }
+    if (!(Test-Path -LiteralPath $completion)) {
+        $exitDescription = if ($process -and $process.HasExited) { "exit code $($process.ExitCode)" } elseif (!$process) { 'already exited' } else { '60-second deadline reached' }
+        throw "The packaged app did not complete the isolated runtime probe ($exitDescription). Activation process: $processId; diagnostics: $resultDirectory"
+    }
     $result = Get-Content -LiteralPath $completion -Raw | ConvertFrom-Json
     if ($result.version -cne $expectedVersion -or $result.packageName -cne 'CloudBay.LocalValidation' -or $result.packageFamilyName -cne $registered.PackageFamilyName -or $result.installerKind -cne 'Store' -or $result.startupTaskId -cne 'CloudBayStartup') { throw 'The packaged runtime identity or startup-task probe returned unexpected results.' }
-    $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
     if ($process -and !$process.WaitForExit(10000)) { throw 'The isolated Store runtime process did not finish gracefully.' }
+    if ($process -and $process.ExitCode -ne 0) { throw "The isolated Store runtime process returned exit code $($process.ExitCode)." }
     Write-Output "Store runtime validation passed: $completion"
 } finally {
+    if ($processId) {
+        [ordered]@{ processId=$processId; packageName='CloudBay.LocalValidation'; processObserved=[bool]$process; exitCode=$(if ($process -and $process.HasExited) { $process.ExitCode } else { $null }); deadlineSeconds=60 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $workspace 'activation-validation.json') -Encoding utf8NoBOM
+    }
     # Remove only this newly registered development identity at its exact expected payload path.
     $current = Get-AppxPackage -Name 'CloudBay.LocalValidation'
     if ($current -and $current.Publisher -ceq 'CN=CloudBay Local Validation' -and $current.InstallLocation.Equals($payload, [StringComparison]::OrdinalIgnoreCase)) {
@@ -104,4 +121,5 @@ try {
     $after = Get-ClientStateSnapshot
     if ($before -cne $after) { throw 'Account settings, credential bytes, or Windows folder mappings changed during Store validation. Investigate before accepting the test.' }
     [ordered]@{ packageName='CloudBay.LocalValidation'; registrationRemoved=$true; certificateTrustChanged=$false; developerModeChanged=$false; clientStatePreserved=$true } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $workspace 'cleanup-validation.json') -Encoding utf8NoBOM
+    if ($process) { $process.Dispose() }
 }

@@ -7,6 +7,7 @@ param(
     [string]$PublisherDisplayName = $env:CLOUDBAY_STORE_PUBLISHER_DISPLAY_NAME,
     [string]$SourceRevision,
     [string]$MakeAppxPath,
+    [string]$MakePriPath,
     [switch]$LocalValidationIdentity
 )
 $ErrorActionPreference = 'Stop'
@@ -30,6 +31,11 @@ $output = [IO.Path]::GetFullPath($OutputDirectory)
 if (!(Test-Path -LiteralPath (Join-Path $app 'CloudBay.exe') -PathType Leaf)) { throw 'Published CloudBay.exe is missing.' }
 $applicationVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $app 'CloudBay.exe')).ProductVersion.Split('+')[0]
 if ($applicationVersion -cne $Version) { throw 'The published application version does not match the Store package version.' }
+$corePath = Join-Path $app 'CloudBay.Core.dll'
+if (!(Test-Path -LiteralPath $corePath -PathType Leaf)) { throw 'The Store payload is missing CloudBay.Core.dll.' }
+$coreAssembly = [Reflection.Assembly]::Load([IO.File]::ReadAllBytes($corePath))
+$buildInfo = $coreAssembly.GetType('CloudBay.Core.BuildInfo', $true)
+if ($coreAssembly.GetName().Version.ToString(3) -cne $Version -or $buildInfo.GetField('Flavor').GetRawConstantValue() -cne 'Release') { throw 'Microsoft Store packaging requires the compiled matching Release build, regardless of distribution metadata.' }
 $distributionPath = Join-Path $app 'distribution.json'
 if (Test-Path -LiteralPath $distributionPath) {
     $existingDistribution = Get-Content -LiteralPath $distributionPath -Raw | ConvertFrom-Json
@@ -49,6 +55,9 @@ if (!$MakeAppxPath) {
     $MakeAppxPath = Get-ChildItem -LiteralPath $sdkRoot -Directory | Where-Object { $_.Name -match '^10\.0\.\d+\.0$' } | Sort-Object { [Version]$_.Name } -Descending | ForEach-Object { Join-Path $_.FullName 'x64/makeappx.exe' } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 }
 if (!$MakeAppxPath -or !(Test-Path -LiteralPath $MakeAppxPath -PathType Leaf)) { throw 'Install a Windows 10/11 SDK containing x64 MakeAppx.exe.' }
+if (!$MakePriPath) { $MakePriPath = Join-Path ([IO.Path]::GetDirectoryName($MakeAppxPath)) 'makepri.exe' }
+if (!(Test-Path -LiteralPath $MakePriPath -PathType Leaf)) { throw 'Install a Windows 10/11 SDK containing x64 MakePri.exe alongside MakeAppx.exe.' }
+if (!(Test-Path -LiteralPath (Join-Path $app 'CloudBay.pri') -PathType Leaf)) { throw 'The published application is missing its compiled CloudBay.pri resource index.' }
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 $staging = Join-Path $output ('.store-' + [Guid]::NewGuid().ToString('N'))
 $payload = Join-Path $staging 'Payload'
@@ -102,6 +111,29 @@ try {
  <Capabilities><Capability Name="internetClient" /><rescap:Capability Name="runFullTrust" /><rescap:Capability Name="unvirtualizedResources" /></Capabilities>
 </Package>
 "@ | Set-Content -LiteralPath (Join-Path $payload 'AppxManifest.xml') -Encoding utf8NoBOM
+    # The unpackaged executable uses its module-named PRI. With package identity,
+    # MRT instead resolves resources.pri and the package's primary resource map.
+    # Re-index the compiled app PRI for this exact identity without re-importing
+    # its already-merged WinUI framework resources from every adjacent DLL PRI.
+    $priRoot = Join-Path $staging 'PriInputs'
+    New-Item -ItemType Directory -Path $priRoot | Out-Null
+    Copy-Item -LiteralPath (Join-Path $payload 'CloudBay.pri') -Destination $priRoot
+    Copy-Item -LiteralPath $assetRoot -Destination $priRoot -Recurse
+    $priConfig = Join-Path $staging 'priconfig.xml'
+    $priLog = Join-Path $output 'makepri.log'
+    & $MakePriPath createconfig /cf $priConfig /dq en-US /o *> $priLog
+    if ($LASTEXITCODE -ne 0) { throw "MakePri configuration failed. Diagnostics: $priLog" }
+    [xml]$config = Get-Content -LiteralPath $priConfig -Raw
+    foreach ($packaging in @($config.SelectNodes('//packaging'))) { $null = $packaging.ParentNode.RemoveChild($packaging) }
+    $config.Save($priConfig)
+    & $MakePriPath new /pr $priRoot /cf $priConfig /mn (Join-Path $payload 'AppxManifest.xml') /of (Join-Path $payload 'resources.pri') /o *>> $priLog
+    if ($LASTEXITCODE -ne 0) { throw "Store resource index generation failed. Diagnostics: $priLog" }
+    $priInspection = Join-Path $staging 'resource-index.xml'
+    & $MakePriPath dump /if (Join-Path $payload 'resources.pri') /of $priInspection /o *>> $priLog
+    if ($LASTEXITCODE -ne 0) { throw "Store resource index inspection failed. Diagnostics: $priLog" }
+    [xml]$resourceIndex = Get-Content -LiteralPath $priInspection -Raw
+    $primaryMaps = @($resourceIndex.SelectNodes('/PriInfo/ResourceMap[@primary="true"]'))
+    if ($primaryMaps.Count -ne 1 -or $primaryMaps[0].GetAttribute('name') -cne $PackageIdentityName -or !$primaryMaps[0].SelectSingleNode('ResourceMapSubtree[@name="Files"]/NamedResource[@name="App.xbf"]')) { throw 'The packaged primary resource map does not match its manifest identity or lacks compiled application XAML.' }
     $suffix = if ($LocalValidationIdentity) { 'local-validation' } else { 'store' }
     $baseName = "CloudBay-$Version-win-x64-release-$suffix"
     $msix = Join-Path $output "$baseName.msix"
@@ -117,7 +149,7 @@ try {
     Copy-Item -LiteralPath $msix -Destination $uploadStaging
     $upload = Join-Path $output "$baseName.msixupload"
     [IO.Compression.ZipFile]::CreateFromDirectory($uploadStaging, $upload, [IO.Compression.CompressionLevel]::Optimal, $false)
-    [ordered]@{ version = $Version; sourceRevision = $SourceRevision; localValidationIdentity = [bool]$LocalValidationIdentity; packageIdentityName = $PackageIdentityName; publisher = $Publisher; signed = $false; restrictedCapabilities = @('runFullTrust', 'unvirtualizedResources'); msix = [IO.Path]::GetFileName($msix); msixupload = [IO.Path]::GetFileName($upload) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output "$baseName-package-info.json") -Encoding utf8NoBOM
+    [ordered]@{ version = $Version; sourceRevision = $SourceRevision; localValidationIdentity = [bool]$LocalValidationIdentity; packageIdentityName = $PackageIdentityName; resourceIndexName = $primaryMaps[0].GetAttribute('name'); publisher = $Publisher; signed = $false; restrictedCapabilities = @('runFullTrust', 'unvirtualizedResources'); msix = [IO.Path]::GetFileName($msix); msixupload = [IO.Path]::GetFileName($upload) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output "$baseName-package-info.json") -Encoding utf8NoBOM
     Write-Output $msix
     Write-Output $upload
 } finally {
