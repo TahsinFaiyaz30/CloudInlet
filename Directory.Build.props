@@ -1,7 +1,10 @@
 <Project>
   <PropertyGroup>
     <CloudBayVersionFile>$(MSBuildThisFileDirectory)version.json</CloudBayVersionFile>
-    <CloudBayBaseVersion>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(CloudBayVersionFile)')), '[0-9]+\.[0-9]+\.[0-9]+').Value)</CloudBayBaseVersion>
+    <_CloudBayVersionDocument Condition="Exists('$(CloudBayVersionFile)')">$([System.IO.File]::ReadAllText('$(CloudBayVersionFile)'))</_CloudBayVersionDocument>
+    <_CloudBayVersionPattern>\A\s*\{\s*&quot;version&quot;\s*:\s*&quot;((?:0|[1-9][0-9]{0,4})\.(?:0|[1-9][0-9]{0,4})\.(?:0|[1-9][0-9]{0,4}))&quot;\s*\}\s*\z</_CloudBayVersionPattern>
+    <_CloudBayVersionDocumentValid>$([System.Text.RegularExpressions.Regex]::IsMatch('$(_CloudBayVersionDocument)', '$(_CloudBayVersionPattern)'))</_CloudBayVersionDocumentValid>
+    <CloudBayBaseVersion Condition="'$(_CloudBayVersionDocumentValid)' == 'True'">$([System.Text.RegularExpressions.Regex]::Match('$(_CloudBayVersionDocument)', '$(_CloudBayVersionPattern)').Groups[1].Value)</CloudBayBaseVersion>
     <Version Condition="'$(Version)' == ''">$(CloudBayBaseVersion)</Version>
     <CloudBayBuildFlavor Condition="'$(CloudBayBuildFlavor)' == ''">$(Configuration)</CloudBayBuildFlavor>
     <DefineConstants Condition="'$(CloudBayBuildFlavor)' == 'Debug'">$(DefineConstants);CLOUDBAY_DEBUG</DefineConstants>
