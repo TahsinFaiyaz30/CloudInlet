@@ -3,6 +3,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using CloudBay.Application;
 using CloudBay.Core;
 using CloudBay.Core.B2;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -215,7 +216,7 @@ public sealed class B2ResumeTests
     }
 
     [TestMethod]
-    public async Task IntentionalDisconnectCancelsManagedCheckpointWithSeparateToken()
+    public async Task ExplicitPendingUploadCleanupCancelsManagedCheckpointWithSeparateToken()
     {
         using var fixture = new Fixture();
         using var interrupted = new CancellationTokenSource();
@@ -226,6 +227,47 @@ public sealed class B2ResumeTests
         using var store = await fixture.ConnectAsync();
         await store.CancelPendingUploadsAsync();
         Assert.AreEqual(1, fixture.Cancellations);
+        Assert.AreEqual(0, fixture.Journals.Length);
+    }
+
+    [TestMethod]
+    public async Task DisconnectOnlyRetainsNativeMultipartJournalAndReconnectReusesAcknowledgedParts()
+    {
+        using var fixture = new Fixture();
+        using var interrupted = new CancellationTokenSource();
+        fixture.Interrupt = interrupted;
+        fixture.InterruptPart = 2;
+        await fixture.ExpectInterruptedAsync(interrupted.Token);
+        fixture.Interrupt = null;
+        var journal = fixture.Journals.Single();
+        var checkpoint = System.IO.File.ReadAllBytes(journal);
+        var unfinishedFileId = fixture.FileId;
+        var storage = new ClientStorage(Path.Combine(Path.GetDirectoryName(fixture.SourcePath)!, "client-state"));
+        storage.SaveSettings(new()
+        {
+            KeyId = "application-id", AccountId = "account", BucketId = "bucket", BucketName = "fixture",
+            RootPath = Path.Combine(Path.GetDirectoryName(fixture.SourcePath)!, "Root"), StartAtSignIn = false
+        });
+        await using (var controller = new ClientController(storage, _ => Assert.Fail("Disconnect only retains registration."),
+            manageStartup: false))
+        {
+            // Supply the isolated connected provider without creating a Windows Cloud Files root.
+            // The controller's normal connection shutdown owns this store after injection.
+            typeof(ClientController).GetField("_cloud", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .SetValue(controller, await fixture.ConnectAsync());
+            await controller.DisconnectAsync(DisconnectMode.DisconnectOnly);
+            Assert.IsFalse(controller.Settings.IsConfigured);
+            Assert.AreEqual(0, fixture.Cancellations, "Disconnect must not abandon acknowledged native multipart work.");
+            Assert.AreEqual(unfinishedFileId, fixture.FileId);
+            CollectionAssert.AreEqual(checkpoint, System.IO.File.ReadAllBytes(journal), "The durable multipart checkpoint must survive account disconnect.");
+        }
+        fixture.UploadedParts.Clear();
+        var progress = new CapturedProgress();
+        await fixture.CompleteAsync(progress);
+        CollectionAssert.AreEqual(new[] { 3 }, fixture.UploadedParts.ToArray(), "Reconnection must send only the unfinished range.");
+        Assert.IsTrue(progress.Values.Any(value => value.Bytes == 200_000_000 && value.IsBaseline));
+        Assert.AreEqual(1, fixture.Starts, "Reconnection must reuse the existing provider session.");
+        Assert.AreEqual(0, fixture.Cancellations);
         Assert.AreEqual(0, fixture.Journals.Length);
     }
 

@@ -13,6 +13,8 @@ CloudBay is the middleman for OneDrive → Backblaze B2 and B2 → OneDrive. The
 
 **Settings → Account → Disconnect** has three visible choices. **Disconnect only** is the default and keeps local files without hydration. **Download files, then disconnect** materializes cloud files. **Remove local cloud copies, then disconnect** removes only unchanged verified local copies and exact online-only placeholders; personal folders, changed/unsynced files and unknown files stay. All choices retain B2 content and versions. Disconnect intent is durable so a crash cannot turn intentional local cleanup into B2 deletion sync.
 
+Disconnect retains both paused direct-job checkpoints and native multipart sessions. Reconnecting the same account resumes acknowledged parts when the local source is unchanged. Abandoned-source maintenance still removes obsolete native sessions; explicit session abandonment is separate from account disconnect.
+
 ## Shared transfer primitives and memory
 
 `ITransferEndpoint` and replayable `ITransferSourceFile` power the durable local/B2/OneDrive job pipeline. Windows native sync retains its placeholder registration, staging and installation workflows while using `NativeTransferAdapters` for prepared local upload, cloud download and verification. The original locked local FileStream is preserved so B2 reuses its prepared multipart hashes and upload resume journal.

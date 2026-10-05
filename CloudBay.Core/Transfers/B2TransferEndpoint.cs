@@ -137,8 +137,8 @@ public sealed class B2TransferEndpoint : ITransferEndpoint
         {
             cancellationToken.ThrowIfCancellationRequested();
             Task validation;
-            // A B2 version ID is immutable. Deduplicate source metadata within this
-            // preparation/transfer phase; restart and verification construct fresh sources.
+            // A B2 version ID is immutable. Reuse its metadata validation through
+            // preparation, transfer and verification; restart constructs a fresh source.
             // Range response identity is always checked and Move performs a fresh lookup.
             lock (_gate) validation = _validation ??= store.ValidateTransferSourceAsync(bucketId, file, cancellationToken);
             try { await validation.WaitAsync(cancellationToken).ConfigureAwait(false); }

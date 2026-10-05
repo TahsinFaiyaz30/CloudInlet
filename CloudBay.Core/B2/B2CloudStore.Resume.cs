@@ -76,7 +76,7 @@ public sealed partial class B2CloudStore
     }
 
     /// <summary>
-    /// Cancel this account's managed unfinished uploads before intentionally removing its credentials.
+    /// Explicitly abandon this account's managed unfinished uploads.
     /// The caller must stop and await sync workers first. A failed cancellation preserves its checkpoint.
     /// </summary>
     public async Task CancelPendingUploadsAsync(CancellationToken cancellationToken = default)

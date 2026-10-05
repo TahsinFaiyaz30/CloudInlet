@@ -92,7 +92,9 @@ public sealed partial class ClientController
                     if (root.Placeholders.RegistrationId is { } customRegistration) registrations.Add(customRegistration);
                 }
             }
-            if (_cloud is not null) await _cloud.CancelPendingUploadsAsync(cancellationToken);
+            // Quiesced native uploads keep their acknowledged B2 parts and local journal.
+            // Reconnecting this account can continue the unchanged unfinished file;
+            // abandoned-source maintenance remains responsible for eventual cleanup.
             await CloseConnectionAsync();
             foreach (var registration in registrations) _unregisterSyncRoot(registration);
             await _cloudTransferProviderGate.WaitAsync(cancellationToken);
