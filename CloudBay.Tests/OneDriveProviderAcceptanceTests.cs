@@ -9,6 +9,7 @@ using CloudBay.Core;
 using CloudBay.Core.B2;
 using CloudBay.Core.OneDrive;
 using CloudBay.Core.Transfers;
+using Microsoft.Data.Sqlite;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace CloudBay.Tests;
@@ -167,6 +168,83 @@ public sealed class OneDriveProviderAcceptanceTests
         var destination = new OneDriveTransferEndpoint(client, destinationLocation);
         await Assert.ThrowsExceptionAsync<TransferConflictException>(() => destination.UploadAsync(new("conflict", tiny.RelativePath, TransferConflictPolicy.Fail), b2Endpoint.OpenSource(tiny), null, Save, cancellationToken: ct));
         await Assert.ThrowsExceptionAsync<TransferSkippedException>(() => destination.UploadAsync(new("skip", tiny.RelativePath, TransferConflictPolicy.Skip), b2Endpoint.OpenSource(tiny), null, Save, cancellationToken: ct));
+        var originalDestination = (await DiscoverAllAsync(destination, ct)).Single(entry => entry.RelativePath == tiny.RelativePath);
+        var tinySource = b2Endpoint.OpenSource(tiny);
+        var replaced = await destination.UploadAsync(new(Guid.NewGuid().ToString("N"), tiny.RelativePath, TransferConflictPolicy.Replace), tinySource, null, Save, cancellationToken: ct);
+        await destination.VerifyAsync(replaced, tinySource, ct);
+        Assert.AreEqual(originalDestination.Id, replaced.Id, "Replace must retain the existing OneDrive item identity.");
+        Assert.AreNotEqual(originalDestination.Version, replaced.Version, "The provider must acknowledge a new destination version after Replace.");
+        var renameRequest = new TransferUploadRequest(Guid.NewGuid().ToString("N"), tiny.RelativePath, TransferConflictPolicy.Rename);
+        TransferCheckpoint? renamedCheckpoint = null;
+        var renamed = await destination.UploadAsync(renameRequest, tinySource, null,
+            async (value, token) => { renamedCheckpoint = value; await Save(value, token); }, cancellationToken: ct);
+        await destination.VerifyAsync(renamed, tinySource, ct);
+        Assert.AreNotEqual(tiny.RelativePath, renamed.RelativePath, "Rename must choose a distinct target when the original path exists.");
+        var retainedOriginal = await client.GetItemAsync(driveId!, replaced.Id, ct);
+        Assert.AreEqual(replaced.Version, retainedOriginal.ETag, "Rename must retain the original item's exact unchanged version.");
+        var reconciledRename = await new OneDriveTransferEndpoint(client, destinationLocation).ReconcileAsync(renameRequest, tinySource, renamedCheckpoint, ct);
+        Assert.AreEqual(renamed.Id, reconciledRename?.Id, "A restored Rename receipt must resolve to the same destination identity.");
+        var absentRenameName = "rename-without-conflict.bin";
+        var absentRename = await destination.UploadAsync(new(Guid.NewGuid().ToString("N"), absentRenameName, TransferConflictPolicy.Rename), tinySource, null, Save, cancellationToken: ct);
+        await destination.VerifyAsync(absentRename, tinySource, ct);
+        Assert.AreEqual(absentRenameName, absentRename.RelativePath, "Rename must preserve the requested path when no conflict exists.");
+        var conflictFiles = await DiscoverAllAsync(destination, ct);
+        Assert.AreEqual(files.Length + 2, conflictFiles.Count, "Replace and restored Rename must not create duplicate destination objects.");
+        Assert.AreEqual(1, conflictFiles.Count(entry => entry.RelativePath == tiny.RelativePath));
+        Assert.AreEqual(1, conflictFiles.Count(entry => entry.Id == renamed.Id));
+        Assert.AreEqual(1, conflictFiles.Count(entry => entry.Id == absentRename.Id));
+        var moveFolder = await client.EnsureFolderAsync(driveId!, rootId, "CloudBay acceptance move " + run, ct);
+        var moveGraphLocation = sourceLocation with { FolderId = moveFolder.Id, DisplayName = "OneDrive Move proof" };
+        var moveB2Location = b2Location with { Path = b2Location.Path + "move-proof/", DisplayName = "B2 Move proof" };
+        var moveBytes = new byte[4096];
+        for (var offset = 0; offset < moveBytes.Length; offset += marker.Length)
+            marker.AsSpan(0, Math.Min(marker.Length, moveBytes.Length - offset)).CopyTo(moveBytes.AsSpan(offset));
+        var moveHash = Convert.ToHexString(SHA1.HashData(moveBytes)).ToLowerInvariant();
+        var moveSeed = await client.PutSmallAsync(driveId!, moveFolder.Id, "move-proof.bin", moveBytes, "fail", null, ct);
+        var outwardMove = Plan(moveGraphLocation, moveB2Location, TransferOperation.Move);
+        await RunMoveAsync(outwardMove);
+        var deletedGraph = await Assert.ThrowsExceptionAsync<OneDriveApiException>(() => client.GetItemAsync(driveId!, moveSeed.Id, ct));
+        Assert.AreEqual(404, deletedGraph.StatusCode, "Move must remove only the exact saved OneDrive source identity.");
+        Assert.AreEqual(0, (await DiscoverAllAsync(Resolve(moveGraphLocation), ct)).Count);
+        var b2Moved = await VerifyMovedDestinationAsync(outwardMove);
+        var reverseMove = Plan(moveB2Location, moveGraphLocation, TransferOperation.Move);
+        await RunMoveAsync(reverseMove);
+        Assert.IsTrue(await Resolve(moveB2Location).IsSourceDeletedAsync(b2Moved, ct), "Move must remove the exact verified B2 source version.");
+        Assert.AreEqual(0, (await DiscoverAllAsync(Resolve(moveB2Location), ct)).Count);
+        await VerifyMovedDestinationAsync(reverseMove);
+        async Task RunMoveAsync(TransferJobPlan movePlan)
+        {
+            using var journal = new TransferJobJournal(journalPath, new DpapiProtector());
+            await using var engine = new TransferJobEngine(journal, Resolve, 4);
+            await engine.CreateAsync(movePlan, ct);
+            await engine.RunAsync(movePlan.Id, ct);
+            var moved = engine.Snapshots().Single(snapshot => snapshot.Plan.Id == movePlan.Id);
+            Assert.AreEqual(TransferJobState.Completed, moved.State, moved.Error);
+            Assert.AreEqual(1L, moved.CompletedFiles);
+            Assert.AreEqual(0L, moved.RemainingBytes);
+        }
+        async Task<TransferEntry> VerifyMovedDestinationAsync(TransferJobPlan movePlan)
+        {
+            TransferReceipt receipt;
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = journalPath, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString()))
+            {
+                connection.Open(); using var command = connection.CreateCommand();
+                command.CommandText = "SELECT receipt,verified,delete_started,state FROM transfer_items WHERE job_id=$job";
+                command.Parameters.AddWithValue("$job", movePlan.Id);
+                using var reader = command.ExecuteReader(); Assert.IsTrue(reader.Read());
+                receipt = JsonSerializer.Deserialize<TransferReceipt>(reader.GetString(0))!;
+                Assert.IsTrue(reader.GetBoolean(1), "The durable Move receipt must be verified before source deletion.");
+                Assert.IsTrue(reader.GetBoolean(2), "The source-deletion intent must be durable.");
+                Assert.AreEqual((int)TransferItemState.Completed, reader.GetInt32(3));
+                Assert.IsFalse(reader.Read(), "The one-file Move must not duplicate queue work.");
+            }
+            var endpoint = Resolve(movePlan.Destination);
+            var copied = (await DiscoverAllAsync(endpoint, ct)).Single();
+            Assert.AreEqual(receipt.Id, copied.Id); Assert.AreEqual(receipt.Version, copied.Version);
+            await using var copiedStream = await endpoint.OpenSource(copied).OpenReadAsync(0, copied.Size, ct);
+            Assert.AreEqual(moveHash, Convert.ToHexString(await SHA1.HashDataAsync(copiedStream, ct)).ToLowerInvariant(), "The moved destination must contain independently verified bytes.");
+            return copied;
+        }
         var originals = await DiscoverAllAsync(new OneDriveTransferEndpoint(client, sourceLocation), ct);
         var changed = originals.Single(entry => entry.RelativePath == "tiny-000.bin");
         await client.PutSmallAsync(driveId!, sourceFolder.Id, changed.RelativePath, "source changed during verification"u8.ToArray(), "replace", changed.Version, ct);
@@ -184,12 +262,16 @@ public sealed class OneDriveProviderAcceptanceTests
             b2ToOneDriveVerifiedBytesPerSecond = total / reverse.Elapsed.TotalSeconds, graph = metrics,
             recovery = "5 MiB acknowledged checkpoint reloaded; remaining bytes resumed; final response dropped and reconciled; revoked session restarted only unfinished file",
             payloadDiskCheck = "Unique payload marker absent from all job/checkpoint files; adapter transport uses RAM streams only",
-            sourceChange = "Changed exact source identity retained", providerLimits = "Graph fragments sequential; provider RTT, throttling and independent checksum readback remain overhead" };
+            sourceChange = "Changed exact source identity retained",
+            conflicts = "Fail and Skip rejected; Replace verified with a new version; Rename retained the original and reconciled the exact new identity; absent Rename kept its requested name",
+            conflictDestinationFiles = conflictFiles.Count,
+            moves = "OneDrive to B2 and B2 to OneDrive durable Move jobs completed; verified receipts persisted before exact source deletion; independent destination SHA-1 and no duplicate object proved",
+            providerLimits = "Graph fragments sequential; provider RTT, throttling and independent checksum readback remain overhead" };
         await File.WriteAllTextAsync(Path.Combine(artifacts, "report.json"), JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }), ct);
         TestContext.WriteLine(JsonSerializer.Serialize(report));
         TestContext.WriteLine("Metadata report: " + Path.Combine(artifacts, "report.json"));
         // Delete only exact identities in this run's unique namespaces after every verification succeeds.
-        foreach (var location in new[] { sourceLocation, destinationLocation, recoveryLocation })
+        foreach (var location in new[] { sourceLocation, destinationLocation, recoveryLocation, moveGraphLocation })
         {
             var endpoint = new OneDriveTransferEndpoint(client, location);
             foreach (var entry in await DiscoverAllAsync(endpoint, ct)) await endpoint.DeleteSourceAsync(entry, ct);
@@ -198,8 +280,8 @@ public sealed class OneDriveProviderAcceptanceTests
         // Empty OneDrive acceptance folders are retained as reviewable run markers; no recursive delete is performed.
     }
 
-    private static TransferJobPlan Plan(TransferLocation source, TransferLocation destination) =>
-        new(Guid.NewGuid().ToString("N"), source, destination, TransferOperation.Copy, TransferConflictPolicy.Fail, [], DateTimeOffset.UtcNow);
+    private static TransferJobPlan Plan(TransferLocation source, TransferLocation destination, TransferOperation operation = TransferOperation.Copy) =>
+        new(Guid.NewGuid().ToString("N"), source, destination, operation, TransferConflictPolicy.Fail, [], DateTimeOffset.UtcNow);
     private static async Task<List<TransferEntry>> DiscoverAllAsync(ITransferEndpoint endpoint, CancellationToken ct)
     {
         var entries = new List<TransferEntry>(); string? cursor = null;
@@ -213,7 +295,7 @@ public sealed class OneDriveProviderAcceptanceTests
     }
     private sealed class AcceptanceHandler : DelegatingHandler
     {
-        private readonly ConcurrentBag<(long Start, long End)> _tiny = [];
+        private readonly ConcurrentBag<(long Start, long End, long Size)> _smallPayloads = [];
         private int _drop;
         public long RequestCount;
         public bool FinalResponseDropped { get; private set; }
@@ -225,25 +307,33 @@ public sealed class OneDriveProviderAcceptanceTests
             Interlocked.Increment(ref RequestCount);
             var start = Stopwatch.GetTimestamp();
             var response = await base.SendAsync(request, ct);
-            if (request.Method == HttpMethod.Put && request.RequestUri!.Host == "graph.microsoft.com" && request.RequestUri.AbsolutePath.EndsWith("/content"))
-                _tiny.Add((start, Stopwatch.GetTimestamp()));
+            if (request.Method == HttpMethod.Put && request.RequestUri!.Host == "graph.microsoft.com" && request.RequestUri.AbsolutePath.EndsWith("/content") &&
+                request.Content?.Headers.ContentLength is > 0 and <= OneDriveTransferEndpoint.SmallFileBytes)
+                _smallPayloads.Add((start, Stopwatch.GetTimestamp(), request.Content.Headers.ContentLength.Value));
             var range = request.Content?.Headers.ContentRange;
             if (response.IsSuccessStatusCode && request.Method == HttpMethod.Put && range is not null && range.To + 1 == range.Length && Interlocked.CompareExchange(ref _drop, 0, 1) == 1)
             { FinalResponseDropped = true; response.Dispose(); throw new HttpRequestException("Acceptance injection: final response lost after provider acknowledgment."); }
             return response;
         }
-        public void ResetMetrics() { while (_tiny.TryTake(out _)) { } RequestCount = 0; }
+        public void ResetMetrics() { while (_smallPayloads.TryTake(out _)) { } RequestCount = 0; }
         public object Metrics()
         {
-            var intervals = _tiny.OrderBy(value => value.Start).ToArray();
+            var intervals = _smallPayloads.OrderBy(value => value.Start).ToArray();
             var gaps = new List<double>(); long end = 0;
             foreach (var interval in intervals)
             { if (end > 0) gaps.Add(Math.Max(0, interval.Start - end) * 1000d / Stopwatch.Frequency); end = Math.Max(end, interval.End); }
             var elapsed = intervals.Length == 0 ? 0 : (intervals.Max(value => value.End) - intervals[0].Start) / (double)Stopwatch.Frequency;
+            var tiny = intervals.Where(value => value.Size == 4096).ToArray();
+            var tinyElapsed = tiny.Length == 0 ? 0 : (tiny.Max(value => value.End) - tiny[0].Start) / (double)Stopwatch.Frequency;
+            var orderedGaps = gaps.Order().ToArray();
             return new { httpRequests = RequestCount, smallPayloadRequests = intervals.Length,
                 smallFilesPerSecond = elapsed == 0 ? 0 : intervals.Length / elapsed,
+                tinyPayloadRequests = tiny.Length, tinyPayloadBytes = tiny.Sum(value => value.Size),
+                tinyPayloadWindowSeconds = tinyElapsed, tinyFilesPerSecondWithinMixedWorkload = tinyElapsed == 0 ? 0 : tiny.Length / tinyElapsed,
                 aggregatePayloadIdleGapMillisecondsMax = gaps.Count == 0 ? 0 : gaps.Max(),
-                aggregatePayloadIdleGapMillisecondsMean = gaps.Count == 0 ? 0 : gaps.Average() };
+                aggregatePayloadIdleGapMillisecondsMean = gaps.Count == 0 ? 0 : gaps.Average(),
+                aggregatePayloadIdleGapMillisecondsP95 = orderedGaps.Length == 0 ? 0 : orderedGaps[(int)Math.Ceiling(orderedGaps.Length * .95) - 1],
+                measurement = "Graph small PUT intervals within the mixed workload; zero-byte reservations excluded; gaps may overlap large-file or verification work" };
         }
     }
 }
