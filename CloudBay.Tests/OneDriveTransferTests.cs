@@ -482,8 +482,11 @@ public sealed class OneDriveTransferTests
         Assert.AreEqual(0, provider.Deletes);
     }
 
-    [TestMethod]
-    public async Task ExpiredSessionRestartsOnlyUnfinishedFile()
+    [DataTestMethod]
+    [DataRow(false, false)]
+    [DataRow(true, false)]
+    [DataRow(true, true)]
+    public async Task ExpiredSessionRestartsOnlyUnfinishedFile(bool retainedExpiredRecord, bool providerRemovedReservation)
     {
         using var provider = new UploadProvider();
         var bytes = new byte[OneDriveTransferEndpoint.FragmentBytes + 3];
@@ -497,12 +500,86 @@ public sealed class OneDriveTransferTests
             if (checkpoint.AcknowledgedBytes > 0) throw new OperationCanceledException();
             return Task.CompletedTask;
         }));
-        provider.ExpireSession();
-        var receipt = await new OneDriveTransferEndpoint(Client(provider.Http), Location).UploadAsync(request, new MemorySource(bytes), saved,
+        provider.ExpireSession(retainedExpiredRecord, providerRemovedReservation);
+        var resumedSource = new MemorySource(bytes);
+        var receipt = await new OneDriveTransferEndpoint(Client(provider.Http), Location).UploadAsync(request, resumedSource, saved,
             (checkpoint, ct) => Task.CompletedTask);
+        await endpoint.VerifyAsync(receipt, resumedSource);
         Assert.AreEqual(2, provider.SessionsCreated);
         Assert.AreEqual(0L, provider.UploadOffsets[1]);
+        Assert.AreEqual(0L, resumedSource.Reads.Single().Offset, "An HTTP200 expired session record must never cause a source read at its obsolete acknowledged offset.");
+        Assert.AreEqual(providerRemovedReservation ? 2 : 1, provider.ReservationsCreated);
         Assert.AreEqual(bytes.LongLength, receipt.Size);
+    }
+
+    [DataTestMethod]
+    [DataRow(HttpStatusCode.NotFound)]
+    [DataRow(HttpStatusCode.Gone)]
+    public async Task SessionExpiryDuringFinalFragmentRestartsOnlyThatFileWithItsExactReservation(HttpStatusCode status)
+    {
+        using var provider = new UploadProvider { FragmentExpiryStatus = status };
+        var source = new MemorySource(new byte[OneDriveTransferEndpoint.FragmentBytes + 3]);
+        TransferCheckpoint? saved = null;
+        var endpoint = new OneDriveTransferEndpoint(Client(provider.Http), Location);
+        var receipt = await endpoint.UploadAsync(new("operation", "file.bin", TransferConflictPolicy.Fail), source, null,
+            (checkpoint, ct) => { saved = checkpoint; return Task.CompletedTask; });
+        await endpoint.VerifyAsync(receipt, source);
+        Assert.AreEqual(1, provider.ReservationsCreated);
+        Assert.AreEqual(2, provider.SessionsCreated);
+        CollectionAssert.AreEqual(new[] { 0L, (long)OneDriveTransferEndpoint.FragmentBytes, 0L, (long)OneDriveTransferEndpoint.FragmentBytes }, provider.UploadOffsets.ToArray());
+        Assert.AreEqual(2, source.Reads.Count);
+        Assert.IsTrue(source.Reads.All(read => read.Offset == 0));
+        Assert.AreEqual(source.Entry.Size, saved!.AcknowledgedBytes);
+        Assert.AreEqual("destination", saved.Data!["beforeId"]);
+        Assert.AreEqual(0, provider.Deletes);
+    }
+
+    [TestMethod]
+    public async Task MissingSessionAfterFinalCommitReconcilesContentWithoutRestartOrDuplicate()
+    {
+        using var provider = new UploadProvider { MissingFinalResponseStatus = HttpStatusCode.NotFound };
+        var source = new MemorySource(new byte[OneDriveTransferEndpoint.FragmentBytes + 3]);
+        var endpoint = new OneDriveTransferEndpoint(Client(provider.Http), Location);
+        var receipt = await endpoint.UploadAsync(new("operation", "file.bin", TransferConflictPolicy.Fail), source, null,
+            (checkpoint, ct) => Task.CompletedTask);
+        await endpoint.VerifyAsync(receipt, source);
+        Assert.AreEqual(1, provider.ReservationsCreated);
+        Assert.AreEqual(1, provider.SessionsCreated);
+        Assert.AreEqual(2, provider.UploadOffsets.Count);
+        Assert.AreEqual(source.Entry.Size, receipt.Size);
+        Assert.AreEqual(1, source.Reads.Count);
+    }
+
+    [TestMethod]
+    public async Task ChangedReservationAfterSessionExpiryStopsBeforeAnotherSessionOrPayload()
+    {
+        using var provider = new UploadProvider { FragmentExpiryStatus = HttpStatusCode.Gone, ChangeReservationOnExpiry = true };
+        var source = new MemorySource(new byte[OneDriveTransferEndpoint.FragmentBytes + 3]);
+        await Assert.ThrowsExceptionAsync<InvalidDataException>(() => new OneDriveTransferEndpoint(Client(provider.Http), Location)
+            .UploadAsync(new("operation", "file.bin", TransferConflictPolicy.Fail), source, null, (checkpoint, ct) => Task.CompletedTask));
+        Assert.AreEqual(1, provider.ReservationsCreated);
+        Assert.AreEqual(1, provider.SessionsCreated);
+        Assert.AreEqual(2, provider.UploadOffsets.Count);
+        Assert.AreEqual(0, provider.Deletes);
+    }
+
+    [TestMethod]
+    public async Task RepeatedFragmentExpiryStopsBoundedlyWithRecoverableOwnedIntent()
+    {
+        using var provider = new UploadProvider { FragmentExpiryStatus = HttpStatusCode.NotFound, RepeatFragmentExpiry = true };
+        var source = new MemorySource(new byte[OneDriveTransferEndpoint.FragmentBytes + 3]);
+        TransferCheckpoint? saved = null;
+        var error = await Assert.ThrowsExceptionAsync<IOException>(() => new OneDriveTransferEndpoint(Client(provider.Http), Location)
+            .UploadAsync(new("operation", "file.bin", TransferConflictPolicy.Fail), source, null,
+                (checkpoint, ct) => { saved = checkpoint; return Task.CompletedTask; }));
+        StringAssert.Contains(error.Message, "repeatedly expired");
+        Assert.AreEqual(3, provider.SessionsCreated);
+        Assert.AreEqual(1, provider.ReservationsCreated);
+        Assert.AreEqual("", saved!.SessionId);
+        Assert.AreEqual(0L, saved.AcknowledgedBytes);
+        Assert.AreEqual("owned", saved.Data!["reservationState"]);
+        Assert.AreEqual("destination", saved.Data["beforeId"]);
+        Assert.AreEqual(0, provider.Deletes);
     }
 
     [TestMethod]
@@ -793,6 +870,10 @@ public sealed class OneDriveTransferTests
         public bool LoseFinalResponse { get; init; }
         public bool LoseReservationResponse { get; init; }
         public bool OmitMetadataHash { get; init; }
+        public HttpStatusCode? FragmentExpiryStatus { get; init; }
+        public HttpStatusCode? MissingFinalResponseStatus { get; init; }
+        public bool RepeatFragmentExpiry { get; init; }
+        public bool ChangeReservationOnExpiry { get; init; }
         public string? OverrideHash { get; set; }
         public string? OverrideETag { get; set; }
         public string? PathLookupId { get; set; }
@@ -804,9 +885,19 @@ public sealed class OneDriveTransferTests
         private bool _session;
         private bool _completed;
         private bool _reserved;
+        private bool _fragmentExpiryTriggered;
+        private bool _retainedExpiredRecord;
+        private long _expiredRecordOffset;
         private string _sessionUrl = "";
         public UploadProvider() { Http = new(new DelegateHandler(SendAsync)); }
-        public void ExpireSession() { _session = false; _bytes.SetLength(0); }
+        public void ExpireSession(bool retainExpiredRecord = false, bool removeReservation = false)
+        {
+            _expiredRecordOffset = _bytes.Length;
+            _retainedExpiredRecord = retainExpiredRecord;
+            _session = false;
+            _bytes.SetLength(0);
+            if (removeReservation) _reserved = false;
+        }
         public void ForgetCompleted() => _completed = false;
         private async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
@@ -825,17 +916,30 @@ public sealed class OneDriveTransferTests
             {
                 Assert.IsNull(request.Headers.Authorization);
                 if (request.Method == HttpMethod.Get)
-                    return _session ? Session() : Json(new { error = new { code = "itemNotFound" } }, HttpStatusCode.NotFound);
+                    return _session ? Session() : _retainedExpiredRecord ? Json(new
+                    {
+                        expirationDateTime = DateTimeOffset.UtcNow.AddHours(-1).ToString("O"),
+                        nextExpectedRanges = new[] { _expiredRecordOffset + "-" }
+                    }) : Json(new { error = new { code = "itemNotFound" } }, HttpStatusCode.NotFound);
                 var range = request.Content!.Headers.ContentRange!;
                 UploadOffsets.Add(range.From!.Value);
                 Assert.AreEqual(_bytes.Length, range.From);
                 var payload = await request.Content.ReadAsByteArrayAsync(ct);
+                if (range.From > 0 && FragmentExpiryStatus is { } expiredStatus && (!_fragmentExpiryTriggered || RepeatFragmentExpiry))
+                {
+                    _fragmentExpiryTriggered = true;
+                    ExpireSession();
+                    if (ChangeReservationOnExpiry) { OverrideETag = "changed-reservation"; PathLookupId = "unrelated-item"; }
+                    return Json(new { error = new { code = "itemNotFound" } }, expiredStatus);
+                }
                 _bytes.Write(payload);
                 if (_bytes.Length == range.Length)
                 {
                     _completed = true;
                     _session = false;
                     if (LoseFinalResponse) throw new HttpRequestException("Connection was lost after commit.");
+                    if (MissingFinalResponseStatus is { } missingStatus)
+                        return Json(new { error = new { code = "itemNotFound" } }, missingStatus);
                     return Destination();
                 }
                 return Session(HttpStatusCode.Accepted);
@@ -871,6 +975,7 @@ public sealed class OneDriveTransferTests
                 }
                 SessionsCreated++;
                 _session = true;
+                _retainedExpiredRecord = false;
                 _bytes.SetLength(0);
                 _sessionUrl = "https://upload.example.test/session" + SessionsCreated;
                 return Session();

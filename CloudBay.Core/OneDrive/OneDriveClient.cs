@@ -229,7 +229,10 @@ public sealed class OneDriveClient
             { await Task.Delay(RetryDelay(response, attempt), cancellationToken); continue; }
             if (!response.IsSuccessStatusCode) await ThrowApiAsync(response, cancellationToken);
             using var json = await ParseAsync(response, cancellationToken);
-            return ParseSession(json.RootElement, uploadUrl);
+            var session = ParseSession(json.RootElement, uploadUrl);
+            // Personal OneDrive can retain a queryable record after expiry.
+            // HTTP 200 alone does not make its acknowledged ranges resumable.
+            return session.ExpiresUtc <= DateTimeOffset.UtcNow ? null : session;
         }
     }
 

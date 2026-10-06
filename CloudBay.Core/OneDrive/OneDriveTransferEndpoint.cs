@@ -156,6 +156,17 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
             }
         }
         if (before?.IsFolder == true) throw new TransferConflictException("A OneDrive destination folder has the selected file name.");
+        OneDriveUploadSession? session = null;
+        if (checkpoint is { SessionId.Length: > 0 }) session = await _client.GetUploadSessionAsync(checkpoint.SessionId, cancellationToken);
+        if (before is null && checkpoint is { SessionId.Length: > 0 } && session is null && Data(checkpoint, "reservationState") == "owned")
+        {
+            // Provider cleanup can remove our zero-byte item when its session
+            // expires. Only absence plus unusable session evidence releases the
+            // prior ownership; a new reservation still uses atomic fail semantics.
+            var expiredData = new Dictionary<string, string>(checkpoint.Data!);
+            expiredData.Remove("beforeId"); expiredData.Remove("beforeVersion"); expiredData.Remove("reservationState"); expiredData.Remove("expires");
+            checkpoint = new("onedrive", "", 0, expiredData);
+        }
         if (checkpoint is not null && before is not null && (before.ETag != Data(checkpoint, "beforeVersion") ||
             Data(checkpoint, "beforeId") is { } reviewedId && before.Id != reviewedId))
             throw new TransferConflictException("The destination changed after this upload began. Review the conflict before retrying.");
@@ -172,8 +183,6 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
         data["sourceSize"] = entry.Size.ToString(System.Globalization.CultureInfo.InvariantCulture);
         if (before is not null && checkpoint is null)
         { data["beforeVersion"] = before.ETag; data["beforeId"] = before.Id; }
-        OneDriveUploadSession? session = null;
-        if (checkpoint is { SessionId.Length: > 0 }) session = await _client.GetUploadSessionAsync(checkpoint.SessionId, cancellationToken);
         if (entry.Size <= SmallFileBytes && checkpoint is not { SessionId.Length: > 0 })
         {
             // Tiny files use one payload request instead of creating an upload session per file.
@@ -210,112 +219,145 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
             }
             finally { ArrayPool<byte>.Shared.Return(smallBuffer, clearArray: true); }
         }
-        if (session is null)
+        for (var restarts = 0; ; restarts++)
         {
-            if (before is null)
+            try { return await TransferLargeAsync(); }
+            catch (UploadSessionExpiredException error)
             {
-                // A personal OneDrive session exposes a zero-byte destination
-                // before its payload is complete. Create our own empty target
-                // and persist its acknowledged identity/version so this visible
-                // item can never be confused with a concurrent user's file.
-                data["reservationState"] = "creating";
-                await saveCheckpoint(new("onedrive", "", 0, new Dictionary<string, string>(data)), cancellationToken);
-                var reserved = await _client.PutSmallAsync(Location.ContainerId, parentId, name,
-                    ReadOnlyMemory<byte>.Empty, "fail", null, cancellationToken);
-                if (reserved.IsFolder || reserved.Size != 0 || string.IsNullOrEmpty(reserved.Id) || string.IsNullOrEmpty(reserved.ETag))
-                    throw new InvalidDataException("Microsoft did not acknowledge the empty destination's exact identity and version. Its source and saved reservation intent are retained for review.");
-                data["beforeId"] = reserved.Id;
-                data["beforeVersion"] = reserved.ETag;
-                data["reservationState"] = "owned";
-                // A cancellation after Microsoft's acknowledgment must not
-                // discard the ownership evidence needed for a safe restart.
-                await saveCheckpoint(new("onedrive", "", 0, new Dictionary<string, string>(data)), CancellationToken.None);
-                before = reserved;
+                var interrupted = new TransferCheckpoint("onedrive", session!.UploadUrl, session.NextOffset, new Dictionary<string, string>(data));
+                var completed = await ReconcileAsync(request, source, interrupted, cancellationToken);
+                if (completed is not null) return completed;
+                var current = await _client.GetByPathAsync(Location.ContainerId, parentId, name, cancellationToken);
+                if (current is null && data.GetValueOrDefault("reservationState") == "owned")
+                {
+                    data.Remove("beforeId"); data.Remove("beforeVersion"); data.Remove("reservationState");
+                    before = null;
+                }
+                else if (current?.ETag != data.GetValueOrDefault("beforeVersion") ||
+                    data.GetValueOrDefault("beforeId") is { } expiredReviewedId && current?.Id != expiredReviewedId ||
+                    data.GetValueOrDefault("reservationState") == "owned" && current is not { Size: 0, IsFolder: false })
+                    throw new TransferConflictException("The OneDrive destination changed after its upload session expired. Its saved progress and source are retained for review.");
+                // The expired server ranges cannot be resumed. Keep ownership,
+                // source identity and any complete digest, clearing only this
+                // unfinished file's unusable session and acknowledged bytes.
+                data.Remove("expires");
+                checkpoint = new("onedrive", "", 0, new Dictionary<string, string>(data));
+                await saveCheckpoint(checkpoint, CancellationToken.None);
+                session = null;
+                if (restarts >= 2)
+                    throw new IOException("Microsoft repeatedly expired this file's upload session. Its source, destination identity and completed job files are retained; resume will restart only this unfinished file.", error);
+                await source.ValidateAsync(cancellationToken);
             }
-            session = await _client.CreateUploadSessionAsync(Location.ContainerId, parentId, name,
-                // Replace an explicitly reviewed existing version only. If the target was
-                // absent, only our acknowledged empty reservation may be replaced.
-                before is not null && (request.ConflictPolicy == TransferConflictPolicy.Replace || data.GetValueOrDefault("reservationState") == "owned")
-                    ? "replace" : "fail", before?.ETag, cancellationToken);
-            data["expires"] = session.ExpiresUtc.ToString("O");
-            await saveCheckpoint(new("onedrive", session.UploadUrl, 0, new Dictionary<string, string>(data)), CancellationToken.None);
         }
-        if (session.NextOffset < 0 || session.NextOffset >= entry.Size || session.NextOffset % 327680 != 0)
-            throw new InvalidDataException("OneDrive returned an unsafe upload resume offset. Saved progress is retained for review.");
-        var offset = session.NextOffset;
-        var uploadedHash = Data(checkpoint ?? new("onedrive", "", 0), "uploadedSha1") ?? entry.Sha1;
-        if (offset > 0 && !ValidSha1(uploadedHash)) uploadedHash = await HashSourceAsync(source, cancellationToken);
-        if (ValidSha1(uploadedHash)) data["uploadedSha1"] = uploadedHash!;
-        progress?.Report(new(offset, entry.Size) { IsBaseline = true });
-        var buffer = ArrayPool<byte>.Shared.Rent((int)Math.Min(FragmentBytes, entry.Size));
-        using var contentHash = offset == 0 ? IncrementalHash.CreateHash(HashAlgorithmName.SHA1) : null;
-        try
+
+        async Task<TransferReceipt> TransferLargeAsync()
         {
-            // One continuous source range keeps the download connection open across fragments.
-            // The engine wraps it in bounded read-ahead so source reads overlap Graph uploads.
-            await using var input = await source.OpenReadAsync(offset, entry.Size - offset, cancellationToken);
-            while (offset < entry.Size)
+            if (session is null)
             {
-                var count = (int)Math.Min(FragmentBytes, entry.Size - offset);
-                await input.ReadExactlyAsync(buffer.AsMemory(0, count), cancellationToken);
-                contentHash?.AppendData(buffer, 0, count);
-                if (offset + count == entry.Size)
+                if (before is null)
                 {
-                    if (contentHash is not null) uploadedHash = Convert.ToHexString(contentHash.GetHashAndReset()).ToLowerInvariant();
-                    if (!ValidSha1(uploadedHash)) throw new InvalidDataException("The OneDrive upload has no complete content checksum.");
-                    CheckSourceHash(entry, uploadedHash!);
-                    data["uploadedSha1"] = uploadedHash!;
-                    var currentTarget = await _client.GetByPathAsync(Location.ContainerId, parentId, name, cancellationToken);
-                    if (currentTarget?.ETag != data.GetValueOrDefault("beforeVersion") ||
-                        data.GetValueOrDefault("beforeId") is { } beforeId && currentTarget?.Id != beforeId ||
-                        data.GetValueOrDefault("reservationState") == "owned" && currentTarget is not { Size: 0, IsFolder: false })
-                        throw new TransferConflictException("The OneDrive destination changed during this upload. Its unfinished session and source are retained for review.");
-                    // The digest is durable before the final commit, including a lost final response.
-                    await saveCheckpoint(new("onedrive", session.UploadUrl, offset, new Dictionary<string, string>(data)), cancellationToken);
+                    // A personal OneDrive session exposes a zero-byte destination
+                    // before its payload is complete. Create our own empty target
+                    // and persist its acknowledged identity/version so this visible
+                    // item can never be confused with a concurrent user's file.
+                    data["reservationState"] = "creating";
+                    await saveCheckpoint(new("onedrive", "", 0, new Dictionary<string, string>(data)), cancellationToken);
+                    var reserved = await _client.PutSmallAsync(Location.ContainerId, parentId, name,
+                        ReadOnlyMemory<byte>.Empty, "fail", null, cancellationToken);
+                    if (reserved.IsFolder || reserved.Size != 0 || string.IsNullOrEmpty(reserved.Id) || string.IsNullOrEmpty(reserved.ETag))
+                        throw new InvalidDataException("Microsoft did not acknowledge the empty destination's exact identity and version. Its source and saved reservation intent are retained for review.");
+                    data["beforeId"] = reserved.Id;
+                    data["beforeVersion"] = reserved.ETag;
+                    data["reservationState"] = "owned";
+                    // A cancellation after Microsoft's acknowledgment must not
+                    // discard the ownership evidence needed for a safe restart.
+                    await saveCheckpoint(new("onedrive", "", 0, new Dictionary<string, string>(data)), CancellationToken.None);
+                    before = reserved;
                 }
-                (OneDriveItem? Item, OneDriveUploadSession? Session) response;
-                for (var attempt = 0; ; attempt++)
-                {
-                    try
-                    {
-                        response = await _client.UploadFragmentAsync(session.UploadUrl, buffer.AsMemory(0, count), offset, entry.Size, cancellationToken, progress);
-                        break;
-                    }
-                    catch (Exception error) when (error is HttpRequestException || error is OneDriveApiException { StatusCode: 416 or >= 500 or 429 })
-                    {
-                        // A lost response must be reconciled against server acknowledgments before any fragment is replayed.
-                        var status = await _client.GetUploadSessionAsync(session.UploadUrl, cancellationToken);
-                        if (status is null)
-                        {
-                            var final = await ReconcileAsync(request, source, new("onedrive", session.UploadUrl, offset, data), cancellationToken);
-                            if (final is not null) return final;
-                            throw new IOException("The OneDrive upload session expired. Resume will restart only this unfinished file.", error);
-                        }
-                        if (status.NextOffset == offset + count)
-                        { response = (null, status); break; }
-                        if (status.NextOffset != offset) throw new InvalidDataException("OneDrive returned an unexpected acknowledged byte offset.");
-                        if (attempt >= 4) throw;
-                        await DelayRetryAsync(error, attempt, cancellationToken);
-                    }
-                }
-                if (response.Item is { } completed)
-                {
-                    if (offset + count != entry.Size) throw new InvalidDataException("OneDrive completed an upload before the final byte range.");
-                    completed = await CanonicalCompletionAsync(completed, cancellationToken);
-                    await SaveCompletedAsync(completed, path, request.OperationId, data, saveCheckpoint, cancellationToken);
-                    progress?.Report(new(entry.Size, entry.Size));
-                    return Receipt(completed, path, request.OperationId, uploadedHash);
-                }
-                session = response.Session ?? throw new InvalidDataException("OneDrive did not acknowledge the upload fragment.");
-                if (session.NextOffset != offset + count) throw new InvalidDataException("OneDrive acknowledged an unexpected byte range.");
-                offset = session.NextOffset;
+                session = await _client.CreateUploadSessionAsync(Location.ContainerId, parentId, name,
+                    // Replace an explicitly reviewed existing version only. If the target was
+                    // absent, only our acknowledged empty reservation may be replaced.
+                    before is not null && (request.ConflictPolicy == TransferConflictPolicy.Replace || data.GetValueOrDefault("reservationState") == "owned")
+                        ? "replace" : "fail", before?.ETag, cancellationToken);
                 data["expires"] = session.ExpiresUtc.ToString("O");
-                await saveCheckpoint(new("onedrive", session.UploadUrl, offset, new Dictionary<string, string>(data)), CancellationToken.None);
-                progress?.Report(new(offset, entry.Size));
+                await saveCheckpoint(new("onedrive", session.UploadUrl, 0, new Dictionary<string, string>(data)), CancellationToken.None);
             }
+            if (session.ExpiresUtc <= DateTimeOffset.UtcNow) throw new UploadSessionExpiredException();
+            if (session.NextOffset < 0 || session.NextOffset >= entry.Size || session.NextOffset % 327680 != 0)
+                throw new InvalidDataException("OneDrive returned an unsafe upload resume offset. Saved progress is retained for review.");
+            var offset = session.NextOffset;
+            var uploadedHash = Data(checkpoint ?? new("onedrive", "", 0), "uploadedSha1") ?? entry.Sha1;
+            if (offset > 0 && !ValidSha1(uploadedHash)) uploadedHash = await HashSourceAsync(source, cancellationToken);
+            if (ValidSha1(uploadedHash)) data["uploadedSha1"] = uploadedHash!;
+            progress?.Report(new(offset, entry.Size) { IsBaseline = true });
+            var buffer = ArrayPool<byte>.Shared.Rent((int)Math.Min(FragmentBytes, entry.Size));
+            using var contentHash = offset == 0 ? IncrementalHash.CreateHash(HashAlgorithmName.SHA1) : null;
+            try
+            {
+                // One continuous source range keeps the download connection open across fragments.
+                // The engine wraps it in bounded read-ahead so source reads overlap Graph uploads.
+                await using var input = await source.OpenReadAsync(offset, entry.Size - offset, cancellationToken);
+                while (offset < entry.Size)
+                {
+                    if (session.ExpiresUtc <= DateTimeOffset.UtcNow) throw new UploadSessionExpiredException();
+                    var count = (int)Math.Min(FragmentBytes, entry.Size - offset);
+                    await input.ReadExactlyAsync(buffer.AsMemory(0, count), cancellationToken);
+                    contentHash?.AppendData(buffer, 0, count);
+                    if (offset + count == entry.Size)
+                    {
+                        if (contentHash is not null) uploadedHash = Convert.ToHexString(contentHash.GetHashAndReset()).ToLowerInvariant();
+                        if (!ValidSha1(uploadedHash)) throw new InvalidDataException("The OneDrive upload has no complete content checksum.");
+                        CheckSourceHash(entry, uploadedHash!);
+                        data["uploadedSha1"] = uploadedHash!;
+                        var currentTarget = await _client.GetByPathAsync(Location.ContainerId, parentId, name, cancellationToken);
+                        if (currentTarget?.ETag != data.GetValueOrDefault("beforeVersion") ||
+                            data.GetValueOrDefault("beforeId") is { } beforeId && currentTarget?.Id != beforeId ||
+                            data.GetValueOrDefault("reservationState") == "owned" && currentTarget is not { Size: 0, IsFolder: false })
+                            throw new TransferConflictException("The OneDrive destination changed during this upload. Its unfinished session and source are retained for review.");
+                        // The digest is durable before the final commit, including a lost final response.
+                        await saveCheckpoint(new("onedrive", session.UploadUrl, offset, new Dictionary<string, string>(data)), cancellationToken);
+                    }
+                    (OneDriveItem? Item, OneDriveUploadSession? Session) response;
+                    for (var attempt = 0; ; attempt++)
+                    {
+                        try
+                        {
+                            response = await _client.UploadFragmentAsync(session.UploadUrl, buffer.AsMemory(0, count), offset, entry.Size, cancellationToken, progress);
+                            break;
+                        }
+                        catch (Exception error) when (error is HttpRequestException || error is OneDriveApiException { StatusCode: 404 or 410 or 416 or >= 500 or 429 })
+                        {
+                            // A lost response must be reconciled against server acknowledgments before any fragment is replayed.
+                            var status = error is OneDriveApiException { StatusCode: 404 or 410 } ? null :
+                                await _client.GetUploadSessionAsync(session.UploadUrl, cancellationToken);
+                            if (status is null)
+                                throw new UploadSessionExpiredException(error);
+                            if (status.NextOffset == offset + count)
+                            { response = (null, status); break; }
+                            if (status.NextOffset != offset) throw new InvalidDataException("OneDrive returned an unexpected acknowledged byte offset.");
+                            if (attempt >= 4) throw;
+                            await DelayRetryAsync(error, attempt, cancellationToken);
+                        }
+                    }
+                    if (response.Item is { } completed)
+                    {
+                        if (offset + count != entry.Size) throw new InvalidDataException("OneDrive completed an upload before the final byte range.");
+                        completed = await CanonicalCompletionAsync(completed, cancellationToken);
+                        await SaveCompletedAsync(completed, path, request.OperationId, data, saveCheckpoint, cancellationToken);
+                        progress?.Report(new(entry.Size, entry.Size));
+                        return Receipt(completed, path, request.OperationId, uploadedHash);
+                    }
+                    session = response.Session ?? throw new InvalidDataException("OneDrive did not acknowledge the upload fragment.");
+                    if (session.NextOffset != offset + count) throw new InvalidDataException("OneDrive acknowledged an unexpected byte range.");
+                    offset = session.NextOffset;
+                    data["expires"] = session.ExpiresUtc.ToString("O");
+                    await saveCheckpoint(new("onedrive", session.UploadUrl, offset, new Dictionary<string, string>(data)), CancellationToken.None);
+                    progress?.Report(new(offset, entry.Size));
+                }
+            }
+            finally { ArrayPool<byte>.Shared.Return(buffer, clearArray: true); }
+            throw new IOException("OneDrive did not return a completed destination file.");
         }
-        finally { ArrayPool<byte>.Shared.Return(buffer, clearArray: true); }
-        throw new IOException("OneDrive did not return a completed destination file.");
     }
 
     public async Task VerifyAsync(TransferReceipt receipt, ITransferSourceFile source, CancellationToken cancellationToken = default)
@@ -471,6 +513,9 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
         var extension = Path.GetExtension(name);
         return name[..(name.Length - extension.Length)] + " (CloudBay " + suffix + ")" + extension;
     }
+
+    private sealed class UploadSessionExpiredException(Exception? inner = null)
+        : IOException("The OneDrive upload session expired.", inner);
 
     private sealed class OneDriveSource(OneDriveClient client, string driveId, TransferEntry entry) : ITransferSourceFile
     {
