@@ -301,12 +301,17 @@ public sealed partial class B2CloudStore
                 data["pending"] = "true";
                 await save(new("b2", operationId, 0, new Dictionary<string, string>(data)), token).ConfigureAwait(false);
                 var content = (ReplayableContent)request.Content!;
+                HttpStatusCode? observedStatus = null;
+                HttpStatusCode? rejectedStatus = null;
                 try
                 {
                     using var response = await SendAsync(request, token).ConfigureAwait(false);
+                    observedStatus = response.StatusCode;
                     if (response.IsSuccessStatusCode)
                     {
                         using var json = await ReadDocumentAsync(response, token).ConfigureAwait(false);
+                        if (json.RootElement.ValueKind != JsonValueKind.Object)
+                            throw new InvalidDataException("Backblaze returned incomplete upload acknowledgment metadata.");
                         var file = ParseObject(json.RootElement);
                         if (file.Action != "upload" || file.Key != key || file.Size != source.Entry.Size || !IsSha1(content.Sha1) ||
                             !content.Sha1!.Equals(file.Sha1, StringComparison.OrdinalIgnoreCase) || RequiredString(json.RootElement, "bucketId") != bucketId)
@@ -314,10 +319,21 @@ public sealed partial class B2CloudStore
                         reusable = true;
                         return BindTransferContentHash(TransferReceiptFor(file, operationId, sourceId), content.Sha1);
                     }
+                    // Receiving a definite rejection is sufficient to release the
+                    // creation intent. A truncated error body must not turn an
+                    // documented upload rejection into an uncertain upload.
+                    // Redirects and undocumented statuses are not such receipts.
+                    if (IsDefiniteTransferUploadRejection(response.StatusCode))
+                    {
+                        rejectedStatus = response.StatusCode;
+                        data["pending"] = "false";
+                        await save(new("b2", operationId, 0, new Dictionary<string, string>(data)), CancellationToken.None).ConfigureAwait(false);
+                    }
                     var error = await ReadErrorAsync(response, token).ConfigureAwait(false);
                     session = null;
-                    if (IsTransient(response.StatusCode) && response.StatusCode != HttpStatusCode.TooManyRequests && content.TrailerStarted)
+                    if (rejectedStatus is null && content.TrailerStarted)
                     {
+                        await RecordUncertaintyAsync("provider_response", response.StatusCode, error.Code).ConfigureAwait(false);
                         var receipt = await FindTransferReceiptAsync(bucketId, key, operationId, source, token).ConfigureAwait(false);
                         if (receipt is not null) return BindTransferContentHash(receipt, content.Sha1);
                         throw UnknownOutcome("cloud upload", error);
@@ -333,10 +349,21 @@ public sealed partial class B2CloudStore
                     await save(new("b2", operationId, 0, new Dictionary<string, string>(data)), CancellationToken.None).ConfigureAwait(false);
                     throw;
                 }
-                catch (Exception error) when (error is OperationCanceledException or HttpRequestException ||
+                catch (Exception error) when (error is OperationCanceledException or HttpRequestException or InvalidDataException or JsonException ||
+                    error is InvalidOperationException && observedStatus is not null ||
                     error is IOException and not B2RequestException and not UnknownTransferOutcomeException and not TransferSourceChangedException)
                 {
                     session = null;
+                    if (rejectedStatus is { } status)
+                    {
+                        if (error is OperationCanceledException) throw;
+                        // The status is trustworthy even when its body cannot be
+                        // read. Do not log provider text or the transport exception.
+                        var rejection = new B2RequestException(status, "request_failed");
+                        if (!IsUploadRetry(status, rejection.Code) || attempt == Attempts - 1) throw rejection;
+                        await BackoffAsync(null, attempt, token).ConfigureAwait(false);
+                        continue;
+                    }
                     if (!content.TrailerStarted)
                     {
                         data["pending"] = "false";
@@ -346,16 +373,38 @@ public sealed partial class B2CloudStore
                         await BackoffAsync(null, attempt, token).ConfigureAwait(false);
                         continue;
                     }
+                    await RecordUncertaintyAsync(error is OperationCanceledException ? "cancelled_after_body" :
+                        observedStatus is { } responseStatus && (int)responseStatus is >= 200 and < 300 ? "acknowledgment_unreadable" :
+                        observedStatus is not null ? "provider_error_body_unreadable" : "transport_after_body", observedStatus).ConfigureAwait(false);
                     if (error is OperationCanceledException) throw;
                     var receipt = await FindTransferReceiptAsync(bucketId, key, operationId, source, token).ConfigureAwait(false);
                     if (receipt is not null) return BindTransferContentHash(receipt, content.Sha1);
-                    throw UnknownOutcome("cloud upload", error);
+                    // The checkpoint retains safe classification fields. A raw
+                    // transport/parser exception must not leak through diagnostics.
+                    throw UnknownOutcome("cloud upload");
                 }
             }
             throw new IOException("The B2 cloud upload failed after bounded retries.");
         }
         finally { if (reusable && session is not null) pool.Add(session); _uploadRequests.Exit(); }
+
+        Task RecordUncertaintyAsync(string category, HttpStatusCode? status, string? safeCode = null)
+        {
+            data["failure_category"] = category;
+            if (status is { } value) data["response_status"] = ((int)value).ToString(CultureInfo.InvariantCulture);
+            else data.Remove("response_status");
+            if (safeCode is not null) data["response_code"] = safeCode;
+            else data.Remove("response_code");
+            // Only bounded classifications and the allowlisted B2 error code are
+            // durable. Exception messages can contain URLs or credentials.
+            return save(new("b2", operationId, 0, new Dictionary<string, string>(data)), CancellationToken.None);
+        }
     }
+
+    private static bool IsDefiniteTransferUploadRejection(HttpStatusCode status) => status is
+        HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or
+        HttpStatusCode.MethodNotAllowed or HttpStatusCode.LengthRequired or HttpStatusCode.UnsupportedMediaType or
+        HttpStatusCode.TooManyRequests;
 
     private async Task<TransferReceipt> UploadTransferLargeAsync(string bucketId, string key, string operationId,
         string sourceId, ITransferSourceFile source, TransferCheckpoint? saved,

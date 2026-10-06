@@ -63,6 +63,148 @@ public sealed class B2TransferEndpointTests
         Assert.IsNull(await endpoint.ReconcileAsync(Request(), source, null), "Recovery requires the durable creation intent.");
     }
 
+    [DataTestMethod]
+    [DataRow(HttpStatusCode.Unauthorized)]
+    [DataRow(HttpStatusCode.TooManyRequests)]
+    public async Task DefiniteRetryableRejectionWithTruncatedBodyReleasesIntentAndUsesFreshEndpoint(HttpStatusCode status)
+    {
+        using var server = new Server { RejectSmallUpload = status, BreakErrorBody = true, RejectOnlyOnce = true };
+        using var store = await ConnectAsync(server);
+        var endpoint = new B2TransferEndpoint(store, Location);
+        var source = new Source(4096);
+        var checkpoints = new List<TransferCheckpoint>();
+
+        var receipt = await endpoint.UploadAsync(Request(), source, null,
+            (value, _) => { checkpoints.Add(value); return Task.CompletedTask; });
+
+        Assert.AreEqual(4096L, receipt.Size);
+        Assert.IsTrue(checkpoints.Any(value => value.Data?.GetValueOrDefault("pending") == "false"),
+            "A definite rejected request cannot leave a blocking unknown-commit checkpoint.");
+        Assert.AreEqual(2, server.UploadCalls);
+        Assert.AreEqual(2, server.UploadUrlCalls, "A rejected upload endpoint is not reused.");
+        Assert.AreEqual(0, server.VersionListCalls, "A definite rejection does not require uncertain receipt reconciliation.");
+        Assert.AreEqual(1, server.Files.Count);
+    }
+
+    [TestMethod]
+    public async Task DefiniteForbiddenRejectionWithTruncatedBodyRemainsSafelyRestartable()
+    {
+        using var server = new Server { RejectSmallUpload = HttpStatusCode.Forbidden, BreakErrorBody = true };
+        var source = new Source(4096);
+        TransferCheckpoint? saved = null;
+        using (var store = await ConnectAsync(server))
+        {
+            var endpoint = new B2TransferEndpoint(store, Location);
+            var error = await Assert.ThrowsExceptionAsync<B2RequestException>(() => endpoint.UploadAsync(Request(), source, null,
+                (value, _) => { saved = value; return Task.CompletedTask; }));
+            Assert.AreEqual(HttpStatusCode.Forbidden, error.StatusCode);
+            Assert.AreEqual("false", saved!.Data!["pending"]);
+            Assert.AreEqual(0, server.Files.Count);
+        }
+        server.RejectSmallUpload = null;
+        using (var restarted = await ConnectAsync(server))
+        {
+            var endpoint = new B2TransferEndpoint(restarted, Location);
+            Assert.IsNull(await endpoint.ReconcileAsync(Request(), source, saved));
+            var receipt = await endpoint.UploadAsync(Request(), source, saved, (_, _) => Task.CompletedTask);
+            Assert.AreEqual(4096L, receipt.Size);
+        }
+        Assert.AreEqual(2, server.UploadCalls, "Only the definitely rejected request and one successful restart are sent.");
+        Assert.AreEqual(1, server.Files.Count);
+    }
+
+    [DataTestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task UncertainServerFailureAfterBodyRetainsSafeStatusWithoutReplaying(bool breakBody)
+    {
+        using var server = new Server { RejectSmallUpload = HttpStatusCode.ServiceUnavailable, BreakErrorBody = breakBody };
+        using var store = await ConnectAsync(server);
+        var endpoint = new B2TransferEndpoint(store, Location);
+        TransferCheckpoint? saved = null;
+        await AssertIOExceptionAsync(() => endpoint.UploadAsync(Request(), new Source(4096), null,
+            (value, _) => { saved = value; return Task.CompletedTask; }));
+
+        Assert.AreEqual("true", saved!.Data!["pending"]);
+        Assert.AreEqual("503", saved.Data["response_status"]);
+        Assert.AreEqual(breakBody ? "provider_error_body_unreadable" : "provider_response", saved.Data["failure_category"]);
+        Assert.IsFalse(JsonSerializer.Serialize(saved).Contains("private-token", StringComparison.Ordinal));
+        Assert.AreEqual(1, server.UploadCalls);
+        Assert.AreEqual(0, server.Files.Count);
+    }
+
+    [DataTestMethod]
+    [DataRow(HttpStatusCode.Found, false)]
+    [DataRow(HttpStatusCode.TemporaryRedirect, true)]
+    [DataRow(HttpStatusCode.Conflict, false)]
+    [DataRow(HttpStatusCode.RequestTimeout, true)]
+    public async Task UnexpectedOrUncertainStatusAfterBodyNeverReleasesCreationIntent(HttpStatusCode status, bool breakBody)
+    {
+        using var server = new Server { RejectSmallUpload = status, BreakErrorBody = breakBody, MalformedErrorBody = true };
+        using var store = await ConnectAsync(server);
+        var endpoint = new B2TransferEndpoint(store, Location);
+        var source = new Source(4096);
+        TransferCheckpoint? saved = null;
+        await AssertIOExceptionAsync(() => endpoint.UploadAsync(Request(), source, null,
+            (value, _) => { saved = value; return Task.CompletedTask; }));
+
+        Assert.AreEqual("true", saved!.Data!["pending"]);
+        Assert.AreEqual(((int)status).ToString(), saved.Data["response_status"]);
+        Assert.AreEqual(breakBody ? "provider_error_body_unreadable" : "provider_response", saved.Data["failure_category"]);
+        Assert.IsFalse(JsonSerializer.Serialize(saved).Contains("private-token", StringComparison.Ordinal));
+        await AssertIOExceptionAsync(() => endpoint.UploadAsync(Request(), source, saved, (_, _) => Task.CompletedTask));
+        Assert.AreEqual(1, server.UploadCalls, "An unrecognized response cannot authorize duplicate creation after restart.");
+        Assert.AreEqual(1, source.Opens.Count);
+    }
+
+    [DataTestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task MalformedDefiniteRejectionBodyRetainsOnlySafeProviderCode(bool nonObjectBody)
+    {
+        using var server = new Server { RejectSmallUpload = HttpStatusCode.Forbidden, MalformedErrorBody = true, NonObjectErrorBody = nonObjectBody };
+        using var store = await ConnectAsync(server);
+        var endpoint = new B2TransferEndpoint(store, Location);
+        TransferCheckpoint? saved = null;
+        var error = await Assert.ThrowsExceptionAsync<B2RequestException>(() => endpoint.UploadAsync(Request(), new Source(4096), null,
+            (value, _) => { saved = value; return Task.CompletedTask; }));
+
+        Assert.AreEqual("false", saved!.Data!["pending"]);
+        Assert.AreEqual("request_failed", error.Code);
+        Assert.IsFalse(error.ToString().Contains("private-token", StringComparison.Ordinal));
+        Assert.IsFalse(JsonSerializer.Serialize(saved).Contains("private-token", StringComparison.Ordinal));
+        Assert.AreEqual(1, server.UploadCalls);
+        Assert.AreEqual(0, server.Files.Count);
+    }
+
+    [DataTestMethod]
+    [DataRow(false, false)]
+    [DataRow(true, false)]
+    [DataRow(false, true)]
+    public async Task MalformedOrTruncatedSuccessAcknowledgmentPreservesUnknownCommitUntilReceiptAppears(bool breakBody, bool nonObjectBody)
+    {
+        using var server = new Server { MalformedSmallAcknowledgment = true, BreakSmallAcknowledgmentBody = breakBody,
+            NonObjectSmallAcknowledgment = nonObjectBody, HideReceipts = true };
+        using var store = await ConnectAsync(server);
+        var endpoint = new B2TransferEndpoint(store, Location);
+        var source = new Source(4096);
+        TransferCheckpoint? saved = null;
+        await AssertIOExceptionAsync(() => endpoint.UploadAsync(Request(), source, null,
+            (value, _) => { saved = value; return Task.CompletedTask; }));
+
+        Assert.AreEqual("true", saved!.Data!["pending"]);
+        Assert.AreEqual("200", saved.Data["response_status"]);
+        Assert.AreEqual("acknowledgment_unreadable", saved.Data["failure_category"]);
+        Assert.IsFalse(JsonSerializer.Serialize(saved).Contains("private-token", StringComparison.Ordinal));
+        await AssertIOExceptionAsync(() => endpoint.UploadAsync(Request(), source, saved, (_, _) => Task.CompletedTask));
+        server.HideReceipts = false;
+        var recovered = await endpoint.ReconcileAsync(Request(), source, saved);
+        Assert.IsNotNull(recovered);
+        Assert.AreEqual(1, server.Files.Count);
+        Assert.AreEqual(1, server.UploadCalls);
+        Assert.AreEqual(1, source.Opens.Count);
+    }
+
     [TestMethod]
     public async Task ReceiptReconciliationIgnoresUnfinishedStartVersions()
     {
@@ -342,7 +484,12 @@ public sealed class B2TransferEndpointTests
     private static async Task AssertIOExceptionAsync(Func<Task> operation)
     {
         try { await operation(); Assert.Fail("Expected an unresolved transfer outcome."); }
-        catch (IOException error) { StringAssert.Contains(error.Message, "outcome could not be confirmed"); }
+        catch (IOException error)
+        {
+            StringAssert.Contains(error.Message, "outcome could not be confirmed");
+            Assert.IsFalse(error.ToString().Contains("private-token", StringComparison.Ordinal),
+                "Raw response/parser failures must not escape through exception diagnostics.");
+        }
     }
     private static HttpResponseMessage Json(object body, HttpStatusCode status = HttpStatusCode.OK) =>
         new(status) { Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json") };
@@ -407,6 +554,9 @@ public sealed class B2TransferEndpointTests
         public bool ExpireFirstUploadToken, ExpireFirstDownloadAuthorization;
         public bool IncludeStartsInVersionListing;
         public bool RemoveUnfinishedOnNextPartsList;
+        public HttpStatusCode? RejectSmallUpload;
+        public bool BreakErrorBody, MalformedErrorBody, NonObjectErrorBody, RejectOnlyOnce, MalformedSmallAcknowledgment,
+            BreakSmallAcknowledgmentBody, NonObjectSmallAcknowledgment;
         public Func<JsonElement, HttpResponseMessage>? ListOverride;
 
         public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
@@ -443,6 +593,15 @@ public sealed class B2TransferEndpointTests
                     return Json(new { fileId = "large", partNumber = part, contentLength = length,
                         contentSha1 = CorruptPartChecksum ? new string('a', 40) : sink.Hash });
                 }
+                if (RejectSmallUpload is { } rejectedStatus)
+                {
+                    if (RejectOnlyOnce) RejectSmallUpload = null;
+                    return BreakErrorBody
+                        ? new HttpResponseMessage(rejectedStatus) { Content = new StreamContent(new BrokenErrorStream()) }
+                        : NonObjectErrorBody ? Json(new[] { "private-token" }, rejectedStatus)
+                        : MalformedErrorBody ? MalformedResponse(rejectedStatus)
+                        : Json(new { code = "service_unavailable", message = "Generated provider rejection." }, rejectedStatus);
+                }
                 var key = Uri.UnescapeDataString(request.Headers.GetValues("X-Bz-File-Name").Single());
                 var info = request.Headers.Where(h => h.Key.StartsWith("X-Bz-Info-", StringComparison.OrdinalIgnoreCase))
                     .ToDictionary(h => h.Key[10..].ToLowerInvariant(), h => Uri.UnescapeDataString(h.Value.Single()));
@@ -450,6 +609,9 @@ public sealed class B2TransferEndpointTests
                 var file = Metadata(id, key, length, sink.Hash, info);
                 Files[id] = file;
                 if (LoseSmallAcknowledgment) throw new HttpRequestException("Lost acknowledgment.");
+                if (BreakSmallAcknowledgmentBody) return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new BrokenErrorStream()) };
+                if (NonObjectSmallAcknowledgment) return Json(new[] { "private-token" });
+                if (MalformedSmallAcknowledgment) return MalformedResponse(HttpStatusCode.OK);
                 return Json(file);
             }
             if (operation == "b2_download_file_by_id")
@@ -520,6 +682,14 @@ public sealed class B2TransferEndpointTests
             }
         }
         public void Dispose() { }
+        private static HttpResponseMessage MalformedResponse(HttpStatusCode status) => new(status)
+        { Content = new StringContent("{\"credential\":\"private-token\",\"message\":", Encoding.UTF8, "application/json") };
+    }
+
+    private sealed class BrokenErrorStream : MemoryStream
+    {
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            ValueTask.FromException<int>(new IOException("Generated truncated error body: private-token must never be retained."));
     }
 
     private sealed class UploadSink(long payloadLength) : Stream
