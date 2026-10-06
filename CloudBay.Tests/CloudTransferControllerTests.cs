@@ -126,8 +126,9 @@ public sealed class CloudTransferControllerTests
             }
             await using var restored = new ClientController(storage, _ => Assert.Fail(), manageStartup: false, cloudPauseReason: _ => null);
             await restored.StartAsync();
-            var timeout = DateTimeOffset.UtcNow.AddSeconds(10);
-            while (restored.CloudTransferJobs.Single().State != TransferJobState.Completed && DateTimeOffset.UtcNow < timeout) await Task.Delay(20);
+            // Journal completion precedes the final controller/tray publication.
+            using var completionTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await restored.WaitForCloudTransferAsync(plan.Id, completionTimeout.Token);
             Assert.AreEqual(TransferJobState.Completed, restored.CloudTransferJobs.Single().State);
             Assert.AreEqual("policy survives restart", await File.ReadAllTextAsync(Path.Combine(destination, "report.txt")));
             Assert.AreEqual(0, storage.LoadPolicyPausedCloudTransfers().Count);
