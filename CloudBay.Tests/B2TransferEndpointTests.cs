@@ -87,6 +87,25 @@ public sealed class B2TransferEndpointTests
     }
 
     [TestMethod]
+    public async Task AuthTokenLimitRejectionReleasesIntentAndUsesFreshEndpoint()
+    {
+        using var server = new Server { RejectSmallUpload = HttpStatusCode.BadRequest, RejectSmallCode = "auth_token_limit", RejectOnlyOnce = true };
+        using var store = await ConnectAsync(server);
+        var endpoint = new B2TransferEndpoint(store, Location);
+        var source = new Source(4096);
+        var checkpoints = new List<TransferCheckpoint>();
+        var receipt = await endpoint.UploadAsync(Request(), source, null,
+            (value, _) => { checkpoints.Add(value); return Task.CompletedTask; });
+
+        Assert.AreEqual(4096L, receipt.Size);
+        Assert.IsTrue(checkpoints.Any(value => value.Data?.GetValueOrDefault("pending") == "false"));
+        Assert.AreEqual(2, server.UploadCalls);
+        Assert.AreEqual(2, server.UploadUrlCalls);
+        Assert.AreEqual(0, server.VersionListCalls);
+        Assert.AreEqual(1, server.Files.Count);
+    }
+
+    [TestMethod]
     public async Task DefiniteForbiddenRejectionWithTruncatedBodyRemainsSafelyRestartable()
     {
         using var server = new Server { RejectSmallUpload = HttpStatusCode.Forbidden, BreakErrorBody = true };
@@ -555,6 +574,7 @@ public sealed class B2TransferEndpointTests
         public bool IncludeStartsInVersionListing;
         public bool RemoveUnfinishedOnNextPartsList;
         public HttpStatusCode? RejectSmallUpload;
+        public string RejectSmallCode = "service_unavailable";
         public bool BreakErrorBody, MalformedErrorBody, NonObjectErrorBody, RejectOnlyOnce, MalformedSmallAcknowledgment,
             BreakSmallAcknowledgmentBody, NonObjectSmallAcknowledgment;
         public Func<JsonElement, HttpResponseMessage>? ListOverride;
@@ -600,7 +620,7 @@ public sealed class B2TransferEndpointTests
                         ? new HttpResponseMessage(rejectedStatus) { Content = new StreamContent(new BrokenErrorStream()) }
                         : NonObjectErrorBody ? Json(new[] { "private-token" }, rejectedStatus)
                         : MalformedErrorBody ? MalformedResponse(rejectedStatus)
-                        : Json(new { code = "service_unavailable", message = "Generated provider rejection." }, rejectedStatus);
+                        : Json(new { code = RejectSmallCode, message = "Generated provider rejection." }, rejectedStatus);
                 }
                 var key = Uri.UnescapeDataString(request.Headers.GetValues("X-Bz-File-Name").Single());
                 var info = request.Headers.Where(h => h.Key.StartsWith("X-Bz-Info-", StringComparison.OrdinalIgnoreCase))

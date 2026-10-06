@@ -311,30 +311,44 @@ public sealed partial class B2CloudStore : ICloudStore
                 // Healthy files keep a memory-only intent. Persist uncertainty only if an
                 // attempt exits without confirmation; successful pooled uploads need no fsync.
                 Persist(pending: true);
-                var rejected = false;
+                HttpStatusCode? rejectedStatus = null;
+                HttpStatusCode? observedStatus = null;
+                var acknowledgmentRejected = false;
                 try
                 {
                     using var response = await SendAsync(request, token).ConfigureAwait(false);
+                    observedStatus = response.StatusCode;
                     if (response.IsSuccessStatusCode)
                     {
                         using var json = await ReadDocumentAsync(response, token).ConfigureAwait(false);
+                        if (json.RootElement.ValueKind != JsonValueKind.Object)
+                            throw new InvalidDataException("Backblaze returned incomplete upload acknowledgment metadata.");
                         var file = ParseObject(json.RootElement);
                         // ParseObject also normalizes legitimate restore/copy responses.
                         // A direct upload must acknowledge its own operation explicitly.
                         if (RequiredString(json.RootElement, "action") != "upload" || file.Key != key || file.Size != length ||
                             !sha1.Equals(file.Sha1, StringComparison.OrdinalIgnoreCase) ||
                             OptionalString(json.RootElement, "bucketId") is { } returnedBucket && returnedBucket != bucketId)
+                        {
+                            acknowledgmentRejected = true;
                             throw new InvalidDataException("Backblaze returned an upload checksum or length that does not match the source.");
+                        }
                         reusable = true;
                         return Complete(file, baseline: false);
                     }
                     // An explicit authorization/input rejection proves the body was not
                     // committed. A fully sent 5xx/408 response can still be ambiguous.
-                    rejected = !IsTransient(response.StatusCode) || response.StatusCode == HttpStatusCode.TooManyRequests;
+                    if (IsDefiniteTransferUploadRejection(response.StatusCode))
+                    {
+                        rejectedStatus = response.StatusCode;
+                        // The rejection is authoritative even if reading its body
+                        // fails or the caller cancels before error parsing finishes.
+                        Persist(pending: false); Forget();
+                    }
                     var error = await ReadErrorAsync(response, token).ConfigureAwait(false);
                     // A failing upload endpoint is retired; never share it with the next file.
                     session = null;
-                    if (!rejected && bytes >= length)
+                    if (rejectedStatus is null && bytes >= length)
                     {
                         Persist(pending: true, durable: true);
                         var receipt = await FindOperationReceiptAsync(intent, token).ConfigureAwait(false);
@@ -345,25 +359,43 @@ public sealed partial class B2CloudStore : ICloudStore
                     if (!IsUploadRetry(response.StatusCode, error.Code) || attempt == Attempts - 1) { Forget(); throw error; }
                     await BackoffAsync(response, attempt, token).ConfigureAwait(false);
                 }
+                catch (InvalidDataException) when (acknowledgmentRejected)
+                {
+                    // A readable acknowledgment for different content/identity is
+                    // an integrity failure. Retain its intent and stop for review.
+                    Persist(pending: true, durable: true);
+                    throw;
+                }
                 catch (OperationCanceledException)
                 {
                     // A small file is committed only after its complete declared body.
                     // Pausing an incomplete request should allow that file to start again;
                     // a fully sent body still needs its receipt before any replay.
-                    if (bytes < length) { Persist(pending: false); Forget(); }
+                    if (rejectedStatus is not null || bytes < length) { Persist(pending: false); Forget(); }
                     else Persist(pending: true, durable: true);
                     throw;
                 }
                 catch (Exception ex) when (ex is not UnknownTransferOutcomeException &&
-                    (ex is IOException and not B2RequestException || ex is HttpRequestException))
+                    (ex is IOException and not B2RequestException || ex is HttpRequestException or InvalidDataException or JsonException ||
+                     ex is InvalidOperationException && observedStatus is not null))
                 {
                     session = null;
-                    if (!rejected && bytes >= length)
+                    if (rejectedStatus is { } status)
+                    {
+                        Forget();
+                        // Only the known status survives a failed error body;
+                        // provider text and transport exceptions are not retained.
+                        var rejection = new B2RequestException(status, "request_failed");
+                        if (!IsUploadRetry(status, rejection.Code) || attempt == Attempts - 1) throw rejection;
+                        await BackoffAsync(null, attempt, token).ConfigureAwait(false);
+                        continue;
+                    }
+                    if (bytes >= length)
                     {
                         Persist(pending: true, durable: true);
                         var receipt = await FindOperationReceiptAsync(intent, token).ConfigureAwait(false);
                         if (receipt is not null) return Complete(receipt, baseline: false);
-                        throw UnknownOutcome("upload", ex);
+                        throw UnknownOutcome("upload");
                     }
                     Persist(pending: false);
                     if (attempt == Attempts - 1) { Forget(); throw; }
@@ -698,14 +730,14 @@ public sealed partial class B2CloudStore : ICloudStore
             try
             {
                 using var json = JsonDocument.Parse(sample.ToArray());
-                var candidate = OptionalString(json.RootElement, "code");
+                var candidate = json.RootElement.ValueKind == JsonValueKind.Object ? OptionalString(json.RootElement, "code") : null;
                 // No server text (including an unknown code) may accidentally reveal an echoed credential.
                 if (candidate is "bad_auth_token" or "expired_auth_token" or "unauthorized" or "unsupported" or
                     "bad_request" or "bad_bucket_id" or "invalid_bucket_id" or "not_found" or "file_not_present" or
                     "service_unavailable" or "too_many_requests" or "storage_cap_exceeded" or "transaction_cap_exceeded" or
                     "download_cap_exceeded" or "access_denied" or "range_not_satisfiable" or "sha1_mismatch" or
                     "bad_sha1" or "bad_part_number" or "out_of_range" or "already_hidden" or "source_too_large" or
-                    "upload_token_used_concurrently" or "request_timeout" or "cap_exceeded" or "length_required" or
+                    "auth_token_limit" or "upload_token_used_concurrently" or "request_timeout" or "cap_exceeded" or "length_required" or
                     "unsupported_media_type" or "method_not_allowed") code = candidate;
             }
             catch (JsonException) { }

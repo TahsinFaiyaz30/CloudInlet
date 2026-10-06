@@ -365,6 +365,150 @@ public sealed class B2CopyTests
         Assert.AreEqual(0, fixture.Journals.Length);
     }
 
+    [DataTestMethod]
+    [DataRow(HttpStatusCode.Unauthorized)]
+    [DataRow(HttpStatusCode.TooManyRequests)]
+    public async Task NativeRejectedUploadWithTruncatedErrorBodyRetriesUsingFreshEndpoint(HttpStatusCode status)
+    {
+        using var fixture = new Fixture(11) { RejectUploadStatus = status, RejectionBody = ResponseBodyStyle.Truncated, RejectOnlyOnce = true };
+        using var store = await fixture.ConnectAsync();
+        var bytes = Encoding.UTF8.GetBytes("small bytes");
+        using var source = new MemoryStream(bytes);
+        var result = await store.UploadAsync("destination", "CloudBay/rejected", source, bytes.Length,
+            Convert.ToHexString(SHA1.HashData(bytes)), fixture.Source.ModifiedUtc);
+
+        Assert.AreEqual(bytes.Length, result.Size);
+        Assert.AreEqual(2, fixture.UploadRequests);
+        Assert.AreEqual(2, fixture.UploadTargets);
+        Assert.AreEqual(1, fixture.Versions.Count);
+        Assert.AreEqual(0, fixture.ReceiptListings);
+        Assert.AreEqual(0, fixture.Journals.Length);
+    }
+
+    [DataTestMethod]
+    [DataRow(ResponseBodyStyle.Truncated)]
+    [DataRow(ResponseBodyStyle.Malformed)]
+    [DataRow(ResponseBodyStyle.NonObject)]
+    public async Task NativeForbiddenUploadErrorBodyFailureIsTerminalAndLeavesNoUncertainIntent(ResponseBodyStyle bodyStyle)
+    {
+        using var fixture = new Fixture(11) { RejectUploadStatus = HttpStatusCode.Forbidden, RejectionBody = bodyStyle };
+        var bytes = Encoding.UTF8.GetBytes("small bytes");
+        var sha = Convert.ToHexString(SHA1.HashData(bytes));
+        using (var store = await fixture.ConnectAsync())
+        {
+            using var source = new MemoryStream(bytes);
+            var error = await Assert.ThrowsExceptionAsync<B2RequestException>(() => store.UploadAsync("destination", "CloudBay/rejected",
+                source, bytes.Length, sha, fixture.Source.ModifiedUtc));
+            Assert.AreEqual(HttpStatusCode.Forbidden, error.StatusCode);
+            Assert.IsFalse(error.ToString().Contains("private-token", StringComparison.Ordinal));
+        }
+        Assert.AreEqual(1, fixture.UploadRequests, "A terminal rejection cannot be blindly retried after an error-body failure.");
+        Assert.AreEqual(0, fixture.Journals.Length);
+        Assert.AreEqual(0, fixture.Versions.Count);
+        fixture.RejectUploadStatus = null;
+        using var restarted = await fixture.ConnectAsync();
+        using var retry = new MemoryStream(bytes);
+        await restarted.UploadAsync("destination", "CloudBay/rejected", retry, bytes.Length, sha, fixture.Source.ModifiedUtc);
+        Assert.AreEqual(2, fixture.UploadRequests);
+        Assert.AreEqual(0, fixture.ReceiptListings, "A definite rejected attempt must not block restart on a nonexistent receipt.");
+    }
+
+    [DataTestMethod]
+    [DataRow(HttpStatusCode.Unauthorized)]
+    [DataRow(HttpStatusCode.Forbidden)]
+    [DataRow(HttpStatusCode.TooManyRequests)]
+    public async Task CancellationWhileReadingKnownNativeRejectionCannotRecreatePendingIntent(HttpStatusCode status)
+    {
+        using var cancellation = new CancellationTokenSource();
+        using var fixture = new Fixture(11) { RejectUploadStatus = status, RejectionBody = ResponseBodyStyle.Cancelled,
+            RejectionBodyCancellation = cancellation };
+        using var store = await fixture.ConnectAsync();
+        var bytes = Encoding.UTF8.GetBytes("small bytes");
+        using var source = new MemoryStream(bytes);
+        await Assert.ThrowsExceptionAsync<OperationCanceledException>(() => store.UploadAsync("destination", "CloudBay/rejected", source,
+            bytes.Length, Convert.ToHexString(SHA1.HashData(bytes)), fixture.Source.ModifiedUtc, cancellationToken: cancellation.Token));
+
+        Assert.IsTrue(cancellation.IsCancellationRequested);
+        Assert.AreEqual(1, fixture.UploadRequests);
+        Assert.AreEqual(0, fixture.Journals.Length);
+        Assert.AreEqual(0, fixture.Versions.Count);
+    }
+
+    [DataTestMethod]
+    [DataRow(HttpStatusCode.Found)]
+    [DataRow(HttpStatusCode.TemporaryRedirect)]
+    [DataRow(HttpStatusCode.Conflict)]
+    [DataRow(HttpStatusCode.RequestTimeout)]
+    [DataRow(HttpStatusCode.ServiceUnavailable)]
+    public async Task NativeUnknownStatusAfterFullBodyRetainsIntentAndNeverReplays(HttpStatusCode status)
+    {
+        using var fixture = new Fixture(11) { RejectUploadStatus = status, RejectionBody = ResponseBodyStyle.Malformed, HideReceipts = true };
+        var bytes = Encoding.UTF8.GetBytes("small bytes");
+        var sha = Convert.ToHexString(SHA1.HashData(bytes));
+        using (var store = await fixture.ConnectAsync())
+        {
+            using var source = new MemoryStream(bytes);
+            await ExpectUnknownOutcomeAsync(() => store.UploadAsync("destination", "CloudBay/unknown", source, bytes.Length, sha, fixture.Source.ModifiedUtc));
+        }
+        Assert.AreEqual(1, fixture.Journals.Length);
+        using (var restarted = await fixture.ConnectAsync())
+        {
+            using var source = new MemoryStream(bytes);
+            await ExpectUnknownOutcomeAsync(() => restarted.UploadAsync("destination", "CloudBay/unknown", source, bytes.Length, sha, fixture.Source.ModifiedUtc));
+        }
+        Assert.AreEqual(1, fixture.UploadRequests);
+        Assert.AreEqual(0, fixture.Versions.Count);
+    }
+
+    [DataTestMethod]
+    [DataRow(ResponseBodyStyle.Truncated)]
+    [DataRow(ResponseBodyStyle.Malformed)]
+    [DataRow(ResponseBodyStyle.NonObject)]
+    public async Task NativeInvalidSuccessBodyRetainsOriginalVersionAndRecoversWithoutReplay(ResponseBodyStyle bodyStyle)
+    {
+        using var fixture = new Fixture(11) { UploadAcknowledgmentBody = bodyStyle, HideReceipts = true };
+        var bytes = Encoding.UTF8.GetBytes("small bytes");
+        var sha = Convert.ToHexString(SHA1.HashData(bytes));
+        using (var store = await fixture.ConnectAsync())
+        {
+            using var source = new MemoryStream(bytes);
+            await ExpectUnknownOutcomeAsync(() => store.UploadAsync("destination", "CloudBay/invalid-ack", source, bytes.Length, sha, fixture.Source.ModifiedUtc));
+        }
+        Assert.AreEqual(1, fixture.Journals.Length);
+        Assert.AreEqual(1, fixture.Versions.Count);
+        using (var restarted = await fixture.ConnectAsync())
+        {
+            using var source = new MemoryStream(bytes);
+            await ExpectUnknownOutcomeAsync(() => restarted.UploadAsync("destination", "CloudBay/invalid-ack", source, bytes.Length, sha, fixture.Source.ModifiedUtc));
+        }
+        fixture.HideReceipts = false;
+        using var confirmed = await fixture.ConnectAsync();
+        using var retry = new MemoryStream(bytes);
+        var result = await confirmed.UploadAsync("destination", "CloudBay/invalid-ack", retry, bytes.Length, sha, fixture.Source.ModifiedUtc);
+        Assert.AreEqual(fixture.Versions.Single().Key, result.FileId);
+        Assert.AreEqual(1, fixture.UploadRequests);
+        Assert.AreEqual(0, fixture.Journals.Length);
+    }
+
+    [TestMethod]
+    public async Task NativeAuthTokenLimitRejectionRetiresEndpointAndRetriesWithoutReceiptLookup()
+    {
+        using var fixture = new Fixture(11) { RejectUploadStatus = HttpStatusCode.BadRequest, RejectUploadCode = "auth_token_limit", RejectOnlyOnce = true };
+        using var store = await fixture.ConnectAsync();
+        var bytes = Encoding.UTF8.GetBytes("small bytes");
+        using var source = new MemoryStream(bytes);
+        await store.UploadAsync("destination", "CloudBay/token-limit", source, bytes.Length,
+            Convert.ToHexString(SHA1.HashData(bytes)), fixture.Source.ModifiedUtc);
+
+        Assert.AreEqual(2, fixture.UploadRequests);
+        Assert.AreEqual(2, fixture.UploadTargets);
+        Assert.AreEqual(1, fixture.Versions.Count);
+        Assert.AreEqual(0, fixture.ReceiptListings);
+        Assert.AreEqual(0, fixture.Journals.Length);
+    }
+
+    public enum ResponseBodyStyle { Json, Truncated, Malformed, NonObject, Cancelled }
+
     private sealed record Version(string Id, string Key, string Bucket, long Length, string Sha, Dictionary<string, string> Info);
     private sealed class Fixture(long length) : IDisposable
     {
@@ -378,6 +522,13 @@ public sealed class B2CopyTests
         public int VerificationFailureStatus;
         public CancellationTokenSource? Interrupt;
         public CancellationTokenSource? PartialUploadCancellation, CompletedUploadCancellation;
+        public HttpStatusCode? RejectUploadStatus;
+        public string RejectUploadCode = "request_failed";
+        public ResponseBodyStyle RejectionBody;
+        public ResponseBodyStyle? UploadAcknowledgmentBody;
+        public CancellationTokenSource? RejectionBodyCancellation;
+        public bool RejectOnlyOnce;
+        public int UploadRequests;
         public long PartialUploadBytes;
         public ConcurrentDictionary<string, Version> Versions { get; } = new();
         public ConcurrentQueue<int> CopiedParts { get; } = new();
@@ -416,6 +567,12 @@ public sealed class B2CopyTests
                     Assert.Fail("Partial fixture cancellation must interrupt body serialization.");
                 }
                 var bytes = await request.Content!.ReadAsByteArrayAsync(token);
+                Interlocked.Increment(ref UploadRequests);
+                if (RejectUploadStatus is { } rejectedStatus)
+                {
+                    if (RejectOnlyOnce) RejectUploadStatus = null;
+                    return FaultResponse(rejectedStatus, RejectionBody);
+                }
                 var info = new Dictionary<string, string>
                 {
                     ["cloudbay_upload_id"] = request.Headers.GetValues("X-Bz-Info-cloudbay_upload_id").Single(),
@@ -431,6 +588,7 @@ public sealed class B2CopyTests
                 if (LoseUploadResponse) throw new HttpRequestException("Generated response lost after storing upload.");
                 if (UploadResponse503) return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
                     { Content = new StringContent("{\"code\":\"service_unavailable\"}") };
+                if (UploadAcknowledgmentBody is { } bodyStyle) return FaultResponse(HttpStatusCode.OK, bodyStyle);
                 return Json(Object(version));
             }
             using var payload = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(token)); var body = payload.RootElement;
@@ -508,6 +666,34 @@ public sealed class B2CopyTests
         }
         public void Dispose()
         { if (Directory.Exists(_directory)) Directory.Delete(_directory, recursive: true); }
+        private HttpResponseMessage FaultResponse(HttpStatusCode status, ResponseBodyStyle style)
+        {
+            var response = new HttpResponseMessage(status)
+            {
+                Content = style switch
+                {
+                    ResponseBodyStyle.Truncated => new StreamContent(new FailedResponseStream()),
+                    ResponseBodyStyle.Cancelled => new StreamContent(new FailedResponseStream(RejectionBodyCancellation)),
+                    ResponseBodyStyle.Malformed => new StringContent("{\"credential\":\"private-token\",\"message\":"),
+                    ResponseBodyStyle.NonObject => new StringContent("[\"private-token\"]"),
+                    _ => new StringContent(JsonSerializer.Serialize(new { code = RejectUploadCode, message = "private-token" }))
+                }
+            };
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromMilliseconds(1));
+            return response;
+        }
+    }
+    private sealed class FailedResponseStream(CancellationTokenSource? cancellation = null) : MemoryStream
+    {
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (cancellation is not null)
+            {
+                cancellation.Cancel();
+                return ValueTask.FromException<int>(new OperationCanceledException(cancellationToken));
+            }
+            return ValueTask.FromException<int>(new IOException("Generated truncated provider response: private-token must not escape."));
+        }
     }
     private static HttpResponseMessage Json(object value) => new(HttpStatusCode.OK)
     { Content = new StringContent(JsonSerializer.Serialize(value), Encoding.UTF8, "application/json") };
@@ -527,6 +713,10 @@ public sealed class B2CopyTests
     private static async Task ExpectUnknownOutcomeAsync(Func<Task> operation)
     {
         try { await operation(); Assert.Fail("An unconfirmed creating request must not be silently replayed."); }
-        catch (IOException error) { StringAssert.Contains(error.Message, "outcome could not be confirmed"); }
+        catch (IOException error)
+        {
+            StringAssert.Contains(error.Message, "outcome could not be confirmed");
+            Assert.IsFalse(error.ToString().Contains("private-token", StringComparison.Ordinal));
+        }
     }
 }
