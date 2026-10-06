@@ -423,6 +423,39 @@ public sealed class OneDriveTransferTests
         Assert.AreEqual(0, provider.Deletes);
     }
 
+    [TestMethod]
+    public async Task CancellationDuringReservationAcknowledgmentSaveRetainsItsExactOwnedReceipt()
+    {
+        using var provider = new UploadProvider();
+        using var cancellation = new CancellationTokenSource();
+        var source = new MemorySource(new byte[OneDriveTransferEndpoint.FragmentBytes + 1]);
+        var request = new TransferUploadRequest("operation", "file.bin", TransferConflictPolicy.Fail);
+        TransferCheckpoint? saved = null;
+        try
+        {
+            await new OneDriveTransferEndpoint(Client(provider.Http), Location).UploadAsync(request, source, null, (checkpoint, ct) =>
+            {
+                if (checkpoint.Data?.GetValueOrDefault("reservationState") == "owned") cancellation.Cancel();
+                ct.ThrowIfCancellationRequested();
+                saved = checkpoint;
+                return Task.CompletedTask;
+            }, cancellationToken: cancellation.Token);
+            Assert.Fail("Cancellation should stop before session creation or source payload reads.");
+        }
+        catch (OperationCanceledException) { }
+        Assert.AreEqual("owned", saved!.Data!["reservationState"]);
+        Assert.AreEqual("destination", saved.Data["beforeId"]);
+        Assert.AreEqual("reservation-etag", saved.Data["beforeVersion"]);
+        Assert.AreEqual(1, provider.ReservationsCreated);
+        Assert.AreEqual(0, provider.SessionsCreated);
+        Assert.AreEqual(0, source.Reads.Count);
+        var resumed = new OneDriveTransferEndpoint(Client(provider.Http), Location);
+        var receipt = await resumed.UploadAsync(request, source, saved, (checkpoint, ct) => { saved = checkpoint; return Task.CompletedTask; });
+        await resumed.VerifyAsync(receipt, source);
+        Assert.AreEqual(1, provider.ReservationsCreated, "Recovery must reuse the acknowledged empty destination after cancellation.");
+        Assert.AreEqual(1, provider.SessionsCreated);
+    }
+
     [DataTestMethod]
     [DataRow("changed-reservation-version", null)]
     [DataRow(null, "unrelated-item-at-same-path")]

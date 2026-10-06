@@ -227,7 +227,9 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
                 data["beforeId"] = reserved.Id;
                 data["beforeVersion"] = reserved.ETag;
                 data["reservationState"] = "owned";
-                await saveCheckpoint(new("onedrive", "", 0, new Dictionary<string, string>(data)), cancellationToken);
+                // A cancellation after Microsoft's acknowledgment must not
+                // discard the ownership evidence needed for a safe restart.
+                await saveCheckpoint(new("onedrive", "", 0, new Dictionary<string, string>(data)), CancellationToken.None);
                 before = reserved;
             }
             session = await _client.CreateUploadSessionAsync(Location.ContainerId, parentId, name,
@@ -236,7 +238,7 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
                 before is not null && (request.ConflictPolicy == TransferConflictPolicy.Replace || data.GetValueOrDefault("reservationState") == "owned")
                     ? "replace" : "fail", before?.ETag, cancellationToken);
             data["expires"] = session.ExpiresUtc.ToString("O");
-            await saveCheckpoint(new("onedrive", session.UploadUrl, 0, new Dictionary<string, string>(data)), cancellationToken);
+            await saveCheckpoint(new("onedrive", session.UploadUrl, 0, new Dictionary<string, string>(data)), CancellationToken.None);
         }
         if (session.NextOffset < 0 || session.NextOffset >= entry.Size || session.NextOffset % 327680 != 0)
             throw new InvalidDataException("OneDrive returned an unsafe upload resume offset. Saved progress is retained for review.");
@@ -308,7 +310,7 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
                 if (session.NextOffset != offset + count) throw new InvalidDataException("OneDrive acknowledged an unexpected byte range.");
                 offset = session.NextOffset;
                 data["expires"] = session.ExpiresUtc.ToString("O");
-                await saveCheckpoint(new("onedrive", session.UploadUrl, offset, new Dictionary<string, string>(data)), cancellationToken);
+                await saveCheckpoint(new("onedrive", session.UploadUrl, offset, new Dictionary<string, string>(data)), CancellationToken.None);
                 progress?.Report(new(offset, entry.Size));
             }
         }
@@ -400,7 +402,7 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
     {
         data["itemId"] = item.Id;
         data["itemVersion"] = item.ETag;
-        await save(new("onedrive", "", item.Size, new Dictionary<string, string>(data)), cancellationToken);
+        await save(new("onedrive", "", item.Size, new Dictionary<string, string>(data)), CancellationToken.None);
     }
     private void ValidateCheckpoint(TransferUploadRequest request, ITransferSourceFile source, TransferCheckpoint checkpoint)
     {
@@ -413,7 +415,9 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
             (Data(checkpoint, "itemId") is not null && string.IsNullOrEmpty(Data(checkpoint, "itemVersion"))) ||
             Data(checkpoint, "reservationState") is { } reservation &&
                 (source.Entry.IsFolder || source.Entry.Size <= SmallFileBytes || reservation is not ("creating" or "owned") ||
-                    reservation == "owned" && (string.IsNullOrEmpty(Data(checkpoint, "beforeId")) || string.IsNullOrEmpty(Data(checkpoint, "beforeVersion")))))
+                    reservation == "owned" && (string.IsNullOrEmpty(Data(checkpoint, "beforeId")) || string.IsNullOrEmpty(Data(checkpoint, "beforeVersion"))) ||
+                    reservation == "creating" && (checkpoint.AcknowledgedBytes != 0 || checkpoint.SessionId.Length != 0 ||
+                        Data(checkpoint, "beforeId") is not null || Data(checkpoint, "beforeVersion") is not null)))
             throw new InvalidDataException("The saved OneDrive acknowledgment is incomplete or outside its source length.");
         ValidateRelativePath(Data(checkpoint, "target")!);
     }
