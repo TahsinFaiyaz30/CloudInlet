@@ -198,7 +198,7 @@ public partial class App : Microsoft.UI.Xaml.Application
                 if (_notifications is not null) await _notifications.DisposeAsync();
                 Exit(); return;
             }
-            var activation = isLive && commandLine.Contains("--show-tray") ? "tray" : "show";
+            var activation = ClientLaunchPolicy.SecondaryCommand(commandLine);
             Environment.ExitCode = ClientActivation.ExitCode(await ClientActivation.SendAsync(_pipeName, activation));
             Exit(); return;
         }
@@ -254,10 +254,9 @@ public partial class App : Microsoft.UI.Xaml.Application
             _controller.Changed += Controller_Changed;
             _ = ListenForActivationAsync();
             StartNotificationPolicy();
-            var startupActivation = UpdateInstallation.IsPackaged && _notificationStartupTask;
             var notificationActivation = commandLine.Any(value => value.StartsWith("----AppNotificationActivated:", StringComparison.Ordinal)) ||
                 _firstNotification.Task.IsCompleted;
-            if (!notificationActivation && (!(commandLine.Contains("--background") || startupActivation) || !_controller.Settings.IsConfigured)) MainWindow.ShowWindow();
+            if (ShouldShowLaunchWindow(commandLine, notificationActivation)) MainWindow.ShowWindow();
             _startupStage = "Start client controller";
             var clientStartup = _controller.StartAsync();
             _notificationCommandsReady = true;
@@ -446,6 +445,22 @@ public partial class App : Microsoft.UI.Xaml.Application
         finally { suiteGate.Release(); }
     }
 
+    private bool ShouldShowLaunchWindow(IReadOnlyCollection<string> commandLine, bool notificationActivation = false, bool isSecondaryLaunch = false)
+    {
+        if (_controller is null) return false;
+        var hasOneDriveAccount = false;
+        if (!_controller.Settings.IsConfigured)
+        {
+            try { hasOneDriveAccount = _controller.OneDriveAccounts.Count > 0; }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or System.Security.Cryptography.CryptographicException)
+            {
+                // An unreadable account vault needs recovery, even if an account was previously connected.
+                return ClientLaunchPolicy.ShouldShowWindow(_controller.Settings, false, ClientState.Attention, commandLine, notificationActivation, isSecondaryLaunch);
+            }
+        }
+        return ClientLaunchPolicy.ShouldShowWindow(_controller.Settings, hasOneDriveAccount, _controller.Snapshot.State, commandLine, notificationActivation, isSecondaryLaunch);
+    }
+
     private async Task ListenForActivationAsync()
     {
         try
@@ -461,7 +476,12 @@ public partial class App : Microsoft.UI.Xaml.Application
                 try { command = await ClientActivation.ReadCommandAsync(server, readDeadline.Token); }
                 catch (OperationCanceledException) when (!_lifetime.IsCancellationRequested) { continue; }
                 catch (IOException) { continue; }
-                if (command == "show")
+                if (command == "launch")
+                    MainWindow?.DispatcherQueue.TryEnqueue(() =>
+                    {
+                        if (ShouldShowLaunchWindow(Array.Empty<string>(), isSecondaryLaunch: true)) MainWindow.ShowWindow();
+                    });
+                else if (command == "show")
                     MainWindow?.DispatcherQueue.TryEnqueue(() => MainWindow.ShowWindow());
                 else if (command == "quit")
                     MainWindow?.DispatcherQueue.TryEnqueue(() => _ = QuitAsync());

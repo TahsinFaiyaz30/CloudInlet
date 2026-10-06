@@ -19,7 +19,6 @@ public partial class App
     private int _notificationPumpPending;
     private int _notificationPumpAgain;
     private bool _notificationCommandsReady;
-    private bool _notificationStartupTask;
     private string? _notificationRegistrationWarning;
     private string? _lastNotificationCommand;
     private DateTimeOffset _lastNotificationCommandUtc;
@@ -137,7 +136,6 @@ public partial class App
         try
         {
             var activation = AppInstance.GetCurrent().GetActivatedEventArgs();
-            _notificationStartupTask = activation.Kind == ExtendedActivationKind.StartupTask;
             if (activation.Kind == ExtendedActivationKind.AppNotification && activation.Data is AppNotificationActivatedEventArgs arguments &&
                 NotificationCommandCodec.TryDecode(arguments.Argument, out var command)) QueueNotificationCommand(command);
         }

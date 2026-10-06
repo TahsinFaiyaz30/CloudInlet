@@ -35,7 +35,7 @@ public static class ClientActivation
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return ActivationDelivery.Unavailable; }
     }
 
-    public static bool IsSupportedCommand(string? command) => command is "show" or "quit" or "tray" ||
+    public static bool IsSupportedCommand(string? command) => command is "show" or "launch" or "quit" or "tray" ||
         NotificationCommandCodec.TryDecode(command, out _);
 
     /// <summary>Byte-mode pipes can split a write. Read to EOF with a strict limit instead of acting on a prefix.</summary>

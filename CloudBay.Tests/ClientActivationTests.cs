@@ -13,6 +13,7 @@ public sealed class ClientActivationTests
     private static string PipeName() => "CloudBay.Activation.Tests." + Guid.NewGuid().ToString("N");
 
     [DataTestMethod]
+    [DataRow("launch")]
     [DataRow("show")]
     [DataRow("quit")]
     [DataRow("tray")]
