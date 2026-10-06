@@ -1,6 +1,6 @@
 # Third-party notices
 
-CloudBay includes Windows Community Toolkit, Microsoft .NET and Windows App SDK components, Microsoft.Data.Sqlite, and SQLitePCLRaw. The self-contained release retains upstream license and notice files in `App/Licenses/<package>/<version>/`, including runtime notices, toolkit third-party notices, and the Apache 2.0 license for SQLitePCLRaw. `App/Licenses/packages.json` records the resolved dependency versions, copyright declarations, upstream license metadata, and retained file hashes. The toolkit license also follows here for convenient reading.
+CloudInlet includes Windows Community Toolkit, Microsoft .NET and Windows App SDK components, Microsoft.Data.Sqlite, and SQLitePCLRaw. The self-contained release retains upstream license and notice files in `App/Licenses/<package>/<version>/`, including runtime notices, toolkit third-party notices, and the Apache 2.0 license for SQLitePCLRaw. `App/Licenses/packages.json` records the resolved dependency versions, copyright declarations, upstream license metadata, and retained file hashes. The toolkit license also follows here for convenient reading.
 
 ## Windows Community Toolkit
 

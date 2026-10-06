@@ -8,7 +8,7 @@ tools/CloudInlet.Benchmarks/bin/Release/net8.0-windows/CloudInlet.Benchmarks.exe
 tools/CloudInlet.Benchmarks/bin/Release/net8.0-windows/CloudInlet.Benchmarks.exe --mode scheduler --workload tiny --workers 4 --label current
 ```
 
-Scheduler mode uses generated bounded streams and deterministic preparation, payload and verification delays. It isolates changes in overlap/admission; it does not represent provider throughput. Workloads are `tiny` (24 Ã— 4KiB), `large` (12MiB +123B), and `mixed` (16 Ã— 4KiB, two Ã—256KiB and 8MiB +123B). Override the tiny-file count with `--tiny-files 12` (1–64). Untimed cloud seeding and exact verified cleanup use the configured worker limit, with encrypted seed checkpoints retained on failures.
+Scheduler mode uses generated bounded streams and deterministic preparation, payload and verification delays. It isolates changes in overlap/admission; it does not represent provider throughput. Workloads are `tiny` (24 × 4KiB), `large` (12MiB +123B), and `mixed` (16 × 4KiB, two ×256KiB and 8MiB +123B). Override the tiny-file count with `--tiny-files 12` (1–64). Untimed cloud seeding and exact verified cleanup use the configured worker limit, with encrypted seed checkpoints retained on failures.
 
 Live mode requires the existing Windows DPAPI validation B2 credentials restricted to one test bucket and, for OneDrive, an explicitly reviewed account and primary drive from the validation account store:
 
