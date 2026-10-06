@@ -369,6 +369,7 @@ public sealed class TransferJobEngineTests
             Func<TransferCheckpoint,CancellationToken,Task> saveCheckpoint,IProgress<TransferProgress>? progress=null,CancellationToken cancellationToken=default)
         {
             if (SkipUploads) throw new TransferSkippedException("Injected existing destination.");
+            await source.ValidateAsync(cancellationToken);
             Uploads.AddOrUpdate(source.Entry.Id,1,(_,count)=>count+1);
             var offset=checkpoint?.AcknowledgedBytes??0; StartOffsets.Enqueue(offset);
             var half=source.Entry.Size/2;

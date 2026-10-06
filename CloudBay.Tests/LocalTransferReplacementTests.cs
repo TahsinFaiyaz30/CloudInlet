@@ -8,6 +8,19 @@ namespace CloudBay.Tests;
 [TestClass]
 public sealed class LocalTransferReplacementTests
 {
+    [DataTestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task ChangedSourceCannotCreateEvenADestinationParentOrFolder(bool folder)
+    {
+        using var fixture = new Fixture(originalExists: false);
+        var source = new ChangedSource(folder);
+        var request = fixture.Request with { RelativePath = "new-parent/changed" };
+        await Assert.ThrowsExceptionAsync<TransferSourceChangedException>(() =>
+            fixture.Endpoint.UploadAsync(request, source, null, (_, _) => Task.CompletedTask));
+        Assert.AreEqual(0, Directory.GetFileSystemEntries(fixture.DirectoryPath).Length);
+    }
+
     [TestMethod]
     public async Task KeepBothRetainsTheOriginalNameWhenNoConflictExists()
     {
@@ -212,6 +225,15 @@ public sealed class LocalTransferReplacementTests
                 return Task.CompletedTask;
             });
         public void Dispose() => Directory.Delete(DirectoryPath, recursive: true);
+    }
+
+    private sealed class ChangedSource(bool folder) : ITransferSourceFile
+    {
+        public TransferEntry Entry { get; } = new("changed-source", "changed", "saved-v1", 0, DateTimeOffset.UnixEpoch, IsFolder: folder);
+        public Task ValidateAsync(CancellationToken cancellationToken = default) =>
+            throw new TransferSourceChangedException("The selected source changed before destination creation.");
+        public Task<Stream> OpenReadAsync(long offset, long length, CancellationToken cancellationToken = default) =>
+            throw new AssertFailedException("No source payload may be opened after failed validation.");
     }
 
     private sealed class MemorySource(byte[] payload) : ITransferSourceFile

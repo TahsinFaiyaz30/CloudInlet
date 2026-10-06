@@ -42,6 +42,7 @@ public interface ITransferEndpoint
     ITransferSourceFile OpenSource(TransferEntry entry);
     Task<TransferReceipt?> ReconcileAsync(TransferUploadRequest request, ITransferSourceFile source,
         TransferCheckpoint? checkpoint, CancellationToken cancellationToken = default);
+    /// <summary>Validate the selected source before any destination mutation, including folder creation.</summary>
     Task<TransferReceipt> UploadAsync(TransferUploadRequest request, ITransferSourceFile source,
         TransferCheckpoint? checkpoint, Func<TransferCheckpoint, CancellationToken, Task> saveCheckpoint,
         IProgress<TransferProgress>? progress = null, CancellationToken cancellationToken = default);

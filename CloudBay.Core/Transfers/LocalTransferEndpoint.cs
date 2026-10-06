@@ -133,6 +133,7 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
         var requestedPath = request.RelativePath;
         request = SelectedRequest(request, checkpoint);
         var final = FullPath(request.RelativePath);
+        await source.ValidateAsync(cancellationToken).ConfigureAwait(false);
         if (source.Entry.IsFolder)
         {
             if (File.Exists(final)) throw new TransferConflictException("A file occupies the selected destination folder.");

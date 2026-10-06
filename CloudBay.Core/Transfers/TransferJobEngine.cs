@@ -162,7 +162,9 @@ public sealed class TransferJobEngine : IAsyncDisposable
                         await _transferAdmission.EnterAsync(token).ConfigureAwait(false);
                         try
                         {
-                            await file.ValidateAsync(token).ConfigureAwait(false);
+                            // The destination validates the source before mutation. A
+                            // second engine check here repeats mutable-provider metadata
+                            // requests without strengthening the adapter's later check.
                             await TransferResources.RelayTransfers.WaitAsync(token).ConfigureAwait(false);
                             try
                             {
