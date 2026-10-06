@@ -1,5 +1,6 @@
 using CloudBay.Application;
 using CloudBay.Core;
+using CloudBay.Core.Transfers;
 using Microsoft.Data.Sqlite;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -99,6 +100,54 @@ public sealed class CloudTransferControllerDisconnectTests
             await Assert.ThrowsExceptionAsync<ArgumentOutOfRangeException>(() => controller.DisconnectAsync((DisconnectMode)99));
             Assert.IsTrue(controller.Settings.IsConfigured);
             Assert.IsNull(storage.LoadAccountDisconnectIntent());
+        }
+        finally { SqliteConnection.ClearAllPools(); Directory.Delete(state, true); }
+    }
+
+    [DataTestMethod]
+    [DataRow(DisconnectMode.DisconnectOnly)]
+    [DataRow(DisconnectMode.DownloadAndDisconnect)]
+    [DataRow(DisconnectMode.RemoveLocalCopyAndDisconnect)]
+    public async Task PendingCloudBackupStopRetainsAccountRecoveryBeforeAnyDisconnectMutation(DisconnectMode mode)
+    {
+        var state = NewState();
+        try
+        {
+            var storage = Configure(state);
+            var settings = storage.LoadSettings();
+            var source = new TransferLocation("b2", settings.AccountId, settings.BucketId, "", settings.Prefix + "Documents/", "Backblaze B2 · " + settings.BucketName);
+            var destination = new TransferLocation("onedrive", "microsoft-account", "drive", "folder", "", "OneDrive");
+            var plan = new TransferJobPlan(Guid.NewGuid().ToString("N"), source, destination, TransferOperation.Move,
+                TransferConflictPolicy.Fail, [], DateTimeOffset.UtcNow);
+            storage.SaveCloudBackupStopIntent(new("Documents", Path.Combine(state, "PreviousDocuments"), plan));
+            var savedStop = File.ReadAllBytes(Path.Combine(state, "cloud-backup-stop.json"));
+            var savedVault = File.ReadAllBytes(Path.Combine(state, "credentials.dpapi"));
+            await using (var controller = new ClientController(storage, _ => Assert.Fail("No native unregister is needed."), manageStartup: false))
+            {
+                Assert.AreEqual(0, controller.CloudTransferJobs.Count, "The interrupted stop has not reached durable job creation yet.");
+                var error = await Assert.ThrowsExceptionAsync<IOException>(() => controller.DisconnectAsync(mode));
+                StringAssert.Contains(error.Message, "interrupted folder backup stop");
+                Assert.AreEqual(settings.AccountId, controller.Settings.AccountId);
+                Assert.AreEqual(settings.BucketId, controller.Settings.BucketId);
+                Assert.IsTrue(controller.Settings.IsConfigured);
+                Assert.IsNull(storage.LoadAccountDisconnectIntent(), "Reject before creating a disconnect intent that would block account reconnection.");
+                CollectionAssert.AreEqual(savedStop, File.ReadAllBytes(Path.Combine(state, "cloud-backup-stop.json")));
+                CollectionAssert.AreEqual(savedVault, File.ReadAllBytes(Path.Combine(state, "credentials.dpapi")));
+            }
+            await using (var restored = new ClientController(storage, _ => Assert.Fail(), manageStartup: false))
+            {
+                Assert.IsTrue(restored.Settings.IsConfigured);
+                Assert.AreNotEqual(ClientState.Attention, restored.Snapshot.State, "The preserved account must still validate the pending stop after restart.");
+                await restored.UpdatePreferencesAsync(new() { Theme = "Dark" });
+                Assert.IsNotNull(storage.LoadCloudBackupStopIntent());
+                // Represents successful stop recovery: its intent is cleared only
+                // after the reviewed mapping and transfer plan have been saved.
+                storage.ClearCloudBackupStopIntent();
+                await restored.DisconnectAsync(DisconnectMode.DisconnectOnly);
+                Assert.IsFalse(restored.Settings.IsConfigured);
+                Assert.IsNull(storage.LoadAccountDisconnectIntent());
+            }
+            Assert.IsFalse(Directory.Exists(settings.RootPath), "The guard must not open a native root, credentials or cloud payload.");
         }
         finally { SqliteConnection.ClearAllPools(); Directory.Delete(state, true); }
     }

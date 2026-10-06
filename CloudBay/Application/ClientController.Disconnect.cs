@@ -30,7 +30,16 @@ public sealed partial class ClientController
         if (!Enum.IsDefined(mode)) throw new ArgumentOutOfRangeException(nameof(mode));
         using var operation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
         cancellationToken = operation.Token;
-        await _operations.WaitAsync(cancellationToken);
+        // Match the cloud backup stop workflow's gate order. A new stop must not
+        // persist its account-bound intent while disconnect clears that account.
+        await _cloudBackupStopGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (_storage.LoadCloudBackupStopIntent() is not null)
+                throw new IOException("CloudBay is recovering an interrupted folder backup stop. Keep this B2 account connected and let recovery finish before disconnecting; reconnect the same account if its connection needs attention.");
+            await _operations.WaitAsync(cancellationToken);
+        }
+        catch { _cloudBackupStopGate.Release(); throw; }
         _disconnecting = true;
         try
         {
@@ -116,7 +125,7 @@ public sealed partial class ClientController
             return cleanup;
         }
         catch (Exception error) { SetStatus(new(ClientState.Attention, "Disconnect stopped: " + error.Message)); throw; }
-        finally { EndMaintenance(resume: false); _disconnecting = false; _operations.Release(); }
+        finally { EndMaintenance(resume: false); _disconnecting = false; _operations.Release(); _cloudBackupStopGate.Release(); }
     }
 
     private Task<BackupTransferOutcome> RemoveRootCopiesAsync(string path, AppSettings settings, SyncEngine engine,
