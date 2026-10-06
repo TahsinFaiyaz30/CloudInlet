@@ -21,7 +21,7 @@ Disconnect retains both paused direct-job checkpoints and native multipart sessi
 
 Cloud → cloud adapters do not create payload files or disk caches. Large cloud reads use bounded 256 KiB read-ahead blocks; Graph uploads use at most a 5 MiB fragment per active file. B2 uploads stream independent ranges through bounded 64 KiB buffers with provider-verified SHA1 trailers. Source preparation opens and primes that same range before sending B2 request headers, overlapping upload-endpoint acquisition and avoiding a source-open wait inside an already-started upload. Small Graph files are bounded to 1 MiB. The engine bounds upload admission, read-ahead, the verification queue and shared verification work. HTTP clients, refreshed authorization and exclusive B2 upload URLs are reused across files.
 
-Upload/download bandwidth budgets are shared across the application's native roots, relay transport and connected OneDrive accounts. Separate provider upload/download concurrency preferences remain effective. Increasing the worker limit changes running admission without discarding jobs. Requesting HTTP/2 permits fallback; the real B2 test negotiated HTTP/1.1.
+Upload/download bandwidth and payload-request budgets are shared across the application's native roots, relay transport and connected OneDrive accounts. **Settings → Transfers and power → Transfer performance** controls all three directions: Intelligent derives a bounded CPU/memory-aware limit, Maximum throughput allows more parallel work, and Manual specifies separate aggregate upload/download request limits. Parts and chunks consume the same directional request budget as small files. Increasing the limit changes running admission without discarding jobs; lowering it allows existing requests to finish before admitting more. Requesting HTTP/2 permits fallback; the real B2 test negotiated HTTP/1.1.
 
 Explicit local destinations may use resumable local partials. Replacing a local file first preserves that exact unchanged original through a Windows DELETE handle, then installs the partial without overwriting a late new target. Previous local files remain at the recorded `.CloudBay-transfer-<operation>.original` path; Activity reports that path. Owned `.part`/`.original` records are excluded from discovery and native sync. These files are never used for cloud destinations.
 
@@ -43,7 +43,7 @@ Move deletes after verification and final source validation. Graph deletes the s
 
 Graph guarantees `If-Match` at upload-session creation. CloudBay revalidates the destination before its final fragment; Microsoft does not document an atomic final-fragment conditional commit against later edits. That provider race is not presented as a stronger guarantee. B2 name creation similarly has no atomic create-if-absent primitive; version identities and operation receipts prevent blindly replaying uncertain uploads.
 
-## Provider evidence
+## 1.1.0 provider evidence
 
 Tests use isolated generated namespaces and existing restricted test credentials. No user payload files are read for fixture generation. Safe reports are in `artifacts/validation`; credentials stay in Windows DPAPI.
 
@@ -59,11 +59,54 @@ Tests use isolated generated namespaces and existing restricted test credentials
 - That reverse mixed run made 419 Graph requests and 68 small payload PUTs, excluding empty reservations. Its **64 × 4 KiB** files ran at **1.396 files/s within the mixed workload**. Gaps between overlapping small PUT intervals were mean **69.0 ms**, P95 **616.4 ms**, maximum **661.4 ms**. A gap between small PUTs may overlap large-file or verification work; these intervals do not measure all socket idle time. The safe report is `artifacts/validation/onedrive-personal-b2-final-report.json`.
 - A separate current-code OneDrive ↔ B2 round trip passed with **three files, four nested/empty folders and a zero-length file** (3,199 bytes in each direction). Exact hierarchy, seven unique identities, independent streamed SHA1, the metadata payload-marker check and exact-file cleanup all passed. The final readback optimization was active; OneDrive folders remain as owned test markers. Report: `artifacts/validation/onedrive-personal-nested-roundtrip.json`.
 
-The next release is prepared through the central version process. The published **1.0.0** tag and assets remain unchanged. This checkout contains a local validation build; it has not published a new tag, installer or release.
+## 1.1.1 improvements
 
-## Local build and UI validation
+The patch reuses the existing transfer pipelines and performance preferences. The audit found unnecessary worker occupancy during reconciliation, verification and Windows download installation, repeated source ranges at local checkpoint boundaries, mixed-file preparation starvation, and independent provider request limits that could exceed Manual's aggregate setting.
 
-`version.json` was advanced to **1.1.0** with `scripts/bump-version.ps1 -Component Minor -Commit`. Debug and Release solution builds completed with zero warnings or errors. The self-contained Windows x64 development payload is `artifacts/cloud-transfer-1.1.0`; it reports file version `1.1.0.0`. It is a local validation build, not a published release or installer.
+- Reconciliation and safe OneDrive preflight run ahead of payload admission. Native upload preparation has bounded small/large lanes sharing the existing hashing budget and original source handles. Slow large hashes cannot occupy all preparation lanes while tiny files wait.
+- Native downloads release their receive worker at the acknowledged payload boundary. A bounded finalization queue independently completes provider verification, installation and Windows placeholder updates. Files enter completed history only after those operations succeed; cancellation settles pending operations before staging is released.
+- Explicit local destinations keep one source range open across durable 4 MiB checkpoints. New downloads hash incoming bytes and independently compare the installed content, persisting a proof bound to the exact source identity/version/size. Verification does not download a no-SHA1 OneDrive source a second time. Validated resumed chunks contribute to that digest. Only providers with content-bound versions opt into proof reuse; legacy records and local metadata versions retain their source-content comparison. Resumed local files edited at the same size with restored timestamps are checked before installation.
+- Native B2, relay B2 and every OneDrive account share directional payload-request admission as well as speed caps. Cloud-source preparation occurs before upload admission, so a waiting source download cannot occupy the only upload request slot. Metadata requests do not occupy upload admission; streaming download responses retain their request lease until disposal.
+- Immutable B2 source evidence from current discovery removes a duplicate metadata request within its bounded cache. Independent destination checks, restored-state validation and exact-source Move checks remain fresh.
+
+Controlled timing and live provider measurements are recorded with the exact Core DLL hash by `tools/CloudBay.Benchmarks`. HTTP body lifetimes, preparation and verification intervals are instrumented separately. Overlapping interval gaps are not packet-level socket-idle measurements. Provider round trips, throttling and integrity readback remain real overhead; this patch does not promise a constant network rate or zero provider latency.
+
+Configured B2 or OneDrive accounts start in the tray on normal launches and Windows startup. First-time or incomplete setup still shows the window. Ordinary duplicate starts do not reopen a configured window; tray, notification and explicit `--show` actions retain access. Startup recovery can still surface attention.
+
+Determinate completion bars show percentage and completed/total size in Overview, Activity, tray transfers, cloud jobs and update downloads. Zero-byte cloud jobs use processed-file counts. Discovery and work with unknown totals remain indeterminate and show measured bytes/counts or status. Hashing, verification and folder operations without measured totals do not claim invented completion percentages.
+
+`version.json` was advanced from the user's pushed **1.1.0** source to **1.1.1** with `scripts/bump-version.ps1 -Component Patch -Commit`. Published versions are preserved. The patch is prepared locally; no new tag, installer or release has been published by this work.
+
+## 1.1.1 measured validation
+
+Final Debug and Release solution builds completed with zero warnings or errors. Each full test run passed **930 tests, zero failed, one opt-in live test skipped** (931 total). Results are `CloudBay.Tests/TestResults/cloud-transfer-1.1.1-final-debug.trx` and `cloud-transfer-1.1.1-final-release.trx`. Coverage includes native upload/download preparation and finalization, six-direction admission barriers, asymmetric shared request limits, cancellation/restart, corrupt checkpoints, source changes, legacy integrity fallback, restored discovery totals and first/duplicate launch policy. Separately run live benchmarks use the authorized isolated provider accounts; the opt-in test skip does not represent those benchmark results.
+
+The initial controlled comparison used three repeats per workload, identical generated delays and captured baseline/current Core DLLs. Median elapsed time changed from **0.857 to 0.656 seconds** for twelve tiny files and **2.125 to 1.804 seconds** for a mixed batch. A single large file remained effectively unchanged (**2.036 versus 2.051 seconds**). These results isolate scheduling overlap; they do not measure provider bandwidth. They preceded the final shared request limits and source-proof safeguards. `artifacts/validation/throughput-controlled-summary.json` records both exact DLL hashes and variance-sensitive interval metrics.
+
+After shared request admission and digest verification were implemented, nine real jobs completed with independent exact-identity cleanup. Tiny runs used **four × 4 KiB files**, three engine workers and three shared upload/download slots:
+
+| Direction | Elapsed seconds |
+| --- | ---: |
+| Local → B2 | 3.84 |
+| B2 → local | 2.29 |
+| Local → OneDrive | 7.25 |
+| OneDrive → local | 6.82 |
+| OneDrive → B2 | 10.69 |
+| B2 → OneDrive | 7.96 |
+
+The same stage completed mixed OneDrive → local work in **10.28 seconds**, using one source range per file. With **one shared upload slot and one shared download slot**, mixed OneDrive → B2 and B2 → OneDrive jobs completed in **19.75 and 36.02 seconds** without cross-direction admission deadlock. Mixed batches contained two × 4 KiB, two × 256 KiB and one 8 MiB + 123-byte file. These are end-to-end transfer timers including discovery, metadata requests and verification, with fixture setup/cleanup excluded. `artifacts/validation/throughput-final-1.1.1-transfer-stage-summary.json` identifies all nine reports and the captured transfer-stage Core hash (`23E5CFE3…`, commit `5a374a9`); subsequent startup/progress changes and the content-bound proof safeguard are covered below.
+
+The final code (`ea50575`, benchmark Core hash `CB1BE0F0…`) passed four more live checks with exact verified cleanup: **24 × 4 KiB local → B2 in 8.32 seconds** (2.89 files/s), four-file B2 → local in **2.39 seconds**, four-file OneDrive → local in **7.06 seconds**, and mixed OneDrive → local in **12.64 seconds**. Every download opened its source once per file. The 24-file upload reused four upload endpoints for 24 uploads. Its measured preparation/reconciliation/transfer/verification activity covered **99.43%** of elapsed time; that union includes network waits and is not a line-utilization claim. The 24 upload requests averaged **702 ms** send-to-header, while required conflict and receipt checks added separate round trips. Network variation prevents claiming these samples eliminate provider delay or establish a causal speedup over the earlier matrix. Full hashes, request counts, source ranges and interval gaps are in `artifacts/validation/throughput-post-review-1.1.1-summary.json` and its four referenced reports.
+
+Cloud-only runs retained bounded RAM payload handling and metadata-only checkpoints. Their scoped payload-marker checks and source audits found no payload staging path; these checks do not exclude operating-system paging or constitute a system-wide disk trace. Existing real restart, integrity, conflict and Move evidence is retained in the 1.1.0 section; the expanded automated suite verifies the new scheduler and proof safeguards against those failure modes.
+
+Fresh Dark and Light UI smoke suites completed on the final build. Known byte totals, incomplete discovery and zero-byte file-count progress were checked at 800 and 1300 px; Activity, tray, Overview and known/unknown update download labels were visually inspected. Manual/Maximum throughput preferences retain their existing Windows 11 layout, and native tray/context actions remain reachable. Fresh completion markers, assertions and captures are in `artifacts/ui-smoke`; the launch record is `artifacts/validation/cloud-transfer-1.1.1-ui-launch.json`. The installed application and its account state were not replaced.
+
+The self-contained Windows x64 validation build is `artifacts/cloud-transfer-1.1.1`, file version **1.1.1.0**. Keep its complete folder together. Quit any older installed CloudBay instance from its tray before starting this development copy, so the older process cannot retain the shared instance pipe. This local build does not replace the installed application or publish a release.
+
+## 1.1.0 validation baseline
+
+`version.json` was advanced to **1.1.0** with `scripts/bump-version.ps1 -Component Minor -Commit`. Debug and Release solution builds completed with zero warnings or errors. The self-contained Windows x64 development payload is `artifacts/cloud-transfer-1.1.0`; it reports file version `1.1.0.0`. That payload was used for local validation. The user subsequently published **1.1.0**; both that release and the earlier **1.0.0** remain preserved while preparing this patch.
 
 The final full Debug and Release test runs each passed **810 tests, zero failed, one opt-in live OneDrive test skipped** (811 total). Results are `CloudBay.Tests/TestResults/cloud-transfer-1.1.0-final-debug.trx` and `cloud-transfer-1.1.0-final-release.trx`. The separately authorized real OneDrive/B2 acceptance passed **one live test, zero failed**, recorded in `live-personal-onedrive-b2-final-primer.trx`; its 13 min 26 s includes fixture creation, recovery/fault assertions and cleanup, excluded from the reported transfer timers. The final duplicate-readback fix passed all 49 focused Graph protocol cases and the separate current-code nested live proof. A native multipart disconnect/reconnect regression also proves that the byte-identical journal and existing provider session survive disconnect, restoring the 200,000,000-byte acknowledged baseline and uploading only the final part.
 
