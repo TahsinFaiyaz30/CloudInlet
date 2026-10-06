@@ -355,6 +355,96 @@ public sealed class OneDriveTransferTests
         Assert.AreEqual(1, provider.Downloads);
     }
 
+    [DataTestMethod]
+    [DataRow(true, false)]
+    [DataRow(false, false)]
+    [DataRow(true, true)]
+    [DataRow(false, true)]
+    public async Task StreamingVerificationUsesExactlyTwoFreshMetadataChecksAndRejectsFinalVersionChanges(bool useSha1, bool changedAfterRead)
+    {
+        var bytes = "independently verified destination"u8.ToArray();
+        var source = new MemorySource(bytes, omitSha1: !useSha1);
+        var events = new List<string>();
+        var metadata = 0;
+        using var http = new HttpClient(new DelegateHandler((request, ct) =>
+        {
+            Assert.AreEqual(HttpMethod.Get, request.Method);
+            if (request.RequestUri!.Host == "graph.microsoft.com")
+            {
+                metadata++;
+                events.Add("metadata" + metadata);
+                Assert.AreEqual("Bearer", request.Headers.Authorization?.Scheme);
+                Assert.AreEqual("/v1.0/drives/drive/items/destination", request.RequestUri.AbsolutePath);
+                return Task.FromResult(Json(Item("destination", "file.bin", bytes.Length,
+                    changedAfterRead && metadata == 2 ? "changed-after-read" : "version", false,
+                    downloadUrl: "https://download.example.test/destination")));
+            }
+            events.Add("content");
+            Assert.IsNull(request.Headers.Authorization, "Signed content reads must not receive Graph bearer credentials.");
+            var range = request.Headers.Range!.Ranges.Single();
+            Assert.AreEqual(0L, range.From);
+            Assert.AreEqual(bytes.LongLength - 1, range.To);
+            var response = new HttpResponseMessage(HttpStatusCode.PartialContent) { Content = new ByteArrayContent(bytes) };
+            response.Content.Headers.ContentRange = new(0, bytes.LongLength - 1, bytes.LongLength);
+            return Task.FromResult(response);
+        }));
+        var endpoint = new OneDriveTransferEndpoint(Client(http), Location);
+        var receipt = new TransferReceipt("destination", "file.bin", "version", bytes.Length, source.Entry.Sha1, "operation");
+        if (changedAfterRead)
+            await Assert.ThrowsExceptionAsync<TransferSourceChangedException>(() => endpoint.VerifyAsync(receipt, source));
+        else await endpoint.VerifyAsync(receipt, source);
+        CollectionAssert.AreEqual(new[] { "metadata1", "content", "metadata2" }, events);
+        Assert.AreEqual(2, metadata, "Fresh metadata must bracket streaming verification without a duplicate pre-read lookup.");
+        Assert.AreEqual(useSha1 ? 0 : 1, source.Reads.Count);
+        Assert.AreEqual(2, source.Validations, "Both source guards must remain fresh around the content comparison.");
+    }
+
+    [DataTestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task VerificationRefreshesExpiredSignedUrlsOnlyForTheExactSavedVersion(bool changedDuringRefresh)
+    {
+        var bytes = "signed URL refresh verification"u8.ToArray();
+        var source = new MemorySource(bytes);
+        var events = new List<string>();
+        var metadata = 0;
+        using var http = new HttpClient(new DelegateHandler((request, ct) =>
+        {
+            Assert.AreEqual(HttpMethod.Get, request.Method);
+            if (request.RequestUri!.Host == "graph.microsoft.com")
+            {
+                metadata++;
+                events.Add("metadata" + metadata);
+                return Task.FromResult(Json(Item("destination", "file.bin", bytes.Length,
+                    changedDuringRefresh && metadata >= 2 ? "changed-before-refreshed-read" : "version", false,
+                    downloadUrl: "https://download.example.test/" + (metadata == 1 ? "expired" : "refreshed"))));
+            }
+            Assert.IsNull(request.Headers.Authorization);
+            events.Add(request.RequestUri.AbsolutePath.TrimStart('/'));
+            if (request.RequestUri.AbsolutePath == "/expired")
+                return Task.FromResult(Json(new { error = new { code = "expired" } }, HttpStatusCode.Forbidden));
+            var range = request.Headers.Range!.Ranges.Single();
+            Assert.AreEqual(0L, range.From);
+            Assert.AreEqual(bytes.LongLength - 1, range.To);
+            var response = new HttpResponseMessage(HttpStatusCode.PartialContent) { Content = new ByteArrayContent(bytes) };
+            response.Content.Headers.ContentRange = new(0, bytes.LongLength - 1, bytes.LongLength);
+            return Task.FromResult(response);
+        }));
+        var endpoint = new OneDriveTransferEndpoint(Client(http), Location);
+        var receipt = new TransferReceipt("destination", "file.bin", "version", bytes.Length, source.Entry.Sha1, "operation");
+        if (changedDuringRefresh)
+        {
+            await Assert.ThrowsExceptionAsync<TransferSourceChangedException>(() => endpoint.VerifyAsync(receipt, source));
+            CollectionAssert.AreEqual(new[] { "metadata1", "expired", "metadata2" }, events);
+        }
+        else
+        {
+            await endpoint.VerifyAsync(receipt, source);
+            CollectionAssert.AreEqual(new[] { "metadata1", "expired", "metadata2", "refreshed", "metadata3" }, events);
+        }
+        Assert.AreEqual(0, source.Reads.Count, "The acknowledged upload digest still avoids an unnecessary source payload reread.");
+    }
+
     [TestMethod]
     public async Task LargeFileKeepsOneContinuousSourceRangeAcrossSequentialFragments()
     {
@@ -853,12 +943,13 @@ public sealed class OneDriveTransferTests
         public TransferEntry Entry { get; } = new("source", "file.bin", "v1", bytes.LongLength, DateTimeOffset.UnixEpoch,
             omitSha1 ? null : Convert.ToHexString(SHA1.HashData(bytes)).ToLowerInvariant());
         public List<(long Offset, long Length)> Reads { get; } = [];
+        public int Validations { get; private set; }
         public Task<Stream> OpenReadAsync(long offset, long length, CancellationToken cancellationToken = default)
         {
             Reads.Add((offset, length));
             return Task.FromResult<Stream>(new MemoryStream(bytes, (int)offset, (int)length, writable: false));
         }
-        public Task ValidateAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ValidateAsync(CancellationToken cancellationToken = default) { Validations++; return Task.CompletedTask; }
     }
     private sealed class UploadProvider : IDisposable
     {

@@ -379,7 +379,7 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
         }
         else if (ValidSha1(expectedHash))
         {
-            await using var destination = await _client.OpenReadAsync(Location.ContainerId, current, 0, current.Size, cancellationToken);
+            await using var destination = await _client.OpenValidatedReadAsync(Location.ContainerId, current, current, 0, current.Size, cancellationToken);
             var actualHash = Convert.ToHexString(await SHA1.HashDataAsync(destination, cancellationToken));
             if (!expectedHash!.Equals(actualHash, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("The OneDrive destination failed independent streaming SHA-1 content verification.");
@@ -389,7 +389,7 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
             // Graph commonly exposes QuickXorHash rather than a cryptographic hash on business drives.
             // In that case compare independent streaming SHA-256 reads through bounded hash buffers.
             await using var original = await source.OpenReadAsync(0, source.Entry.Size, cancellationToken);
-            await using var destination = await _client.OpenReadAsync(Location.ContainerId, current, 0, current.Size, cancellationToken);
+            await using var destination = await _client.OpenValidatedReadAsync(Location.ContainerId, current, current, 0, current.Size, cancellationToken);
             var sourceHash = SHA256.HashDataAsync(original, cancellationToken).AsTask();
             var targetHash = SHA256.HashDataAsync(destination, cancellationToken).AsTask();
             await Task.WhenAll(sourceHash, targetHash);
