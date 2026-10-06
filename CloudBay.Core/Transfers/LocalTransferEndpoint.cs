@@ -198,10 +198,10 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
         destination.SetLength(offset);
         var data = new Dictionary<string, string> { ["destinationVersion"] = expectedVersion, ["destinationId"] = expectedId, ["relativePath"] = request.RelativePath,
             ["operation"] = request.OperationId, ["chunks"] = JsonSerializer.Serialize(hashes) };
-        var legacyPrefix = offset > 0 && savedProof is null;
-        // Older checkpoints have range hashes but no explicit source binding.
-        // Keep them unbound until the full source fallback has verified the copy.
-        if (!legacyPrefix) data["sourceProof"] = SerializeSourceProof(source.Entry, null);
+        var unverifiedPrefix = offset > 0 && (savedProof is null || !source.HasContentBoundVersion);
+        // A legacy prefix or a source whose version only describes file metadata
+        // needs a full source comparison before resumed bytes establish a digest proof.
+        if (!unverifiedPrefix) data["sourceProof"] = SerializeSourceProof(source.Entry, null);
         data["requestedPath"] = checkpoint?.Data?.GetValueOrDefault("requestedPath") ?? requestedPath;
         if (expectedVersion != "absent") data["recoveryRelativePath"] = RecoveryRelativePath(request);
         await saveCheckpoint(new("local", request.OperationId, offset, data), cancellationToken);
@@ -247,7 +247,7 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
             if (savedProof?.Sha1 is not null && !sha1.Equals(savedProof.Sha1, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("The saved local copy differs from its source digest proof.");
             if (source.Entry.Sha1 is not null && !source.Entry.Sha1.Equals(sha1, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("The local copy failed the source checksum.");
-            if (legacyPrefix && source.Entry.Sha1 is null)
+            if (unverifiedPrefix && source.Entry.Sha1 is null)
             {
                 await using var legacySource = await source.OpenReadAsync(0, source.Entry.Size, cancellationToken).ConfigureAwait(false);
                 var legacySha1 = Convert.ToHexString(await SHA1.HashDataAsync(legacySource, cancellationToken));
@@ -456,7 +456,7 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
             if (!actual.Equals(source.Entry.Sha1, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("The local destination content differs from the source checksum.");
             return;
         }
-        if (proof is not null) return;
+        if (proof is not null && source.HasContentBoundVersion) return;
         await using var input = await source.OpenReadAsync(0, source.Entry.Size, cancellationToken);
         var expected = Convert.ToHexString(await SHA1.HashDataAsync(input, cancellationToken));
         if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("The local destination content differs from the source.");

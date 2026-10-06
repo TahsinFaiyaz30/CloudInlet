@@ -292,6 +292,7 @@ internal static class CloudRelayAcceptance
     {
         public ConcurrentQueue<long> Offsets { get; } = new();
         public TransferEntry Entry => inner.Entry;
+        public bool HasContentBoundVersion => inner.HasContentBoundVersion;
         public Task ValidateAsync(CancellationToken cancellationToken = default) => inner.ValidateAsync(cancellationToken);
         public Task<Stream> OpenReadAsync(long offset, long length, CancellationToken cancellationToken = default)
         { Offsets.Enqueue(offset); return inner.OpenReadAsync(offset, length, cancellationToken); }

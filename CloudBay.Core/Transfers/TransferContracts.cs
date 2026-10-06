@@ -27,6 +27,11 @@ public sealed record TransferUploadRequest(string OperationId, string RelativePa
 public interface ITransferSourceFile
 {
     TransferEntry Entry { get; }
+    /// <summary>
+    /// True only when the provider binds Entry.Version to the selected file's content and
+    /// validates that binding on reads. Local size/timestamp versions do not provide this proof.
+    /// </summary>
+    bool HasContentBoundVersion => false;
     Task<Stream> OpenReadAsync(long offset, long length, CancellationToken cancellationToken = default);
     Task ValidateAsync(CancellationToken cancellationToken = default);
 }

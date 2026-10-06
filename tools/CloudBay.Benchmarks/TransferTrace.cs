@@ -109,6 +109,7 @@ internal sealed class TracedEndpoint(ITransferEndpoint endpoint, TransferTrace t
 internal sealed class TracedSource(ITransferSourceFile source, TransferTrace trace) : ITransferSourceFile
 {
     public TransferEntry Entry => source.Entry;
+    public bool HasContentBoundVersion => source.HasContentBoundVersion;
     public async Task ValidateAsync(CancellationToken cancellationToken = default)
     { using var span = trace.Span(Entry.RelativePath, "source-validate", TraceContext.Value.Phase); await source.ValidateAsync(cancellationToken); }
     public async Task<Stream> OpenReadAsync(long offset, long length, CancellationToken cancellationToken = default)

@@ -401,6 +401,7 @@ public sealed class TransferJobEngine : IAsyncDisposable
     private sealed class ReadAheadSource(ITransferSourceFile source) : ITransferSourceFile
     {
         public TransferEntry Entry => source.Entry;
+        public bool HasContentBoundVersion => source.HasContentBoundVersion;
         public Task ValidateAsync(CancellationToken cancellationToken = default) => source.ValidateAsync(cancellationToken);
         public async Task<Stream> OpenReadAsync(long offset, long length, CancellationToken cancellationToken = default)
         {

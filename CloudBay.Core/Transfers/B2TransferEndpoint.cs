@@ -207,6 +207,7 @@ public sealed class B2TransferEndpoint : ITransferEndpoint
         private readonly object _gate = new();
         private Task? _validation = discovered ? Task.CompletedTask : null;
         public TransferEntry Entry => entry;
+        public bool HasContentBoundVersion => true;
         public Task<Stream> OpenReadAsync(long offset, long length, CancellationToken cancellationToken = default) =>
             store.OpenTransferReadAsync(file, offset, length, cancellationToken);
         public async Task ValidateAsync(CancellationToken cancellationToken = default)

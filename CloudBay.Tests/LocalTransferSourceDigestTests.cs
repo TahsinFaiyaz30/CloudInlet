@@ -1,7 +1,12 @@
+using System.Net;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CloudBay.Core;
+using CloudBay.Core.B2;
+using CloudBay.Core.OneDrive;
 using CloudBay.Core.Transfers;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -46,6 +51,107 @@ public sealed class LocalTransferSourceDigestTests
         await ((ITransferEndpoint)restarted).VerifyReceiptAsync(durableReceipt, restartedSource);
         CollectionAssert.AreEqual(new[] { (4 * 1024 * 1024L, fixture.Source.Entry.Size - 4 * 1024 * 1024L) }, restartedSource.Ranges.ToArray());
         Assert.AreEqual(fixture.PayloadHash, receipt.Sha1);
+        CollectionAssert.AreEqual(fixture.Payload, File.ReadAllBytes(fixture.Final));
+    }
+
+    [TestMethod]
+    public async Task RealLocalSourceMetadataPreservingEditCannotVerifyAHybridResumedCopy()
+    {
+        using var fixture = new Fixture(5 * 1024 * 1024 + 27);
+        var sourceFolder = Path.Combine(fixture.DirectoryPath, "source");
+        Directory.CreateDirectory(sourceFolder);
+        var sourcePath = Path.Combine(sourceFolder, "item.bin");
+        await File.WriteAllBytesAsync(sourcePath, fixture.Payload);
+        var sourceEndpoint = new LocalTransferEndpoint(LocalTransferEndpoint.ForFolder(sourceFolder));
+        var entry = (await sourceEndpoint.DiscoverAsync()).Entries.Single();
+        var source = sourceEndpoint.OpenSource(entry);
+        Assert.IsFalse(source.HasContentBoundVersion);
+        Assert.IsNull(entry.Sha1);
+        TransferCheckpoint? saved = null;
+        await Assert.ThrowsExceptionAsync<OperationCanceledException>(() => fixture.Endpoint.UploadAsync(fixture.Request, source, null,
+            (checkpoint, _) =>
+            {
+                saved = checkpoint;
+                if (checkpoint.AcknowledgedBytes == 4 * 1024 * 1024L) throw new OperationCanceledException();
+                return Task.CompletedTask;
+            }));
+
+        var modified = File.GetLastWriteTimeUtc(sourcePath);
+        var changed = fixture.Payload.ToArray();
+        changed[0] ^= 0xff;
+        changed[4 * 1024 * 1024] ^= 0xff;
+        using (var file = new FileStream(sourcePath, FileMode.Open, FileAccess.Write, FileShare.None))
+        { await file.WriteAsync(changed); file.Flush(true); }
+        File.SetLastWriteTimeUtc(sourcePath, modified);
+        var rediscovered = (await sourceEndpoint.DiscoverAsync()).Entries.Single();
+        Assert.AreEqual(entry.Id, rediscovered.Id);
+        Assert.AreEqual(entry.Version, rediscovered.Version, "Local metadata can remain unchanged while the contents change.");
+        var restartedSource = sourceEndpoint.OpenSource(entry);
+        await restartedSource.ValidateAsync();
+        TransferCheckpoint? latest = null;
+        await Assert.ThrowsExceptionAsync<InvalidDataException>(() => fixture.Endpoint.UploadAsync(fixture.Request, restartedSource,
+            RoundTrip(saved!), (checkpoint, _) => { latest = checkpoint; return Task.CompletedTask; }));
+        Assert.IsFalse(File.Exists(fixture.Final), "A mixed old prefix and new suffix must not become an installed verified copy.");
+        Assert.IsTrue(File.Exists(fixture.Partial));
+        Assert.IsFalse(latest!.Data!.ContainsKey("committing"));
+        CollectionAssert.AreEqual(changed, File.ReadAllBytes(sourcePath));
+    }
+
+    [TestMethod]
+    public async Task UntrustedVersionProofRetainsFullSourceComparison()
+    {
+        using var fixture = new Fixture(499);
+        var receipt = await fixture.UploadAsync();
+        var source = new MemorySource(fixture.Payload, fixture.Source.Entry) { HasContentBoundVersion = false };
+        await fixture.Endpoint.VerifyAsync(receipt, source);
+        Assert.AreEqual(1, source.Ranges.Count);
+        var changed = fixture.Payload.ToArray(); changed[0] ^= 0xff;
+        var changedSource = new MemorySource(changed, fixture.Source.Entry) { HasContentBoundVersion = false };
+        await Assert.ThrowsExceptionAsync<InvalidDataException>(() => fixture.Endpoint.VerifyAsync(receipt, changedSource));
+        Assert.AreEqual(1, changedSource.Ranges.Count);
+    }
+
+    [TestMethod]
+    public async Task SourceChecksumStillVerifiesWithoutAContentBoundVersionOrSecondRead()
+    {
+        using var fixture = new Fixture(499);
+        var receipt = await fixture.UploadAsync();
+        var source = new MemorySource(fixture.Payload, fixture.Source.Entry with { Sha1 = fixture.PayloadHash })
+        { HasContentBoundVersion = false, ForbidReads = true };
+        await fixture.Endpoint.VerifyAsync(receipt, source);
+        Assert.AreEqual(0, source.Ranges.Count);
+    }
+
+    [DataTestMethod]
+    [DataRow("b2")]
+    [DataRow("onedrive")]
+    public async Task RealProviderSourcesKeepOnePayloadReadWithoutProviderChecksums(string provider)
+    {
+        using var fixture = new Fixture(631);
+        using var handler = new ProviderSourceHandler(fixture.Payload);
+        using var http = new HttpClient(handler);
+        using var b2 = provider == "b2" ? new B2CloudStore(handler) : null;
+        ITransferSourceFile source;
+        if (b2 is not null)
+        {
+            await b2.ConnectAsync(new("test-key", "test-value"));
+            source = new B2TransferEndpoint(b2, new("b2", "account", "bucket", "", "", "B2 source"))
+                .OpenSource(new("file-v1", "item.bin", "file-v1", fixture.Payload.Length, DateTimeOffset.UnixEpoch));
+        }
+        else
+        {
+            var graph = new OneDriveClient(new("00000000-0000-0000-0000-000000000001", tokens:
+                new("test-token", "test-refresh", DateTimeOffset.UtcNow.AddHours(1), "Files.ReadWrite"), http: http), http);
+            source = new OneDriveTransferEndpoint(graph, new("onedrive", "account", "drive", "root", "", "Graph source"))
+                .OpenSource(new("file-id", "item.bin", "etag-v1", fixture.Payload.Length, DateTimeOffset.UnixEpoch));
+        }
+        Assert.IsTrue(source.HasContentBoundVersion);
+        Assert.IsNull(source.Entry.Sha1);
+        var receipt = await fixture.Endpoint.UploadAsync(fixture.Request, source, null, (_, _) => Task.CompletedTask);
+        await source.ValidateAsync();
+        await fixture.Endpoint.VerifyAsync(receipt, source);
+        await source.ValidateAsync();
+        Assert.AreEqual(1, handler.PayloadReads, "Provider version proof must retain the single cloud payload pass.");
         CollectionAssert.AreEqual(fixture.Payload, File.ReadAllBytes(fixture.Final));
     }
 
@@ -383,6 +489,7 @@ public sealed class LocalTransferSourceDigestTests
     {
         private readonly byte[] _payload;
         public TransferEntry Entry { get; }
+        public bool HasContentBoundVersion { get; init; } = true;
         public List<(long Offset, long Length)> Ranges { get; } = [];
         public bool ForbidReads { get; set; }
         public int ChangeOnValidation { get; set; } = int.MaxValue;
@@ -418,6 +525,51 @@ public sealed class LocalTransferSourceDigestTests
             { if (disposing && Interlocked.Exchange(ref _disposed, 1) == 0) onDispose(); base.Dispose(disposing); }
             public override ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
         }
+    }
+
+    private sealed class ProviderSourceHandler(byte[] payload) : HttpMessageHandler
+    {
+        public int PayloadReads { get; private set; }
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            var uri = request.RequestUri!;
+            if (uri.Host is "b2-download.invalid" or "cdn.invalid")
+            {
+                PayloadReads++;
+                var content = new ByteArrayContent(payload);
+                var partial = request.Headers.Range is not null;
+                if (partial) content.Headers.ContentRange = new ContentRangeHeaderValue(0, payload.Length - 1, payload.Length);
+                var response = new HttpResponseMessage(partial ? HttpStatusCode.PartialContent : HttpStatusCode.OK) { Content = content };
+                response.Headers.TryAddWithoutValidation("X-Bz-File-Id", "file-v1");
+                response.Headers.TryAddWithoutValidation("X-Bz-File-Name", "item.bin");
+                response.Headers.TryAddWithoutValidation("X-Bz-Content-Sha1", "none");
+                return Task.FromResult(response);
+            }
+            if (uri.Host == "graph.microsoft.com") return Json(new Dictionary<string, object?>
+            {
+                ["id"] = "file-id", ["name"] = "item.bin", ["size"] = payload.Length, ["eTag"] = "etag-v1",
+                ["lastModifiedDateTime"] = DateTimeOffset.UnixEpoch, ["file"] = new { hashes = new { } },
+                ["@microsoft.graph.downloadUrl"] = "https://cdn.invalid/item"
+            });
+            if (uri.AbsolutePath.EndsWith("b2_authorize_account", StringComparison.Ordinal)) return Json(new
+            {
+                accountId = "account", authorizationToken = "test-token", apiInfo = new { storageApi = new
+                {
+                    apiUrl = "https://b2-api.invalid", downloadUrl = "https://b2-download.invalid", absoluteMinimumPartSize = 5_000_000,
+                    recommendedPartSize = 5_000_000, allowed = new { buckets = (object?)null, namePrefix = (string?)null,
+                        capabilities = new[] { "listFiles", "readFiles" } }
+                } }
+            });
+            if (uri.AbsolutePath.EndsWith("b2_get_file_info", StringComparison.Ordinal)) return Json(new
+            {
+                accountId = "account", bucketId = "bucket", fileId = "file-v1", fileName = "item.bin", contentLength = payload.Length,
+                contentSha1 = "none", action = "upload", uploadTimestamp = 0, fileInfo = new { }
+            });
+            throw new AssertFailedException("Unexpected isolated provider request: " + uri.AbsolutePath);
+        }
+        private static Task<HttpResponseMessage> Json(object value) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        { Content = new StringContent(JsonSerializer.Serialize(value), Encoding.UTF8, "application/json") });
     }
 
     private sealed class Protector : ITransferCheckpointProtector

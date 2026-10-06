@@ -552,6 +552,7 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
         private readonly object _gate = new();
         private (OneDriveItem Item, long ValidatedAt)? _prepared;
         public TransferEntry Entry { get; } = entry;
+        public bool HasContentBoundVersion => true;
         public Task<Stream> OpenReadAsync(long offset, long length, CancellationToken cancellationToken = default)
         {
             (OneDriveItem Item, long ValidatedAt)? prepared;
