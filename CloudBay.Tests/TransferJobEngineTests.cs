@@ -12,6 +12,36 @@ namespace CloudBay.Tests;
 public sealed class TransferJobEngineTests
 {
     [TestMethod]
+    public async Task SelectedRenameReceiptSurvivesPauseAndRestartWithoutUploadingAgain()
+    {
+        await using var fixture = new Fixture(1, conflicts: TransferConflictPolicy.Rename);
+        fixture.Source.OnePage = true;
+        fixture.Destination.ReturnRenamedReceipt = true;
+        fixture.Destination.HoldVerification = true;
+        var work = fixture.Engine.RunAsync(fixture.Plan.Id);
+        await fixture.Destination.VerificationEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await fixture.Engine.PauseAsync(fixture.Plan.Id); await work;
+        await fixture.RestartAsync();
+        fixture.Destination.HoldVerification = false;
+        await fixture.Engine.ResumeAsync(fixture.Plan.Id).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.AreEqual(TransferJobState.Completed, fixture.Engine.Snapshots().Single().State);
+        Assert.AreEqual(1, fixture.Destination.Uploads["first"]);
+        Assert.AreEqual(1, fixture.Source.Pages.Count);
+    }
+
+    [TestMethod]
+    public async Task RenamePolicyRejectsAnUnrelatedReceiptBeforeVerificationOrMove()
+    {
+        await using var fixture = new Fixture(1, TransferOperation.Move, TransferConflictPolicy.Rename);
+        fixture.Source.OnePage = true;
+        fixture.Destination.UnexpectedReceiptPath = "unrelated.txt";
+        await fixture.Engine.RunAsync(fixture.Plan.Id).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.AreEqual(TransferJobState.Attention, fixture.Engine.Snapshots().Single().State);
+        Assert.IsFalse(fixture.Destination.VerificationEntered.Task.IsCompleted);
+        Assert.AreEqual(0, fixture.Source.Deleted.Count);
+    }
+
+    [TestMethod]
     public async Task DiscoveryAndVerifiedCountersResumeWithoutRecountingOrReplayingCompletedFiles()
     {
         await using var fixture = new Fixture(1);
@@ -285,11 +315,11 @@ public sealed class TransferJobEngineTests
         public TransferJobEngine Engine { get; private set; }
         public TransferJobPlan Plan { get; }
         private readonly int _workers;
-        public Fixture(int workers, TransferOperation operation = TransferOperation.Copy)
+        public Fixture(int workers, TransferOperation operation = TransferOperation.Copy, TransferConflictPolicy conflicts = TransferConflictPolicy.Fail)
         {
             _workers = workers; Directory.CreateDirectory(DirectoryPath);
             Engine = CreateEngine();
-            Plan = new(Guid.NewGuid().ToString("N"), Source.Location, Destination.Location, operation, TransferConflictPolicy.Fail, [], DateTimeOffset.UtcNow);
+            Plan = new(Guid.NewGuid().ToString("N"), Source.Location, Destination.Location, operation, conflicts, [], DateTimeOffset.UtcNow);
             Engine.CreateAsync(Plan).GetAwaiter().GetResult();
         }
         private TransferJobEngine CreateEngine() => new(new(Database, new ProtectedCheckpoint()), location => location.Provider == "onedrive" ? Source : Destination, _workers);
@@ -308,6 +338,8 @@ public sealed class TransferJobEngineTests
         public TransferLocation Location { get; } = location;
         public byte[] Payload = "abcdef"u8.ToArray();
         public bool OnePage, HoldSecondPage, HoldAfterCheckpoint, HoldVerification, BadIntegrity, Changed, LoseDeleteAcknowledgment, ReplayFirstOnSecondPage, SkipUploads;
+        public bool ReturnRenamedReceipt;
+        public string? UnexpectedReceiptPath;
         public List<string?> Pages { get; } = [];
         public ConcurrentDictionary<string,int> Uploads { get; } = new();
         public ConcurrentDictionary<string,bool> Deleted { get; } = new();
@@ -349,7 +381,9 @@ public sealed class TransferJobEngineTests
                 if (HoldAfterCheckpoint) await Task.Delay(Timeout.Infinite,cancellationToken);
             }
             progress?.Report(new(source.Entry.Size,source.Entry.Size)); OnUploaded?.Invoke();
-            return new("receipt-"+source.Entry.Id,request.RelativePath,"destination-version",source.Entry.Size,source.Entry.Sha1,request.OperationId);
+            var target = UnexpectedReceiptPath ?? (ReturnRenamedReceipt
+                ? CloudBay.Core.Sync.PathRules.ConflictFileName(request.RelativePath, " (CloudBay " + request.OperationId[..12] + ")") : request.RelativePath);
+            return new("receipt-"+source.Entry.Id,target,"destination-version",source.Entry.Size,source.Entry.Sha1,request.OperationId);
         }
         public async Task VerifyAsync(TransferReceipt receipt,ITransferSourceFile source,CancellationToken cancellationToken=default)
         {

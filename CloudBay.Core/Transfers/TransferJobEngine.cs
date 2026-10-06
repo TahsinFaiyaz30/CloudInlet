@@ -152,7 +152,8 @@ public sealed class TransferJobEngine : IAsyncDisposable
                         if (item.Receipt is not null)
                         {
                             TransferValidation.ValidateReceipt(item.Entry, item.Receipt, request.OperationId);
-                            if (item.Receipt.RelativePath != request.RelativePath) throw new InvalidDataException("The saved receipt points to a different destination path.");
+                            if (!TransferConflictNames.IsAllowedTarget(request, item.Receipt.RelativePath, job.Plan.Destination.Provider))
+                                throw new InvalidDataException("The saved receipt points to a different destination path.");
                             live.State = TransferItemState.Verifying;
                             await verification.Writer.WriteAsync(new(item, file), token).ConfigureAwait(false);
                             continue;
@@ -179,7 +180,8 @@ public sealed class TransferJobEngine : IAsyncDisposable
                             finally { TransferResources.RelayTransfers.Release(); }
                         }
                         finally { _transferAdmission.Exit(); }
-                        if (receipt.RelativePath != request.RelativePath) throw new InvalidDataException("The destination created an unexpected file name.");
+                        if (!TransferConflictNames.IsAllowedTarget(request, receipt.RelativePath, job.Plan.Destination.Provider))
+                            throw new InvalidDataException("The destination created an unexpected file name.");
                         // An acknowledged receipt is durable before source revalidation or expensive verification.
                         _journal.SaveReceipt(jobId, item.Entry, receipt, request.OperationId);
                         live.Bytes = live.AcknowledgedBytes = item.Entry.Size;
