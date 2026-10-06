@@ -30,6 +30,7 @@ public sealed class ClientViewModel : INotifyPropertyChanged
     public bool HasActivity { get; private set; }
     public bool IsConfigured { get; private set; }
     public bool IsProgressVisible { get; private set; }
+    public bool IsProgressIndeterminate { get; private set; }
     public double Progress { get; private set; }
     public string ProgressLabel { get; private set; } = "";
     public string StorageSummary { get; private set; } = "";
@@ -98,8 +99,10 @@ public sealed class ClientViewModel : INotifyPropertyChanged
         BucketLabel = IsConfigured ? settings.BucketName : "Backblaze B2";
         PauseLabel = snapshot.State == ClientState.Paused ? "Resume syncing" : "Pause syncing";
         IsProgressVisible = snapshot.State is ClientState.Syncing or ClientState.Connecting;
-        Progress = snapshot.TransferTotalBytes > 0 ? Math.Clamp(100d * snapshot.TransferredBytes / snapshot.TransferTotalBytes, 0, 100) : 0;
-        ProgressLabel = snapshot.TransferTotalBytes > 0 ? $"{FormatSize(snapshot.TransferredBytes)} of {FormatSize(snapshot.TransferTotalBytes)}" : "";
+        var progress = ProgressPresentation.ForSnapshot(snapshot);
+        Progress = progress.Value;
+        ProgressLabel = progress.Label;
+        IsProgressIndeterminate = progress.IsIndeterminate;
         TransferSpeedSummary = snapshot.State != ClientState.Paused ? string.Join(" · ", new[]
         {
             snapshot.UploadBytesPerSecond > 0 ? $"↑ {FormatSpeed(snapshot.UploadBytesPerSecond)}" : "",
@@ -248,14 +251,7 @@ public sealed class ClientViewModel : INotifyPropertyChanged
         Refresh();
     }
 
-    public static string FormatSize(long bytes)
-    {
-        string[] units = ["B", "KiB", "MiB", "GiB", "TiB"];
-        var value = Math.Max(0, bytes) * 1d;
-        var unit = 0;
-        while (value >= 1024 && unit < units.Length - 1) { value /= 1024; unit++; }
-        return $"{value:0.##} {units[unit]}";
-    }
+    public static string FormatSize(long bytes) => ProgressPresentation.FormatSize(bytes);
 
     public static string FormatSpeed(double bytesPerSecond)
     {
@@ -283,6 +279,8 @@ public sealed class ActivityItem(ActivityEvent activity) : IActivityActionRow
     public string SpeedText => "";
     public Microsoft.UI.Xaml.Visibility SpeedVisibility => Microsoft.UI.Xaml.Visibility.Collapsed;
     public Microsoft.UI.Xaml.Visibility ProgressVisibility => Microsoft.UI.Xaml.Visibility.Collapsed;
+    public Microsoft.UI.Xaml.Visibility ProgressLabelVisibility => Microsoft.UI.Xaml.Visibility.Collapsed;
+    public string ProgressLabel => "";
     public double Progress => 0;
     public bool IsIndeterminate => false;
     public string Location => Path;
@@ -345,19 +343,21 @@ public sealed class TransferItem : INotifyPropertyChanged, IActivityActionRow
         TransferPhase.Paused => _transfer.Kind == ActivityKind.Download ? "Download paused" : "Upload paused",
         _ => "Transferring"
     };
-    public string Summary => _transfer.TotalBytes > 0 && _transfer.Phase is TransferPhase.Uploading or TransferPhase.Downloading
-        ? $"{Phase} · {ClientViewModel.FormatSize(_transfer.Bytes)} of {ClientViewModel.FormatSize(_transfer.TotalBytes)}"
-        : _transfer.TotalBytes > 0 ? $"{Phase} · {ClientViewModel.FormatSize(_transfer.TotalBytes)}" : Phase;
+    public string Summary => _transfer.TotalBytes > 0 && IsIndeterminate
+        ? $"{Phase} · {ClientViewModel.FormatSize(_transfer.TotalBytes)}" : Phase;
+    public string ProgressLabel => ProgressPresentation.ForTransfer(_transfer).Label;
+    public Microsoft.UI.Xaml.Visibility ProgressLabelVisibility => ProgressLabel.Length > 0 && _transfer.Phase != TransferPhase.Queued
+        ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
     public string SpeedText => _transfer.Phase is TransferPhase.Uploading or TransferPhase.Downloading &&
         _transfer.BytesPerSecond > 0 ? ClientViewModel.FormatSpeed(_transfer.BytesPerSecond) : "";
     public Microsoft.UI.Xaml.Visibility SpeedVisibility => SpeedText.Length > 0 ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
-    public double Progress => _transfer.TotalBytes > 0 ? Math.Clamp(100d * _transfer.Bytes / _transfer.TotalBytes, 0, 100) : 0;
-    public bool IsIndeterminate => _transfer.TotalBytes <= 0 || _transfer.Phase is TransferPhase.Hashing or TransferPhase.Verifying or TransferPhase.Retrying;
+    public double Progress => ProgressPresentation.ForTransfer(_transfer).Value;
+    public bool IsIndeterminate => ProgressPresentation.ForTransfer(_transfer).IsIndeterminate;
     public Microsoft.UI.Xaml.Visibility ProgressVisibility => _transfer.Phase == TransferPhase.Queued ? Microsoft.UI.Xaml.Visibility.Collapsed : Microsoft.UI.Xaml.Visibility.Visible;
     public Microsoft.UI.Xaml.Visibility DetailVisibility => Microsoft.UI.Xaml.Visibility.Collapsed;
     public string Detail => "";
     public string TimeFullText => "";
-    public string ProgressAccessibleName => $"{Location}: {Summary}{(SpeedText.Length > 0 ? $" · {SpeedText}" : "")}";
+    public string ProgressAccessibleName => $"{Location}: {Summary}{(ProgressLabel.Length > 0 ? $" · {ProgressLabel}" : "")}{(SpeedText.Length > 0 ? $" · {SpeedText}" : "")}";
     public void Update(TransferSnapshot transfer)
     {
         if (_transfer == transfer) return;

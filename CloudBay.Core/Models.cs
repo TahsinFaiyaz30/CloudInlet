@@ -35,6 +35,8 @@ public sealed record SyncSnapshot(ClientState State, string Message, int Pending
     long TransferredBytes = 0, long TransferTotalBytes = 0, DateTimeOffset? LastSync = null)
 {
     public IReadOnlyList<TransferSnapshot> Transfers { get; init; } = [];
+    /// <summary>False while any participating transfer is still discovering its full inventory.</summary>
+    public bool TransferTotalKnown { get; init; } = true;
     public int ActiveTransfers { get; init; }
     public int QueuedTransfers { get; init; }
     public double UploadBytesPerSecond { get; init; }

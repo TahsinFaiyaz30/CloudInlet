@@ -55,6 +55,24 @@ public sealed partial class MainWindow
                     throw new InvalidOperationException("The update status and action must fit the settings page.");
                 await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(output, $"updates-available-{width}{suffix}.png"));
             }
+            foreach (var fixture in new[]
+            {
+                new UpdateSnapshot(UpdateState.Downloading, "Downloading update", DownloadedBytes: 1048576, TotalBytes: 2097152),
+                new UpdateSnapshot(UpdateState.Downloading, "Downloading update", DownloadedBytes: 1048576, TotalBytes: 0)
+            })
+            {
+                RefreshUpdateDownloadProgress(fixture);
+                UpdateStatusText.Text = fixture.Message;
+                DownloadUpdateButton.Visibility = Visibility.Collapsed;
+                await Task.Delay(180); RootGrid.UpdateLayout();
+                if (UpdateDownloadDetail is not { ActualHeight: > 0, Visibility: Visibility.Visible } ||
+                    UpdateDownloadDetail.Text != (fixture.TotalBytes > 0 ? "50% · 1 MiB of 2 MiB" : "1 MiB transferred") ||
+                    UpdateDownloadProgress.IsIndeterminate != (fixture.TotalBytes <= 0))
+                    throw new InvalidOperationException("Updater progress must visibly show measured percent and both sizes, and stay indeterminate without a total.");
+                await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(output,
+                    $"updates-downloading-{(fixture.TotalBytes > 0 ? "known" : "unknown")}{suffix}.png"));
+            }
+            RefreshUpdates();
             await updates.DownloadAsync(); RefreshUpdates();
             if (InstallUpdateButton.Visibility != Visibility.Visible || DownloadUpdateButton.Visibility != Visibility.Collapsed ||
                 UpdateDownloadProgress.Visibility != Visibility.Collapsed || !InstallUpdateButton.IsEnabled)

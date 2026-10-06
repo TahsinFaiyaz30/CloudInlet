@@ -365,7 +365,7 @@ public sealed partial class MainWindow : Window
         BackupConnectInfo.IsOpen = !settings.IsConfigured;
         CancelConnectionButton.Visibility = settings.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
         TransferProgressPanel.Visibility = _viewModel.IsProgressVisible ? Visibility.Visible : Visibility.Collapsed;
-        TransferProgress.IsIndeterminate = snapshot.TransferTotalBytes <= 0;
+        TransferProgress.IsIndeterminate = _viewModel.IsProgressIndeterminate;
         ReviewDeletionsButton.Visibility = snapshot.State == ClientState.Attention && snapshot.Message.StartsWith("Review required:", StringComparison.Ordinal) ? Visibility.Visible : Visibility.Collapsed;
         OpenFolderButton.Style = snapshot.State == ClientState.Attention ? null : _openFolderAccentStyle;
         DisconnectButton.Visibility = settings.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
@@ -2084,6 +2084,16 @@ public sealed partial class MainWindow : Window
                     label => label.Name == "ActivityFileSpeed") is not { ActualHeight: > 0, Visibility: Visibility.Visible } downloadSpeed ||
                 downloadSpeed.Text != _viewModel.ActiveTransfers[1].SpeedText)
                 throw new InvalidOperationException("Activity must render measured upload and download speed for each transferring file and their aggregate directions.");
+            foreach (var transfer in _viewModel.ActiveTransfers)
+            {
+                var label = FindDescendant<TextBlock>((DependencyObject)ActivityList.ContainerFromItem(transfer),
+                    item => item.Name == "ActivityFileProgress");
+                if (transfer.ProgressLabel.Length > 0 && (label is not { ActualHeight: > 0, Visibility: Visibility.Visible } ||
+                    label.Text != transfer.ProgressLabel || !label.Text.Contains('%') || !label.Text.Contains(" of ", StringComparison.Ordinal)))
+                    throw new InvalidOperationException("Activity must visibly show measured percentage and both sizes beside each determinate progress bar.");
+                if (transfer.IsIndeterminate && label?.Visibility == Visibility.Visible)
+                    throw new InvalidOperationException("Unmeasured preparation must not claim a completion percentage.");
+            }
             foreach (var mixedState in new[] { ClientState.Attention, ClientState.Offline })
             {
                 SetPresentation(transferPreview with { Snapshot = transferPreview.Snapshot with
@@ -2158,6 +2168,7 @@ public sealed partial class MainWindow : Window
             LoadSettings(reloadPreferences: true);
             await File.AppendAllTextAsync(Path.Combine(outputDirectory, "transfers-validation.txt"),
                 $"PASS: {theme} rendered live upload/download rows precede history, measured per-file and aggregate directional speeds are visible, queued/paused rates are hidden, filtered queue first/last filenames intersect the viewport, progress reuses containers, and transfer mode preserves both manual drafts.{Environment.NewLine}");
+            await RunCloudJobProgressUiValidationAsync(outputDirectory, theme, suffix);
             foreach (var width in new[] { 1300, 1100, 800 })
             {
                 AppWindow.Resize(new SizeInt32(width, 840));
@@ -2519,6 +2530,10 @@ public sealed partial class MainWindow : Window
                 (TransferProgressPanel.Visibility == Visibility.Visible) != (state is ClientState.Syncing or ClientState.Connecting) ||
                 (ReviewDeletionsButton.Visibility == Visibility.Visible) != (state == ClientState.Attention))
                 throw new InvalidOperationException($"The {state} overview exposed controls from another state.");
+            if (state is ClientState.Syncing or ClientState.Connecting &&
+                (_viewModel.ProgressLabel.Contains('%') != (_viewModel.Preview!.Snapshot.TransferTotalKnown && _viewModel.Preview.Snapshot.TransferTotalBytes > 0) ||
+                 Microsoft.UI.Xaml.Automation.AutomationProperties.GetName(TransferProgress) != _viewModel.ProgressLabel))
+                throw new InvalidOperationException("Overview progress must expose measured percentage and sizes, or a truthful unknown-size status.");
         }
 
         async Task CaptureCatalogAsync(string fileName)

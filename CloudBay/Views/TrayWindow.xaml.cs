@@ -210,7 +210,7 @@ public sealed partial class TrayWindow : Window
         TrayTransferSpeed.Visibility = _viewModel.HasTransferSpeed && _viewModel.HasTransfers ? Visibility.Visible : Visibility.Collapsed;
         TrayQueueAction.Visibility = _viewModel.HasQueue ? Visibility.Visible : Visibility.Collapsed;
         TrayAdditionalTransfers.Visibility = _viewModel.HasAdditionalTransfers ? Visibility.Visible : Visibility.Collapsed;
-        TrayProgress.IsIndeterminate = snapshot.TransferTotalBytes <= 0;
+        TrayProgress.IsIndeterminate = _viewModel.IsProgressIndeterminate;
         TrayProgressDetail.Visibility = string.IsNullOrEmpty(_viewModel.ProgressLabel) ? Visibility.Collapsed : Visibility.Visible;
         TrayPrimaryLabel.Text = snapshot.State == ClientState.Attention
             ? snapshot.Message.StartsWith("Review required:", StringComparison.Ordinal) ? "Review changes" : "Open CloudBay"
@@ -563,6 +563,14 @@ public sealed partial class TrayWindow : Window
                     label.Text.Length > 0) != 2 ||
                 ClientViewModel.FormatSpeed(512) != "512 B/s" || ClientViewModel.FormatSpeed(65536) != "64 KiB/s")
                 throw new InvalidOperationException("The tray must render measured per-file upload/download rates and aggregate directional rates using B/s, KiB/s or MiB/s.");
+            foreach (var transfer in _viewModel.RecentTransfers.Where(item => item.ProgressLabel.Length > 0))
+            {
+                var label = FindActivityDescendant<TextBlock>(TrayTransferList,
+                    item => item.Name == "TrayFileProgress" && item.Text == transfer.ProgressLabel);
+                if (label is not { ActualHeight: > 0, Visibility: Visibility.Visible } ||
+                    label.TextWrapping != TextWrapping.Wrap || !label.Text.Contains('%') || !label.Text.Contains(" of ", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Tray transfer progress must visibly wrap the full percentage and both sizes within its compact width.");
+            }
             await UiSmokeCapture.SaveAsync(TrayRoot, Path.Combine(outputDirectory, $"tray-live-transfers{suffix}.png"));
             foreach (var mixedState in new[] { ClientState.Attention, ClientState.Offline })
             {
@@ -584,6 +592,23 @@ public sealed partial class TrayWindow : Window
             if (TrayTransferSpeed.Visibility != Visibility.Collapsed ||
                 _viewModel.RecentTransfers.Any(row => row.SpeedVisibility == Visibility.Visible))
                 throw new InvalidOperationException("Global pause must hide the tray's aggregate and per-file wire rates.");
+
+            _viewModel.SetPreview(live with
+            {
+                Settings = live.Settings with { Theme = theme.ToString() }, Activity = [],
+                Snapshot = live.Snapshot with
+                {
+                    State = ClientState.Syncing, Message = "Discovering cloud files", ActiveTransfers = 0, QueuedTransfers = 0,
+                    Transfers = [], TransferTotalKnown = false, TransferredBytes = 1048576, TransferTotalBytes = 2097152,
+                    UploadBytesPerSecond = 0, DownloadBytesPerSecond = 0
+                }
+            });
+            ShowAtTray(); await Task.Delay(220); ResizeToContent(); TrayRoot.UpdateLayout();
+            AssertTrayLayout(ClientState.Syncing, outputDirectory);
+            if (!TrayProgress.IsIndeterminate || TrayProgressDetail.Visibility != Visibility.Visible ||
+                TrayProgressDetail.Text != "1 MiB transferred · 2 MiB discovered so far")
+                throw new InvalidOperationException("Tray aggregate discovery must show measured bytes without a misleading completion percentage.");
+            await UiSmokeCapture.SaveAsync(TrayRoot, Path.Combine(outputDirectory, $"tray-discovery-progress{suffix}.png"));
 
             var onlyQueued = live with
             {

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using CloudBay.Core;
 using CloudBay.Core.Updates;
+using CloudBay.ViewModels;
 using CloudBay.Windows;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -63,9 +64,7 @@ public sealed partial class MainWindow
         UpdateReleaseLink.NavigateUri = new Uri(state.Candidate is { } candidate
             ? $"https://github.com/TahsinFaiyaz30/CloudBay/releases/tag/{candidate.Tag}" : "https://github.com/TahsinFaiyaz30/CloudBay/releases");
         UpdateReleaseLink.Visibility = store ? Visibility.Collapsed : Visibility.Visible;
-        UpdateDownloadProgress.Visibility = state.State == UpdateState.Downloading ? Visibility.Visible : Visibility.Collapsed;
-        UpdateDownloadProgress.IsIndeterminate = state.TotalBytes <= 0;
-        UpdateDownloadProgress.Value = state.TotalBytes > 0 ? 100d * state.DownloadedBytes / state.TotalBytes : 0;
+        RefreshUpdateDownloadProgress(state);
         _loadingUpdates = true;
         try
         {
@@ -80,6 +79,17 @@ public sealed partial class MainWindow
                 int.TryParse(item.Tag?.ToString(), out var hours) && hours == preferences.CheckIntervalHours);
         }
         finally { _loadingUpdates = false; }
+    }
+
+    private void RefreshUpdateDownloadProgress(UpdateSnapshot state)
+    {
+        UpdateDownloadProgress.Visibility = state.State == UpdateState.Downloading ? Visibility.Visible : Visibility.Collapsed;
+        var progress = ProgressPresentation.ForBytes(state.DownloadedBytes, state.TotalBytes);
+        UpdateDownloadProgress.IsIndeterminate = progress.IsIndeterminate;
+        UpdateDownloadProgress.Value = progress.Value;
+        UpdateDownloadDetail.Visibility = UpdateDownloadProgress.Visibility;
+        UpdateDownloadDetail.Text = progress.Label;
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(UpdateDownloadProgress, progress.Label);
     }
 
     private async void CheckUpdate_Click(object sender, RoutedEventArgs args)

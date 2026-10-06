@@ -707,6 +707,7 @@ public sealed partial class ClientController : IAsyncDisposable
             LocalBytes = all.Sum(item => item.Snapshot.LocalBytes),
             TransferTotalBytes = all.Sum(item => item.Snapshot.TransferTotalBytes) + hydrations.Sum(item => item.TotalBytes),
             TransferredBytes = all.Sum(item => item.Snapshot.TransferredBytes) + hydrations.Sum(item => item.Bytes),
+            TransferTotalKnown = all.All(item => item.Snapshot.TransferTotalKnown),
             UploadBytesPerSecond = all.Sum(item => item.Snapshot.UploadBytesPerSecond),
             DownloadBytesPerSecond = all.Sum(item => item.Snapshot.DownloadBytesPerSecond) +
                 (hydrations.Any(item => item.Phase == TransferPhase.Downloading) ? _nativeDownloadSpeed.BytesPerSecond : 0),

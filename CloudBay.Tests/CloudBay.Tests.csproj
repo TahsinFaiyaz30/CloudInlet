@@ -36,5 +36,6 @@
     <Compile Include="../CloudBay/Windows/KnownFolderPolicy.cs" Link="Native/KnownFolderPolicy.cs" />
     <Compile Include="../CloudBay/Windows/FolderAppearance.cs" Link="Native/FolderAppearance.cs" />
     <Compile Include="../CloudBay/Windows/FolderIconResourceReader.cs" Link="Native/FolderIconResourceReader.cs" />
+    <Compile Include="../CloudBay/ViewModels/ProgressPresentation.cs" Link="Presentation/ProgressPresentation.cs" />
   </ItemGroup>
 </Project>

@@ -84,6 +84,8 @@
                                    Style="{StaticResource CloudBaySecondaryTextStyle}" />
                         <ProgressBar Value="{Binding Progress}" Maximum="100" IsIndeterminate="{Binding IsIndeterminate}"
                                      Visibility="{Binding ProgressVisibility}" AutomationProperties.Name="{Binding ProgressAccessibleName}" />
+                        <TextBlock x:Name="TrayFileProgress" Text="{Binding ProgressLabel}" Visibility="{Binding ProgressLabelVisibility}"
+                                   Style="{StaticResource CloudBaySecondaryTextStyle}" TextWrapping="Wrap" />
                     </StackPanel>
                     <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
                         <Button x:Name="TrayActivityOpenFolder" Width="32" Height="32" Padding="6" Style="{StaticResource SubtleButtonStyle}"
@@ -237,11 +239,11 @@
                         </StackPanel>
                     </Grid>
                     <StackPanel x:Name="TrayTransferPanel" Visibility="Collapsed" Spacing="8">
-                        <ProgressBar x:Name="TrayProgress" Value="{Binding Progress}" Maximum="100" />
+                        <ProgressBar x:Name="TrayProgress" Value="{Binding Progress}" Maximum="100" AutomationProperties.Name="{Binding ProgressLabel}" />
                         <TextBlock
                             x:Name="TrayProgressDetail"
                             Text="{Binding ProgressLabel}"
-                            Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                            Style="{StaticResource CloudBaySecondaryTextStyle}" TextWrapping="Wrap" />
                     </StackPanel>
                     <StackPanel x:Name="TrayLiveTransfers" Visibility="Collapsed" Spacing="8">
                         <TextBlock Text="In progress" Style="{StaticResource BodyStrongTextBlockStyle}" />

@@ -30,6 +30,8 @@
                                        Style="{StaticResource CloudBaySecondaryTextStyle}" />
                             <ProgressBar Value="{Binding Progress}" Maximum="100" IsIndeterminate="{Binding IsIndeterminate}"
                                          Visibility="{Binding ProgressVisibility}" AutomationProperties.Name="{Binding ProgressAccessibleName}" />
+                            <TextBlock x:Name="ActivityFileProgress" Text="{Binding ProgressLabel}" Visibility="{Binding ProgressLabelVisibility}"
+                                       Style="{StaticResource CloudBaySecondaryTextStyle}" TextWrapping="Wrap" />
                             <TextBlock Text="{Binding Detail}" Visibility="{Binding DetailVisibility}"
                                        Style="{StaticResource CloudBaySecondaryTextStyle}" />
                         </StackPanel>
@@ -246,10 +248,12 @@
                                             <ProgressBar
                                                 x:Name="TransferProgress"
                                                 Value="{Binding Progress}"
-                                                Maximum="100" />
+                                                Maximum="100"
+                                                AutomationProperties.Name="{Binding ProgressLabel}" />
                                             <TextBlock
+                                                x:Name="TransferProgressDetail"
                                                 Text="{Binding ProgressLabel}"
-                                                Style="{StaticResource CloudBaySecondaryTextStyle}" />
+                                                Style="{StaticResource CloudBaySecondaryTextStyle}" TextWrapping="Wrap" />
                                         </StackPanel>
                                         <StackPanel x:Name="DashboardActions" Orientation="Horizontal" Spacing="8">
                                             <Button
@@ -1270,6 +1274,7 @@
                                             <TextBlock x:Name="UpdateStatusText" Text="Updates are unavailable in this preview." TextWrapping="Wrap" />
                                             <TextBlock x:Name="UpdateTimingText" Style="{StaticResource CloudBaySecondaryTextStyle}" />
                                             <ProgressBar x:Name="UpdateDownloadProgress" Visibility="Collapsed" />
+                                            <TextBlock x:Name="UpdateDownloadDetail" Visibility="Collapsed" Style="{StaticResource CloudBaySecondaryTextStyle}" TextWrapping="Wrap" />
                                             <InfoBar x:Name="UpdateNotice" IsOpen="False" IsClosable="False" />
                                             <StackPanel Orientation="Horizontal" Spacing="8">
                                                 <Button x:Name="DownloadUpdateButton" Content="Download update" Click="DownloadUpdate_Click" Visibility="Collapsed" Style="{StaticResource AccentButtonStyle}" />

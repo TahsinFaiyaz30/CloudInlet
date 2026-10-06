@@ -390,6 +390,7 @@ public sealed partial class ClientController
         _cloudTransferSnapshots[job.Plan.Id] = new(state, message, live ? (int)Math.Min(int.MaxValue, job.QueuedFiles) : 0,
             TransferredBytes: live ? job.TransferredBytes : 0, TransferTotalBytes: live ? job.TotalBytes : 0)
         {
+            TransferTotalKnown = job.DiscoveryComplete,
             UploadBytesPerSecond = live && kind == ActivityKind.Upload ? job.BytesPerSecond : 0,
             DownloadBytesPerSecond = live && kind == ActivityKind.Download ? job.BytesPerSecond : 0,
             ActiveTransfers = live ? job.Items.Count(item => item.State is TransferItemState.Transferring or TransferItemState.Verifying or TransferItemState.DeletingSource) : 0,

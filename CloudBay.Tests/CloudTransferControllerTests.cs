@@ -184,8 +184,10 @@ public sealed class CloudTransferControllerTests
         finally { Directory.Delete(state, true); }
     }
 
-    [TestMethod]
-    public async Task RestartRestoresCloudFileCountersAndProviderIdentityToExistingActivity()
+    [DataTestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task RestartRestoresCloudFileCountersAndProviderIdentityToExistingActivity(bool discoveryComplete)
     {
         var state = NewState();
         try
@@ -200,9 +202,10 @@ public sealed class CloudTransferControllerTests
             {
                 connection.Open();
                 using var update = connection.CreateCommand();
-                update.CommandText = "UPDATE transfer_jobs SET discovery_complete=1,state=$state,file_count=2,total_bytes=1000,completed_files=1,transferred_bytes=700,settled_bytes=600 WHERE id=$id; " +
+                update.CommandText = "UPDATE transfer_jobs SET discovery_complete=$discovery,state=$state,file_count=2,total_bytes=1000,completed_files=1,transferred_bytes=700,settled_bytes=600 WHERE id=$id; " +
                     "INSERT INTO transfer_items(job_id,id,path,entry,state,bytes) VALUES($id,'remaining','report.txt',$entry,$item,100)";
                 update.Parameters.AddWithValue("$id", plan.Id); update.Parameters.AddWithValue("$state", (int)TransferJobState.Running);
+                update.Parameters.AddWithValue("$discovery", discoveryComplete ? 1 : 0);
                 update.Parameters.AddWithValue("$item", (int)TransferItemState.Transferring);
                 update.Parameters.AddWithValue("$entry", JsonSerializer.Serialize(new TransferEntry("remaining", "report.txt", "etag", 400, DateTimeOffset.UtcNow)));
                 update.ExecuteNonQuery();
@@ -220,6 +223,8 @@ public sealed class CloudTransferControllerTests
             Assert.AreEqual(TransferJobState.Paused, job.State);
             Assert.AreEqual(700, controller.Snapshot.TransferredBytes);
             Assert.AreEqual(1000, controller.Snapshot.TransferTotalBytes);
+            Assert.AreEqual(discoveryComplete, controller.Snapshot.TransferTotalKnown,
+                "Aggregate totals must stay unknown until every contributing job finishes discovery, including after restart.");
             Assert.AreEqual("report.txt", controller.Snapshot.Transfers.Single().RelativePath);
             Assert.AreEqual(TransferPhase.Paused, controller.Snapshot.Transfers.Single().Phase);
             Assert.IsFalse(Directory.Exists(storage.LoadSettings().RootPath), "Restoring cloud progress must not open or hydrate a local sync root.");
