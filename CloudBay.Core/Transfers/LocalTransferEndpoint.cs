@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 using CloudBay.Core.Sync;
@@ -112,16 +113,18 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
         TransferCheckpoint? checkpoint, CancellationToken cancellationToken = default)
     {
         request = SelectedRequest(request, checkpoint);
+        var proof = CheckpointSourceProof(checkpoint, source.Entry);
         var final = FullPath(request.RelativePath);
         if (source.Entry.IsFolder)
             return Directory.Exists(final) ? Receipt(request, source.Entry, final, null) : null;
         if (checkpoint?.Data is null || !checkpoint.Data.TryGetValue("committing", out var committing) || committing != "true" || !File.Exists(final)) return null;
         ValidateCheckpoint(request, checkpoint);
         var expected = checkpoint.Data.TryGetValue("sha1", out var hash) ? hash : null;
-        if (expected is null) throw new InvalidDataException("The saved local commit has no verified checksum.");
+        if (!IsSha1(expected) || proof is not null && !expected!.Equals(proof.Sha1, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("The saved local commit has no matching verified checksum.");
         ValidatePreservedDestination(request, checkpoint);
         await using var stream = new FileStream(final, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, true);
-        if (stream.Length != source.Entry.Size || !expected.Equals(Convert.ToHexString(await SHA1.HashDataAsync(stream, cancellationToken)), StringComparison.OrdinalIgnoreCase))
+        if (stream.Length != source.Entry.Size || !expected!.Equals(Convert.ToHexString(await SHA1.HashDataAsync(stream, cancellationToken)), StringComparison.OrdinalIgnoreCase))
             throw new TransferConflictException("The interrupted local destination commit has changed. Its contents were retained.");
         return Receipt(request, source.Entry, final, expected, checkpoint.Data);
     }
@@ -134,6 +137,7 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
         request = SelectedRequest(request, checkpoint);
         var final = FullPath(request.RelativePath);
         await source.ValidateAsync(cancellationToken).ConfigureAwait(false);
+        var savedProof = CheckpointSourceProof(checkpoint, source.Entry);
         if (source.Entry.IsFolder)
         {
             if (File.Exists(final)) throw new TransferConflictException("A file occupies the selected destination folder.");
@@ -170,6 +174,7 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
         var hashes = new List<DownloadChunk>();
         if (checkpoint?.Data?.TryGetValue("chunks", out var savedChunks) == true)
             hashes = JsonSerializer.Deserialize<List<DownloadChunk>>(savedChunks) ?? throw new InvalidDataException("Invalid local range receipts.");
+        using var incomingHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA1);
         await using var destination = new FileStream(partial, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 128 * 1024, true);
         foreach (var chunk in hashes)
         {
@@ -182,6 +187,9 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
                 await destination.ReadExactlyAsync(buffer.AsMemory(0, (int)chunk.Length), cancellationToken);
                 if (!chunk.Sha1.Equals(Convert.ToHexString(SHA1.HashData(buffer.AsSpan(0, (int)chunk.Length))), StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException("A saved local destination range failed verification. The partial was retained.");
+                // Only acknowledged, independently verified bytes from the same
+                // saved source version can contribute to the resumed digest.
+                incomingHash.AppendData(buffer, 0, (int)chunk.Length);
             }
             finally { ArrayPool<byte>.Shared.Return(buffer, clearArray: true); }
             offset += chunk.Length;
@@ -190,6 +198,10 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
         destination.SetLength(offset);
         var data = new Dictionary<string, string> { ["destinationVersion"] = expectedVersion, ["destinationId"] = expectedId, ["relativePath"] = request.RelativePath,
             ["operation"] = request.OperationId, ["chunks"] = JsonSerializer.Serialize(hashes) };
+        var legacyPrefix = offset > 0 && savedProof is null;
+        // Older checkpoints have range hashes but no explicit source binding.
+        // Keep them unbound until the full source fallback has verified the copy.
+        if (!legacyPrefix) data["sourceProof"] = SerializeSourceProof(source.Entry, null);
         data["requestedPath"] = checkpoint?.Data?.GetValueOrDefault("requestedPath") ?? requestedPath;
         if (expectedVersion != "absent") data["recoveryRelativePath"] = RecoveryRelativePath(request);
         await saveCheckpoint(new("local", request.OperationId, offset, data), cancellationToken);
@@ -213,6 +225,7 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
                     var read = await input.ReadAsync(bytes.AsMemory(0, (int)Math.Min(bytes.Length, length - written)), cancellationToken);
                     if (read == 0) throw new EndOfStreamException("The source range ended early.");
                     hash.AppendData(bytes, 0, read);
+                    incomingHash.AppendData(bytes, 0, read);
                     await destination.WriteAsync(bytes.AsMemory(0, read), cancellationToken);
                     written += read;
                     progress?.Report(new(offset + written, source.Entry.Size));
@@ -223,11 +236,27 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
                 data["chunks"] = JsonSerializer.Serialize(hashes);
                 await saveCheckpoint(new("local", request.OperationId, offset, new Dictionary<string,string>(data)), cancellationToken);
             }
+            // Release the provider response and its shared download admission
+            // before local hashing, source revalidation or installation.
+            await input.DisposeAsync().ConfigureAwait(false);
+            var incomingSha1 = Convert.ToHexString(incomingHash.GetHashAndReset()).ToLowerInvariant();
             destination.Position = 0;
             var sha1 = Convert.ToHexString(await SHA1.HashDataAsync(destination, cancellationToken)).ToLowerInvariant();
+            if (!sha1.Equals(incomingSha1, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("The local copy differs from the received source bytes.");
+            if (savedProof?.Sha1 is not null && !sha1.Equals(savedProof.Sha1, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("The saved local copy differs from its source digest proof.");
             if (source.Entry.Sha1 is not null && !source.Entry.Sha1.Equals(sha1, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("The local copy failed the source checksum.");
+            if (legacyPrefix && source.Entry.Sha1 is null)
+            {
+                await using var legacySource = await source.OpenReadAsync(0, source.Entry.Size, cancellationToken).ConfigureAwait(false);
+                var legacySha1 = Convert.ToHexString(await SHA1.HashDataAsync(legacySource, cancellationToken));
+                if (!sha1.Equals(legacySha1, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("The saved local copy differs from the source. Its partial was retained.");
+            }
             await source.ValidateAsync(cancellationToken);
             data["committing"] = "true"; data["sha1"] = sha1;
+            data["sourceProof"] = SerializeSourceProof(source.Entry, incomingSha1);
             await saveCheckpoint(new("local", request.OperationId, offset, new Dictionary<string,string>(data)), cancellationToken);
             // Set metadata through the still-owned handle, before installation. A newer
             // file at the final path must never receive this transfer's timestamp.
@@ -266,10 +295,50 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
         return request with { RelativePath = checkpoint.Data!["relativePath"] };
     }
     private static TransferReceipt Receipt(TransferUploadRequest request, TransferEntry entry, string path, string? sha1,
-        IReadOnlyDictionary<string, string>? data = null) =>
-        new(Identity(path), request.RelativePath, Version(path, entry.Size, entry.IsFolder), entry.Size, sha1, request.OperationId,
-            data?.TryGetValue("recoveryRelativePath", out var recovery) == true
-                ? new Dictionary<string,string> { ["recoveryRelativePath"] = recovery } : null);
+        IReadOnlyDictionary<string, string>? data = null)
+    {
+        var metadata = new Dictionary<string, string>();
+        if (data?.TryGetValue("recoveryRelativePath", out var recovery) == true) metadata["recoveryRelativePath"] = recovery;
+        if (data?.TryGetValue("sourceProof", out var proof) == true) metadata["sourceProof"] = proof;
+        return new(Identity(path), request.RelativePath, Version(path, entry.Size, entry.IsFolder), entry.Size, sha1, request.OperationId,
+            metadata.Count > 0 ? metadata : null);
+    }
+
+    private sealed record SourceDigestProof(
+        [property: JsonRequired] int Format,
+        [property: JsonRequired] string SourceId,
+        [property: JsonRequired] string SourceVersion,
+        [property: JsonRequired] long SourceSize,
+        [property: JsonRequired] string? Sha1);
+
+    private static bool IsSha1(string? value) => value is { Length: 40 } && value.All(Uri.IsHexDigit);
+
+    private static string SerializeSourceProof(TransferEntry source, string? sha1) =>
+        JsonSerializer.Serialize(new SourceDigestProof(1, source.Id, source.Version, source.Size, sha1));
+
+    private static SourceDigestProof? ReadSourceProof(IReadOnlyDictionary<string, string>? data, TransferEntry source, bool requireDigest)
+    {
+        if (data?.TryGetValue("sourceProof", out var saved) != true) return null;
+        if (saved is null) throw new InvalidDataException("The saved local source digest proof is missing.");
+        SourceDigestProof? proof;
+        try { proof = JsonSerializer.Deserialize<SourceDigestProof>(saved); }
+        catch (JsonException error) { throw new InvalidDataException("The saved local source digest proof is malformed.", error); }
+        if (proof is null || proof.Format != 1 || proof.SourceId != source.Id || proof.SourceVersion != source.Version || proof.SourceSize != source.Size ||
+            source.IsFolder || proof.Sha1 is not null && !IsSha1(proof.Sha1) || requireDigest && proof.Sha1 is null ||
+            proof.Sha1 is not null && source.Sha1 is not null && !proof.Sha1.Equals(source.Sha1, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("The saved local source digest proof does not match the planned source version.");
+        return proof;
+    }
+
+    private static SourceDigestProof? CheckpointSourceProof(TransferCheckpoint? checkpoint, TransferEntry source)
+    {
+        var committing = checkpoint?.Data?.GetValueOrDefault("committing") == "true";
+        var proof = ReadSourceProof(checkpoint?.Data, source, committing);
+        if (proof?.Sha1 is not null && (!committing || checkpoint!.AcknowledgedBytes != source.Size ||
+            !proof.Sha1.Equals(checkpoint.Data!.GetValueOrDefault("sha1"), StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidDataException("The saved local commit does not match its source digest proof.");
+        return proof;
+    }
 
     private static string RecoveryRelativePath(TransferUploadRequest request)
     {
@@ -368,6 +437,9 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
 
     public async Task VerifyAsync(TransferReceipt receipt, ITransferSourceFile source, CancellationToken cancellationToken = default)
     {
+        var proof = ReadSourceProof(receipt.Data, source.Entry, requireDigest: true);
+        if (receipt.Size != source.Entry.Size || proof is not null && !proof.Sha1!.Equals(receipt.Sha1, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("The local receipt does not match its planned source and digest proof.");
         var path = FullPath(receipt.RelativePath);
         if (source.Entry.IsFolder)
         {
@@ -379,7 +451,12 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
             throw new InvalidDataException("The local destination changed after upload.");
         var actual = Convert.ToHexString(await SHA1.HashDataAsync(output, cancellationToken));
         if (receipt.Sha1 is null || !actual.Equals(receipt.Sha1, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("The local destination checksum failed.");
-        if (source.Entry.Sha1 is not null) return;
+        if (source.Entry.Sha1 is not null)
+        {
+            if (!actual.Equals(source.Entry.Sha1, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("The local destination content differs from the source checksum.");
+            return;
+        }
+        if (proof is not null) return;
         await using var input = await source.OpenReadAsync(0, source.Entry.Size, cancellationToken);
         var expected = Convert.ToHexString(await SHA1.HashDataAsync(input, cancellationToken));
         if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("The local destination content differs from the source.");
