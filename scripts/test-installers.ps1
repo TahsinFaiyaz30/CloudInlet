@@ -98,6 +98,22 @@ function Wait-File([string]$Path, [int]$Seconds = 10) {
         Start-Sleep -Milliseconds 100
     }
 }
+function Test-CompatibilityLauncher([string]$Install) {
+    $capture = Join-Path $fixture 'launcher-arguments.txt'
+    $values = @('', 'a path with spaces', 'embedded"quote', 'C:\trailing slash\', '\\server\folder with space\', 'cloudinlet://open?name=日本語')
+    $start = [Diagnostics.ProcessStartInfo]::new((Join-Path $Install 'CloudBay.exe'))
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    foreach ($value in @('--capture-arguments', $capture) + $values) { $start.ArgumentList.Add($value) }
+    $launcher = [Diagnostics.Process]::Start($start)
+    if (!$launcher.WaitForExit(10000) -or $launcher.ExitCode -ne 0) { throw 'The compatibility launcher could not start CloudInlet.' }
+    Wait-File ($capture + '.ready')
+    $lines = [IO.File]::ReadAllLines($capture)
+    if ($lines[0] -cne 'CloudInlet' -or $lines.Length -ne $values.Count + 1) { throw 'The compatibility launcher did not start the branded process.' }
+    for ($index = 0; $index -lt $values.Count; $index++) {
+        if ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($lines[$index + 1])) -cne $values[$index]) { throw 'The compatibility launcher changed activation arguments.' }
+    }
+}
 function Invoke-Worker([string]$Install, [string]$Kind, [string]$Package, [switch]$Corrupt) {
     $case = $Kind.ToLowerInvariant() + $(if ($Corrupt) { '-corrupt' } else { '-valid' })
     $hostRoot = Join-Path $cache ('fixture-host-' + $runId + '-' + $case)
@@ -153,10 +169,6 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Installer fixture client build failed.' }
         $client = Join-Path $repository 'packaging/InstallerTestClient/bin/Release/net472'
         foreach ($name in @("$brand.exe", "$brand.exe.config")) { Copy-Item -LiteralPath (Join-Path $client $name) -Destination $app }
-        if (!$legacy) {
-            Copy-Item -LiteralPath (Join-Path $app 'CloudInlet.exe') -Destination (Join-Path $app 'CloudBay.exe')
-            Copy-Item -LiteralPath (Join-Path $app 'CloudInlet.exe.config') -Destination (Join-Path $app 'CloudBay.exe.config')
-        }
         Copy-Item -LiteralPath (Join-Path $repository 'CloudInlet/Assets/CloudInlet.ico') -Destination (Join-Path $app "Assets/$brand.ico")
         Copy-Item -LiteralPath (Join-Path $repository 'THIRD-PARTY-NOTICES.md') -Destination $app
         $builder = if ($legacy) { Join-Path $oldSource 'scripts/build-installers.ps1' } else { Join-Path $PSScriptRoot 'build-installers.ps1' }
@@ -180,6 +192,7 @@ try {
     if ((Get-ItemProperty -LiteralPath $runKey -Name CloudInletDebug -ErrorAction SilentlyContinue) -or (Test-Path -LiteralPath $desktop)) { throw 'A rejected update changed current Windows preferences.' }
     Invoke-Worker $exeRoot Exe $exe1
     Assert-Identity $exeRoot Exe '1.1.2' $false $false
+    Test-CompatibilityLauncher $exeRoot
     # A real matching activation server proves that uninstall waits for graceful
     # exit instead of stopping unrelated processes or overwriting a running app.
     $pipeReady = Join-Path $fixture 'pipe-ready.txt'

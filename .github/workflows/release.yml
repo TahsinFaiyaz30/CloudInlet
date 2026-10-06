@@ -96,7 +96,7 @@ jobs:
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
           RELEASE_REVISION: ${{ needs.prepare.outputs.revision }}
           RELEASE_CONFIGURATION: ${{ matrix.configuration }}
-          CLOUDINLET_SIGNING_PFX_BASE64: ${{ secrets.CLOUDINLET_SIGNING_PFX_BASE64 }}
+          CLOUDINLET_SIGNING_PFX_BASE64: ${{ secrets.CLOUDINLET_SIGNING_PFX_BASE64 || secrets.CLOUDBAY_SIGNING_PFX_BASE64 }}
           CLOUDINLET_SIGNING_PFX_PASSWORD: ${{ secrets.CLOUDINLET_SIGNING_PFX_PASSWORD || secrets.CLOUDBAY_SIGNING_PFX_PASSWORD }}
         run: |
           .\scripts\build-release-artifacts.ps1 -Version $env:RELEASE_VERSION -SourceRevision $env:RELEASE_REVISION -Configuration $env:RELEASE_CONFIGURATION -OutputDirectory artifacts/packages -HostedTests

@@ -18,6 +18,17 @@ foreach ($name in @('CloudInlet.SetupHelper.exe', 'CloudInlet.SetupHelper.exe.co
     if (!(Test-Path -LiteralPath $source)) { throw "The helper output is missing: $name" }
     Copy-Item -LiteralPath $source -Destination $target -Force
 }
+# Old workers require CloudBay.exe. A launcher starts the actual branded app,
+# preserving WinUI resource lookup and the visible Windows process name.
+$appVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $appRoot 'CloudInlet.exe')).ProductVersion.Split('+')[0]
+dotnet build (Join-Path $repository 'packaging/CompatibilityLauncher/CloudInlet.CompatibilityLauncher.csproj') -c Release -p:Version=$appVersion -v:minimal | Out-Host
+if ($LASTEXITCODE -ne 0) { throw 'The legacy compatibility launcher build failed.' }
+$launcherRoot = Join-Path $repository 'packaging/CompatibilityLauncher/bin/Release/net48'
+foreach ($name in @('CloudBay.exe', 'CloudBay.exe.config')) {
+    $target = Join-Path $appRoot $name
+    if ((Test-Path -LiteralPath $target) -and ((Get-Item -LiteralPath $target -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The compatibility launcher destination is a linked file.' }
+    Copy-Item -LiteralPath (Join-Path $launcherRoot $name) -Destination $target -Force
+}
 $notices = Join-Path $appRoot 'Licenses/Installers'
 for ($ancestor = [IO.DirectoryInfo]$notices; $null -ne $ancestor; $ancestor = $ancestor.Parent) {
     if ($ancestor.Exists -and ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The installer notices destination contains a linked directory.' }
@@ -31,7 +42,7 @@ foreach ($name in @('WiX-5.0.2-LICENSE.txt', 'Inno-6.7.3-LICENSE.txt')) {
 $sourceRoot = Join-Path $notices 'CloudInlet-sources'
 if ((Test-Path -LiteralPath $sourceRoot) -and ((Get-Item -LiteralPath $sourceRoot -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The installer source destination is a linked directory.' }
 New-Item -ItemType Directory -Path $sourceRoot -Force | Out-Null
-foreach ($folder in @('InstallerActions', 'InstallerHelper', 'InstallerShared')) {
+foreach ($folder in @('InstallerActions', 'InstallerHelper', 'InstallerShared', 'CompatibilityLauncher')) {
     $destination = Join-Path $sourceRoot $folder
     if ((Test-Path -LiteralPath $destination) -and ((Get-Item -LiteralPath $destination -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The installer source destination is a linked directory.' }
     New-Item -ItemType Directory -Path $destination -Force | Out-Null

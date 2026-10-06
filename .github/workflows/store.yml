@@ -39,7 +39,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:RELEASE_TAG -notmatch '^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') { throw 'A stable release tag is required.' }
-          $release = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json isDraft,isPrerelease
+          $release = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json isDraft,isPrerelease,assets
           if ($LASTEXITCODE -ne 0) { throw 'GitHub release could not be verified.' }
           $release = $release | ConvertFrom-Json
           if ($release.isDraft -or $release.isPrerelease) { throw 'Store packages must come from a published stable release.' }
@@ -49,12 +49,22 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Could not select the released source.' }
           $version = .\scripts\get-release-version.ps1
           $name = "CloudInlet-$($version.version)-win-x64-release-portable.zip"
-          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern $name --pattern updates-v2.json --dir artifacts/store-download
+          $feed = "updates-v2.json"
+          $expectedRepository = $env:GITHUB_REPOSITORY
+          $expectedSchema = 2
+          if (!@($release.assets | Where-Object { $_.name -ceq $name }).Count) {
+            # Historical immutable releases predate the rename and use their original feed.
+            $name = "CloudBay-$($version.version)-win-x64-release-portable.zip"
+            $feed = "updates-v1.json"
+            $expectedRepository = "TahsinFaiyaz30/CloudBay"
+            $expectedSchema = 1
+          }
+          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern $name --pattern $feed --dir artifacts/store-download
           if ($LASTEXITCODE -ne 0) { throw 'Could not download the released app.' }
-          $manifest = Get-Content artifacts/store-download/updates-v2.json -Raw | ConvertFrom-Json
+          $manifest = Get-Content (Join-Path artifacts/store-download $feed) -Raw | ConvertFrom-Json
           $asset = @($manifest.assets | Where-Object { $_.fileName -ceq $name -and $_.buildFlavor -ceq 'Release' -and $_.installerKind -ceq 'Portable' })
           $path = Join-Path artifacts/store-download $name
-          if ($manifest.repository -cne $env:GITHUB_REPOSITORY -or $manifest.tag -cne $env:RELEASE_TAG -or $manifest.version -cne $version.version -or $asset.Count -ne 1 -or (Get-Item $path).Length -ne $asset[0].size -or (Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $asset[0].sha256) { throw 'Released app hash or identity validation failed.' }
+          if ($manifest.schemaVersion -ne $expectedSchema -or $manifest.repository -cne $expectedRepository -or $manifest.tag -cne $env:RELEASE_TAG -or $manifest.version -cne $version.version -or $asset.Count -ne 1 -or (Get-Item $path).Length -ne $asset[0].size -or (Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $asset[0].sha256) { throw 'Released app hash or identity validation failed.' }
           Expand-Archive -LiteralPath $path -DestinationPath artifacts/store-source
           "version=$($version.version)" >> $env:GITHUB_OUTPUT
           "revision=$($version.sourceRevision)" >> $env:GITHUB_OUTPUT
@@ -66,6 +76,10 @@ jobs:
           CLOUDINLET_STORE_IDENTITY_NAME: ${{ vars.CLOUDINLET_STORE_IDENTITY_NAME || vars.CLOUDBAY_STORE_IDENTITY_NAME }}
           CLOUDINLET_STORE_PUBLISHER: ${{ vars.CLOUDINLET_STORE_PUBLISHER || vars.CLOUDBAY_STORE_PUBLISHER }}
           CLOUDINLET_STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.CLOUDINLET_STORE_PUBLISHER_DISPLAY_NAME || vars.CLOUDBAY_STORE_PUBLISHER_DISPLAY_NAME }}
+          # Historical immutable tags still read the original variable names.
+          CLOUDBAY_STORE_IDENTITY_NAME: ${{ vars.CLOUDINLET_STORE_IDENTITY_NAME || vars.CLOUDBAY_STORE_IDENTITY_NAME }}
+          CLOUDBAY_STORE_PUBLISHER: ${{ vars.CLOUDINLET_STORE_PUBLISHER || vars.CLOUDBAY_STORE_PUBLISHER }}
+          CLOUDBAY_STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.CLOUDINLET_STORE_PUBLISHER_DISPLAY_NAME || vars.CLOUDBAY_STORE_PUBLISHER_DISPLAY_NAME }}
         run: .\scripts\build-store-package.ps1 -AppFolder artifacts/store-source -Version $env:RELEASE_VERSION -SourceRevision $env:RELEASE_REVISION -OutputDirectory artifacts/store-packages
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

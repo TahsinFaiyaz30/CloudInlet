@@ -10,7 +10,7 @@ Accounts, backup locations, exclusion rules, transfer plans, acknowledged checkp
 
 The established `%LOCALAPPDATA%\CloudBay` private state directory, Windows DPAPI entropy, Cloud Files registration IDs, instance pipe, EXE AppIds, MSI UpgradeCodes and distribution registry keys remain stable compatibility identifiers. They are not product display names. Renaming these would strand encrypted credentials, recovery records, native placeholders or old updater handoffs. The Store startup task identity also remains stable; Store production package identity continues to come from the existing reserved Partner Center identity.
 
-Startup registration changes to CloudInlet while preserving the user's enabled or disabled Windows startup choice. The migration applies only to an owned legacy command in the current installation directory. A legacy `CloudBay.exe` apphost alias remains in the installed payload because published update workers verify and reopen that exact executable. It starts the same CloudInlet application and shares its existing instance identity.
+Startup registration changes to CloudInlet while preserving the user's enabled or disabled Windows startup choice. The migration applies only to an owned legacy command in the current installation directory. A small legacy `CloudBay.exe` compatibility launcher remains in the installed payload because published update workers verify and reopen that exact executable. It launches the actual `CloudInlet.exe`, preserving the new Windows process name and WinUI resource lookup. CloudInlet shares the existing instance identity.
 
 ## Legacy update bridge
 

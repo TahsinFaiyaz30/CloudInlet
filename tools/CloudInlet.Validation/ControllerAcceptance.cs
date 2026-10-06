@@ -31,9 +31,13 @@ internal static class ControllerAcceptance
         });
         var knownLocations = KnownFolderBackup.FolderIds.Keys.ToDictionary(name => name, SafeKnownLocation, StringComparer.Ordinal);
         using var runKey = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
-        var startupExisted = runKey.GetValueNames().Contains("CloudBay", StringComparer.OrdinalIgnoreCase);
-        var startupValue = startupExisted ? runKey.GetValue("CloudBay", null, RegistryValueOptions.DoNotExpandEnvironmentNames) : null;
-        var startupKind = startupExisted ? runKey.GetValueKind("CloudBay") : RegistryValueKind.String;
+        var startupRegistrations = new[] { BuildInfo.StartupRegistryName, BuildInfo.LegacyStartupRegistryName }.Select(name =>
+        {
+            var existed = runKey.GetValueNames().Contains(name, StringComparer.OrdinalIgnoreCase);
+            return (Name: name, Existed: existed,
+                Value: existed ? runKey.GetValue(name, null, RegistryValueOptions.DoNotExpandEnvironmentNames) : null,
+                Kind: existed ? runKey.GetValueKind(name) : RegistryValueKind.String);
+        }).ToArray();
         ClientController? controller = null;
         var failNextUnregister = false;
         const string injectedUnregisterFailure = "Injected validation-only Shell unregistration failure.";
@@ -405,14 +409,17 @@ internal static class ControllerAcceptance
                 // unexpanded environment strings rather than normalizing the user's startup entry.
                 await check("controller_startup_registration_restored_exactly", () =>
                 {
-                    if (startupExisted) runKey.SetValue("CloudBay", startupValue!, startupKind);
-                    else runKey.DeleteValue("CloudBay", throwOnMissingValue: false);
-                    Require(runKey.GetValueNames().Contains("CloudBay", StringComparer.OrdinalIgnoreCase) == startupExisted,
-                        "Startup entry presence was not restored.");
-                    if (startupExisted)
-                        Require(runKey.GetValueKind("CloudBay") == startupKind &&
-                            System.Text.Json.JsonSerializer.Serialize(runKey.GetValue("CloudBay", null, RegistryValueOptions.DoNotExpandEnvironmentNames)) ==
-                            System.Text.Json.JsonSerializer.Serialize(startupValue), "Startup entry value and type were not restored.");
+                    foreach (var registration in startupRegistrations)
+                    {
+                        if (registration.Existed) runKey.SetValue(registration.Name, registration.Value!, registration.Kind);
+                        else runKey.DeleteValue(registration.Name, throwOnMissingValue: false);
+                        Require(runKey.GetValueNames().Contains(registration.Name, StringComparer.OrdinalIgnoreCase) == registration.Existed,
+                            "Startup entry presence was not restored.");
+                        if (registration.Existed)
+                            Require(runKey.GetValueKind(registration.Name) == registration.Kind &&
+                                System.Text.Json.JsonSerializer.Serialize(runKey.GetValue(registration.Name, null, RegistryValueOptions.DoNotExpandEnvironmentNames)) ==
+                                System.Text.Json.JsonSerializer.Serialize(registration.Value), "Startup entry value and type were not restored.");
+                    }
                     return Task.CompletedTask;
                 });
             }

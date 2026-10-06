@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>CloudBay</AssemblyName>
+    <RootNamespace>CloudInlet.Packaging</RootNamespace>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>latest</LangVersion>
+    <ApplicationIcon>../../CloudInlet/Assets/CloudInlet.ico</ApplicationIcon>
+    <Description>CloudInlet compatibility launcher for published CloudBay updater handoffs and shortcuts.</Description>
+  </PropertyGroup>
+</Project>

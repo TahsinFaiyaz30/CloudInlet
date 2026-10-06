@@ -45,9 +45,6 @@ try {
     Copy-Item -LiteralPath (Join-Path $repository 'LICENSE'), (Join-Path $repository 'THIRD-PARTY-NOTICES.md') -Destination $app
     & (Join-Path $PSScriptRoot 'build-installer-helper.ps1') -AppFolder $app
     if ($env:CLOUDINLET_SIGNING_PFX_BASE64 -or $env:CLOUDBAY_SIGNING_PFX_BASE64) { & (Join-Path $PSScriptRoot 'sign-release-artifacts.ps1') -Directory $app -ApplicationBinaries }
-    # The old update worker reopens CloudBay.exe after a successful upgrade.
-    # This apphost launches the same new CloudInlet.dll; it is not a second app.
-    Copy-Item -LiteralPath (Join-Path $app 'CloudInlet.exe') -Destination (Join-Path $app 'CloudBay.exe')
     & (Join-Path $PSScriptRoot 'build-installers.ps1') -AppFolder $app -Version $Version -Configuration $Configuration -OutputDirectory $output -SourceRevision $SourceRevision -HelperPrepared
     if ($env:CLOUDINLET_SIGNING_PFX_BASE64 -or $env:CLOUDBAY_SIGNING_PFX_BASE64) { & (Join-Path $PSScriptRoot 'sign-release-artifacts.ps1') -Directory $output -Version $Version -Configuration $Configuration }
     $portableFolder = Join-Path $work 'Portable'

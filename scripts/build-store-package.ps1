@@ -104,7 +104,7 @@ try {
  </Properties>
  <Resources><Resource Language="en-US" /></Resources>
  <Dependencies><TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" /></Dependencies>
- <Applications><Application Id="CloudInlet" Executable="CloudInlet.exe" EntryPoint="Windows.FullTrustApplication">
+ <Applications><Application Id="CloudBay" Executable="CloudInlet.exe" EntryPoint="Windows.FullTrustApplication">
   <uap:VisualElements DisplayName="CloudInlet" Description="Native Windows backup and Files On-Demand for Backblaze B2." BackgroundColor="transparent" Square150x150Logo="StoreAssets\Logo150.png" Square44x44Logo="StoreAssets\Logo44.png" />
   <Extensions><desktop:Extension Category="windows.startupTask" Executable="CloudInlet.exe" EntryPoint="Windows.FullTrustApplication">
    <desktop:StartupTask TaskId="CloudBayStartup" Enabled="false" DisplayName="CloudInlet" />

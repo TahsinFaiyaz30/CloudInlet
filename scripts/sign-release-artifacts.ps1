@@ -22,7 +22,7 @@ try {
     $imported = @(Import-PfxCertificate -FilePath $temporary -Password $password -CertStoreLocation Cert:/CurrentUser/My)
     $cert = @($imported | Where-Object { $_.HasPrivateKey -and $_.EnhancedKeyUsageList.ObjectId -contains '1.3.6.1.5.5.7.3.3' })
     if ($cert.Count -ne 1) { throw 'Signing PFX must contain one code-signing certificate with a private key.' }
-    $files = if ($ApplicationBinaries) { @(Get-ChildItem -LiteralPath $folder -File | Where-Object { $_.Name -match '^CloudInlet(\..+)?\.(exe|dll)$' }) } else {
+    $files = if ($ApplicationBinaries) { @(Get-ChildItem -LiteralPath $folder -File | Where-Object { $_.Name -match '^Cloud(Inlet|Bay)(\..+)?\.(exe|dll)$' }) } else {
         if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw 'Installer signing requires the release version.' }
         @(Get-ChildItem -LiteralPath $folder -File | Where-Object { $_.Name -in @("CloudInlet-$Version-win-x64-$($Configuration.ToLowerInvariant())-setup.exe", "CloudInlet-$Version-win-x64-$($Configuration.ToLowerInvariant())-setup.msi") })
     }

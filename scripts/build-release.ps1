@@ -54,7 +54,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Release tests failed.' }
     dotnet publish CloudInlet\CloudInlet.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:PublishTrimmed=false -p:Version=$Version -o $appFolder -v:minimal
     if ($LASTEXITCODE -ne 0) { throw 'Self-contained publish failed.' }
-    Copy-Item -LiteralPath (Join-Path $appFolder 'CloudInlet.exe') -Destination (Join-Path $appFolder 'CloudBay.exe')
+    & (Join-Path $PSScriptRoot 'build-installer-helper.ps1') -AppFolder $appFolder
     [ordered]@{ schemaVersion = 1; version = $Version; buildFlavor = 'Release'; installerKind = 'Portable'; architecture = 'x64'; sourceRevision = $versionInfo.sourceRevision } |
         ConvertTo-Json | Set-Content -LiteralPath (Join-Path $appFolder 'distribution.json') -Encoding utf8NoBOM
     & (Join-Path $PSScriptRoot 'copy-release-notices.ps1') -AppFolder $appFolder -AssetsPath (Join-Path $repository 'CloudInlet/obj/project.assets.json')
