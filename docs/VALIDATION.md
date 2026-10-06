@@ -1,6 +1,6 @@
 # CloudInlet validation record
 
-## Native notifications and action buttons â€” 2026-10-05
+## Native notifications and action buttons — 2026-10-05
 
 Windows notifications now group backup problems, folder changes, optional transfer-completion summaries, and update availability. Their buttons execute fixed client actions through the same-user, same-build activation pipe. Update actions carry an exact version checked inside the updater operation gate, so an older Notification Center button cannot install a newer candidate. Notification preferences merge without changing backup or account settings. Regular exit retains cold notification activation; permanent EXE/MSI uninstall clears the installed executable's notification registration after graceful shutdown.
 
@@ -18,7 +18,7 @@ Final unsigned **1.0.0 Debug and Release package gates both passed 619/619 tests
 
 The exact final Release payload passed fresh Dark/Light UI acceptance with **398 captures**, including all notification on/off layouts at 800 and 1300 widths and checked tray menus. Native notification storage, exact action arguments, group removal and permanent cleanup passed again. The same payload's isolated Store package passed schema/PRI checks and real activation with `notificationRegistration=true`, the correct startup identity and Store channel. UI, native and extracted Store executable/Core hashes match the published payload. Store registration was removed afterward, with real account settings, credentials and Windows mappings preserved. Evidence is in `artifacts/validation/final-runtime-20261005T102845Z-f6dd0a30/acceptance-summary.json`. Production Store submission remains unconfigured until an app is reserved in Partner Center.
 
-## Public 1.0.0 baseline and update acceptance â€” 2026-10-05
+## Public 1.0.0 baseline and update acceptance — 2026-10-05
 
 `version.json` now defines the public **1.0.0** baseline. Earlier 2.0.x entries below describe internal development milestones and remain as historical evidence. The release pipeline validates the central version, builds separate Debug and Release EXE/MSI/portable distributions, and publishes an immutable tag only after its gates pass. The Store workflow requires a reserved Partner Center identity before production packaging or submission.
 
@@ -34,7 +34,7 @@ Real EXE and MSI acceptance passed through the external update worker from 1.0.0
 
 Release automation passed **61 isolated assertions**, and all four workflows passed actionlint. These tests use a disposable local Git remote and fake GitHub responses, so they do not publish a real release. Windows CI now also gates publication on the real installer fixture suite. Final package builds and actual release publication retain separate evidence.
 
-## Foreground tray surfaces and Fluent menus â€” 2026-10-05
+## Foreground tray surfaces and Fluent menus — 2026-10-05
 
 The **2.0.5** update fixes activity-window foreground input and replaces the classic Win32 notification menu with a stock WinUI menu presenter, standard menu items and icons, and Desktop Acrylic. The menu window is created only when requested and reused. User opening initializes WinUI and then requests the exact HWND foreground once. Initial control focus runs only while that HWND remains foreground; queued work never retries foreground acquisition. Native `WM_ACTIVATE` dismissal complements WinUI activation events, checking current foreground ownership before hiding so stale initial-loading notifications cannot dismiss an active surface. Escape dismisses activity; menu cancellation returns keyboard focus to the tray without redirecting a pointer click in another app.
 
@@ -44,7 +44,7 @@ Full published acceptance also exposed a deferred WinUI navigation selection rep
 
 The opt-in `CloudInlet.exe --ui-smoke --tray-focus-smoke` probe uses isolated temporary storage and app-owned windows, with no account startup or Windows backup mapping operations. It checks cold opening, repeated reopening, foreground HWND ownership, focused initial action, deactivation dismissal, both cross-switch directions, and nonactivating capture display. Adding `--tray-focus-menu-first` checks right-click as the first gesture before activity has opened. Published release focus evidence, fresh Dark/Light captures, menu accessibility/invocation assertions, full tests, package audit, CI and preserved-state installation are recorded in `artifacts/validation/current-release-summary.json`. These checks do not automate a live Explorer tray click. Menu bitmaps use a temporary solid theme fallback because RenderTargetBitmap cannot capture compositor Acrylic; shipping keeps its real backdrop.
 
-## Native scan efficiency and contextual activity â€” 2026-10-05
+## Native scan efficiency and contextual activity — 2026-10-05
 
 The **2.0.4** update corrects slow local reconciliation that was labelled only "Finishing sync." A single attribute-only reparse handle now reads each file's native placeholder residency and change state. Parent safety checks classify fresh reparse tags instead of repeatedly requesting link targets for every file. There is no cached path-safety decision: an inspected directory replaced by a real link is still rejected. The two required local snapshots remain, while the UI reports local scanning, B2 listing, comparison, folder reconciliation, and Windows status scanning with throttled counters. Unchanged remote folders no longer trigger directory creation or redundant SQLite writes.
 
@@ -56,7 +56,7 @@ The complete Release suite passed **506/506 tests with zero skips** in `artifact
 
 Visual review caught blank wide Activity images even though native row geometry was valid. Reusing unchanged history rows and atomically replacing wholly unrelated views corrects that native virtualizer case. UI acceptance now checks actual filename ink in the saved Activity PNGs alongside row bounds, identity retention, contextual action availability, and queue/history reachability. Fresh published acceptance is gated separately in `artifacts/validation/published-ui-2.0.4-final/`; its completion, capture inventory, archive revision, hosted workflow, and preserved-state installation are recorded in `artifacts/validation/current-release-summary.json`. XAML bitmaps do not capture native Mica compositing. Native callback and handle tests are not a claim of automated live user right-click interaction.
 
-## Reviewed folder choices and independent folder jobs â€” 2026-10-04
+## Reviewed folder choices and independent folder jobs — 2026-10-04
 
 The **2.0.3** update separates personal-folder sources from whole-account imports. A Documents or Pictures setup offers matching folders from each discovered account, including the active localized Windows location when available. Whole accounts appear once on the Folder backup page. CloudInlet's own registrations and validation roots are omitted without unregistering or deleting them. Ten deterministic discovery cases cover provider identity, duplicate roots, contextual folders, renamed locations, and overlap boundaries.
 
@@ -68,7 +68,7 @@ Fresh source-output UI acceptance completed with **356 captures** in Dark and Li
 
 The final unsigned archive is separately gated on a complete build/test/publish and fresh acceptance of the published binary. `artifacts/validation/current-release-summary.json` records that generation's revision, test totals, UI evidence, hosted CI result, archive audit, and installation result. Public distribution still requires the disposable-profile redirection and compatibility checks listed below.
 
-## Native chooser and folder restore fixes â€” 2026-10-04
+## Native chooser and folder restore fixes — 2026-10-04
 
 The **2.0.2** update replaces every legacy Windows picker with Windows App SDK desktop pickers. The old picker API is unsupported for elevated desktop applications; the new API uses the native owner window and returns paths without opening file contents. Exclusion drafts survive cancellation, unload, and changed backup roots. A pending chooser prevents duplicate requests and concurrent saves. Extensionless examples receive guidance, whole-root scope selection clears an earlier subfolder scope, and empty COM errors show an actionable message with their HRESULT. The isolated development preview permits choosing a path while still prohibiting settings persistence.
 
@@ -82,7 +82,7 @@ The focused Windows appearance gate passed **16/16 tests without skips** in `art
 
 Attempting to update the user's elevated 2.0.1 instance exposed an additional activation failure: Windows returned `E_ACCESSDENIED` when a normal process connected to that instance's command pipe. The old helper swallowed its pre-window failure and remained running. Instance commands now complete within a deadline, return distinct unavailable/access-denied exit codes, and never initialize an account controller. The installer checks the command's result before replacing files and reports when the running instance must be quit from its tray. Early failures without a main window now exit. **Seven actual named-pipe tests passed**, including exact commands, a protected pipe, missing servers, caller cancellation, and unsupported command rejection. A fresh normal shutdown helper against the real elevated old client exited within five seconds with code **5**, leaving that client running; evidence is `elevated-activation-denial.json`. This proves safe failure handling, not cross-elevation command delivery. The complete package gate reruns with these seven managed cases included.
 
-## Windows reliability and import milestone â€” 2026-10-04
+## Windows reliability and import milestone — 2026-10-04
 
 Commits `0f826b2` and `1ed2cb2` correct read-only native metadata operations, retain the verified B2 baseline when Windows status updates fail, protect inaccessible subtrees without blocking readable siblings, and preserve local copy metadata. The focused integrated run passed **185/185 tests** in `artifacts/validation/windows-reliability/windows-copy-prefix-import-final.trx`. That run covers actual read-only Windows placeholders, true isolated directory denial, long native paths, hard-link rejection, compatibility junctions, named NTFS streams, late source edits, import previews, and safe conflict retention. The later import and transfer receipt changes receive their own final full-suite and live checks before packaging.
 
@@ -98,7 +98,7 @@ The unsigned package gate subsequently passed **417/417 tests**, including the b
 
 Local copy imports preserve named NTFS streams and folder appearance. B2 sync currently stores ordinary file content and directory markers; it does not provide a full NTFS metadata, ACL, EFS, or Volume Shadow Copy backup. Files still open for editing are copied under stable read guards; this is not an application-consistent snapshot of a running database.
 
-## Prior completed transfer milestone â€” 2026-10-04
+## Prior completed transfer milestone — 2026-10-04
 
 The transfer pipeline is committed as `de3ed4d`, source-folder appearance as `e645b11`, native cache validation as `431c855`, tracked controller completion as `4b18eae`, and live activity views as `1eef827`. The completed results below describe the integrated implementation. Each unsigned package is additionally gated on a fresh full Release build/test run; its archive, revision, runtime provenance, dependency notices, and checksum are audited separately.
 
@@ -139,7 +139,7 @@ Backup copies preserve the original `desktop.ini`, relative icon resources, and 
 
 The existing owned Desktop, Pictures, Music, and Videos backup destinations were also repaired in place. All four received icon configuration without reconnecting the account or changing Windows folder mappings; see `artifacts/validation/owned-folder-icon-repair.json`.
 
-## Historical unsigned local release evidence â€” 2026-10-03 to 2026-10-04
+## Historical unsigned local release evidence — 2026-10-03 to 2026-10-04
 
 The earlier release acceptance was performed on 2026-10-03 and 2026-10-04 using Windows 11 Pro Insider Preview build 26340, x64, and .NET SDK 8.0.425. Those checks covered the unsigned local release requested by the owner. The previous migration helper remains on the local `legacy` branch at `03656fb`.
 

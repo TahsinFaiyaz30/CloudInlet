@@ -2,7 +2,7 @@
 
 CloudInlet uses Windows App SDK app notifications. Windows controls banners, Notification Center, sound, and Do not disturb; notification failures do not pause backup or prevent updates. The live development preview and bitmap capture processes do not register or send real notifications.
 
-Settings â†’ Notifications has a master switch and separate choices for backup problems, folder backup changes, sync completion, app updates, and sound. Problems, folder changes, and updates are enabled by default. Completion summaries and sound are off by default. The Windows settings button opens the system notification controls.
+Settings → Notifications has a master switch and separate choices for backup problems, folder backup changes, sync completion, app updates, and sound. Problems, folder changes, and updates are enabled by default. Completion summaries and sound are off by default. The Windows settings button opens the system notification controls.
 
 Related actions are available directly in the notification:
 
