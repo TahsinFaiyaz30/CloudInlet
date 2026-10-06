@@ -159,29 +159,37 @@ public sealed class TransferJobEngine : IAsyncDisposable
                             continue;
                         }
                         TransferReceipt? receipt;
-                        await _transferAdmission.EnterAsync(token).ConfigureAwait(false);
+                        await TransferResources.RelayReconciliation.WaitAsync(token).ConfigureAwait(false);
                         try
                         {
-                            // The destination validates the source before mutation. A
-                            // second engine check here repeats mutable-provider metadata
-                            // requests without strengthening the adapter's later check.
-                            await TransferResources.RelayTransfers.WaitAsync(token).ConfigureAwait(false);
+                            receipt = await destination.ReconcileAsync(request, file, item.Checkpoint, token).ConfigureAwait(false);
+                        }
+                        finally { TransferResources.RelayReconciliation.Release(); }
+                        if (receipt is null)
+                        {
+                            await _transferAdmission.EnterAsync(token).ConfigureAwait(false);
                             try
                             {
-                                live.State = TransferItemState.Transferring;
-                                receipt = await destination.ReconcileAsync(request, file, item.Checkpoint, token).ConfigureAwait(false);
-                                receipt ??= await destination.UploadAsync(request, file, item.Checkpoint, (checkpoint, ct) =>
+                                // The destination validates the source before mutation. A
+                                // second engine check here repeats mutable-provider metadata
+                                // requests without strengthening the adapter's later check.
+                                await TransferResources.RelayTransfers.WaitAsync(token).ConfigureAwait(false);
+                                try
                                 {
-                                    ct.ThrowIfCancellationRequested();
-                                    if (checkpoint.Provider != job.Plan.Destination.Provider) throw new InvalidDataException("A checkpoint belongs to a different provider.");
-                                    _journal.SaveCheckpoint(jobId, item.Entry, checkpoint);
-                                    live.AcknowledgedBytes = checkpoint.AcknowledgedBytes;
-                                    return Task.CompletedTask;
-                                }, new InlineProgress(value => Progress(runtime, live, value)), token).ConfigureAwait(false);
+                                    live.State = TransferItemState.Transferring;
+                                    receipt = await destination.UploadAsync(request, file, item.Checkpoint, (checkpoint, ct) =>
+                                    {
+                                        ct.ThrowIfCancellationRequested();
+                                        if (checkpoint.Provider != job.Plan.Destination.Provider) throw new InvalidDataException("A checkpoint belongs to a different provider.");
+                                        _journal.SaveCheckpoint(jobId, item.Entry, checkpoint);
+                                        live.AcknowledgedBytes = checkpoint.AcknowledgedBytes;
+                                        return Task.CompletedTask;
+                                    }, new InlineProgress(value => Progress(runtime, live, value)), token).ConfigureAwait(false);
+                                }
+                                finally { TransferResources.RelayTransfers.Release(); }
                             }
-                            finally { TransferResources.RelayTransfers.Release(); }
+                            finally { _transferAdmission.Exit(); }
                         }
-                        finally { _transferAdmission.Exit(); }
                         if (!TransferConflictNames.IsAllowedTarget(request, receipt.RelativePath, job.Plan.Destination.Provider))
                             throw new InvalidDataException("The destination created an unexpected file name.");
                         // An acknowledged receipt is durable before source revalidation or expensive verification.

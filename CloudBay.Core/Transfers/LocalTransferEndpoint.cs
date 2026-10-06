@@ -197,10 +197,15 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
         var bytes = ArrayPool<byte>.Shared.Rent(256 * 1024);
         try
         {
+            // Keep one version-checked source connection across durable local
+            // chunks. Flushing/checkpointing a chunk must not require another
+            // Graph/B2 metadata request and range handshake before reading on.
+            await using var input = offset < source.Entry.Size
+                ? await source.OpenReadAsync(offset, source.Entry.Size - offset, cancellationToken).ConfigureAwait(false)
+                : Stream.Null;
             while (offset < source.Entry.Size)
             {
                 var length = Math.Min(4 * 1024 * 1024, source.Entry.Size - offset);
-                await using var input = await source.OpenReadAsync(offset, length, cancellationToken);
                 using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA1);
                 long written = 0;
                 while (written < length)

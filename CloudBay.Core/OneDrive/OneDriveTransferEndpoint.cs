@@ -121,28 +121,42 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
         IProgress<TransferProgress>? progress = null, CancellationToken cancellationToken = default)
     {
         var entry = source.Entry;
-        await source.ValidateAsync(cancellationToken);
         var path = request.RelativePath.Replace('\\', '/');
         if (entry.IsFolder) path = path.TrimEnd('/');
         ValidateRelativePath(path);
+        if (checkpoint is not null && !entry.IsFolder)
+        {
+            ValidateCheckpoint(request, source, checkpoint);
+            path = Data(checkpoint, "target")!;
+        }
         var slash = path.LastIndexOf('/');
         var parentPath = slash < 0 ? "" : path[..slash];
         var name = slash < 0 ? path : path[(slash + 1)..];
-        var parentId = await EnsureParentAsync(parentPath, cancellationToken);
+        string parentId;
+        OneDriveItem? before = null;
+        if (!entry.IsFolder && _folders.TryGetValue(parentPath, out var knownParent))
+        {
+            // Independent reads can overlap for an already known parent. No
+            // destination mutation occurs until source validation succeeds.
+            var validation = source.ValidateAsync(cancellationToken);
+            var destination = _client.GetByPathAsync(Location.ContainerId, knownParent, name, cancellationToken);
+            await Task.WhenAll(validation, destination).ConfigureAwait(false);
+            parentId = knownParent;
+            before = await destination.ConfigureAwait(false);
+        }
+        else
+        {
+            await source.ValidateAsync(cancellationToken).ConfigureAwait(false);
+            // Creating a missing parent still requires validated source state.
+            parentId = await EnsureParentAsync(parentPath, cancellationToken).ConfigureAwait(false);
+            if (!entry.IsFolder)
+                before = await _client.GetByPathAsync(Location.ContainerId, parentId, name, cancellationToken).ConfigureAwait(false);
+        }
         if (entry.IsFolder)
         {
             var folder = await _client.EnsureFolderAsync(Location.ContainerId, parentId, name, cancellationToken);
             return Receipt(folder, request.RelativePath, request.OperationId);
         }
-        if (checkpoint is not null)
-        {
-            ValidateCheckpoint(request, source, checkpoint);
-            path = Data(checkpoint, "target")!;
-            slash = path.LastIndexOf('/');
-            name = slash < 0 ? path : path[(slash + 1)..];
-            parentId = await EnsureParentAsync(slash < 0 ? "" : path[..slash], cancellationToken);
-        }
-        var before = await _client.GetByPathAsync(Location.ContainerId, parentId, name, cancellationToken);
         if (checkpoint is null && before is not null)
         {
             if (request.ConflictPolicy == TransferConflictPolicy.Skip) throw new TransferSkippedException("The destination OneDrive file already exists.");
