@@ -19,7 +19,7 @@ internal static class CloudRelayAcceptance
         long AcknowledgedBytes, long[] SourceOffsets, TransferReceipt? Receipt, IReadOnlyDictionary<string, int> Requests);
 
     public static async Task RunAsync(B2CloudStore store, CloudBucket bucket, string accountId, string prefix, string id,
-        string temp, Func<string, Func<Task>, Task> check, CancellationToken token, bool tinyOnly = false)
+        string temp, Func<string, Func<Task>, Task> check, CancellationToken token, bool tinyOnly = false, bool coldSourceMetadata = false)
     {
         ValidateScope(temp, id, prefix);
         var sourceLocation = new TransferLocation("b2", accountId, bucket.Id, "", prefix + "relay/source/", "Generated relay source");
@@ -94,7 +94,8 @@ internal static class CloudRelayAcceptance
             using var relayStore = new B2CloudStore(trace);
             relayStore.Configure(0, 0, 4);
             await relayStore.ConnectAsync(await CredentialsAsync(), token);
-            var sourceAdapter = new B2TransferEndpoint(relayStore, benchmarkSourceLocation);
+            ITransferEndpoint sourceAdapter = new B2TransferEndpoint(relayStore, benchmarkSourceLocation);
+            if (coldSourceMetadata) sourceAdapter = new ColdSourceEndpoint(sourceAdapter, relayStore);
             var destination = new B2TransferEndpoint(relayStore, sourceLocation with { Path = prefix + "relay/tiny-benchmark/" });
             var jobPlan = new TransferJobPlan(Guid.NewGuid().ToString("N"), sourceAdapter.Location, destination.Location,
                 TransferOperation.Copy, TransferConflictPolicy.Fail, [], DateTimeOffset.UtcNow);
@@ -121,6 +122,7 @@ internal static class CloudRelayAcceptance
             benchmark = new { files = count, bytesPerFile = tiny!.Size, workers = 4, elapsedSeconds = watch.Elapsed.TotalSeconds,
                 filesPerSecond = count / watch.Elapsed.TotalSeconds, payloadBytesPerSecond = count * tiny.Size / watch.Elapsed.TotalSeconds,
                 uploadRequests = intervals.Length, uploadEndpointRequests = counter.Count("b2_get_upload_url"), authorizationRequests = counter.Count("b2_authorize_account"),
+                sourceMetadataEvidence = coldSourceMetadata ? "Fresh metadata GET per source (controlled baseline)" : "Exact immutable metadata from fresh source discovery",
                 aggregateUploadIdleGapCount = gaps.Count, aggregateUploadIdleGapMilliseconds = gaps.Sum(),
                 maximumAggregateUploadIdleGapMilliseconds = gaps.Count > 0 ? gaps.Max() : 0,
                 requests = counter.Counts, httpVersions = counter.HttpVersions,
@@ -293,6 +295,22 @@ internal static class CloudRelayAcceptance
         public Task ValidateAsync(CancellationToken cancellationToken = default) => inner.ValidateAsync(cancellationToken);
         public Task<Stream> OpenReadAsync(long offset, long length, CancellationToken cancellationToken = default)
         { Offsets.Enqueue(offset); return inner.OpenReadAsync(offset, length, cancellationToken); }
+    }
+    // Measurement-only control: discovery still uses the real API, but a new
+    // endpoint opens each source so no in-memory discovery evidence is available.
+    // Destination verification and all other transport/recovery behavior are identical.
+    private sealed class ColdSourceEndpoint(ITransferEndpoint inner, B2CloudStore store) : ITransferEndpoint
+    {
+        public TransferLocation Location => inner.Location;
+        public ITransferSourceFile OpenSource(TransferEntry entry) => new B2TransferEndpoint(store, Location).OpenSource(entry);
+        public Task<TransferFolderPage> BrowseFoldersAsync(string? cursor = null, CancellationToken cancellationToken = default) => inner.BrowseFoldersAsync(cursor, cancellationToken);
+        public Task<TransferDiscoveryPage> DiscoverAsync(string? cursor = null, CancellationToken cancellationToken = default) => inner.DiscoverAsync(cursor, cancellationToken);
+        public Task<TransferReceipt?> ReconcileAsync(TransferUploadRequest request, ITransferSourceFile source, TransferCheckpoint? checkpoint, CancellationToken cancellationToken = default) => inner.ReconcileAsync(request, source, checkpoint, cancellationToken);
+        public Task<TransferReceipt> UploadAsync(TransferUploadRequest request, ITransferSourceFile source, TransferCheckpoint? checkpoint, Func<TransferCheckpoint, CancellationToken, Task> saveCheckpoint,
+            IProgress<TransferProgress>? progress = null, CancellationToken cancellationToken = default) => inner.UploadAsync(request, source, checkpoint, saveCheckpoint, progress, cancellationToken);
+        public Task VerifyAsync(TransferReceipt receipt, ITransferSourceFile source, CancellationToken cancellationToken = default) => inner.VerifyAsync(receipt, source, cancellationToken);
+        public Task DeleteSourceAsync(TransferEntry entry, CancellationToken cancellationToken = default) => inner.DeleteSourceAsync(entry, cancellationToken);
+        public Task<bool> IsSourceDeletedAsync(TransferEntry entry, CancellationToken cancellationToken = default) => inner.IsSourceDeletedAsync(entry, cancellationToken);
     }
     private sealed class GeneratedSource(long size) : ITransferSourceFile
     {

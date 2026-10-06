@@ -71,7 +71,10 @@ public sealed partial class B2CloudStore
             {
                 if (!HasNonnegativeInteger(item, "contentLength") || !HasNonnegativeInteger(item, "uploadTimestamp"))
                     throw new InvalidDataException("Backblaze returned an invalid transfer file length or timestamp.");
-                result.Add(ParseObject(item));
+                var file = ParseObject(item);
+                if (file.Size > 0 && RequiredString(item, "bucketId") != bucketId)
+                    throw new InvalidDataException("Backblaze returned a source version from another bucket.");
+                result.Add(file);
             }
         }
         var continuation = next.ValueKind == JsonValueKind.Null ? null : next.GetString();

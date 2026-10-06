@@ -70,7 +70,8 @@ internal static class Validation
             if (args.Contains("--cloud-relay") || args.Contains("--cloud-relay-tiny"))
             {
                 credentials = null!;
-                await CloudRelayAcceptance.RunAsync(store, bucket, account.AccountId, Prefix, Id, temp, CheckAsync, ct, args.Contains("--cloud-relay-tiny"));
+                await CloudRelayAcceptance.RunAsync(store, bucket, account.AccountId, Prefix, Id, temp, CheckAsync, ct,
+                    args.Contains("--cloud-relay-tiny"), args.Contains("--cloud-relay-cold-source"));
             }
             else if (args.Contains("--transfers"))
             {

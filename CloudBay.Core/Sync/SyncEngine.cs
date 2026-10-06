@@ -320,16 +320,9 @@ public sealed class SyncEngine : IAsyncDisposable
             }
             if (error is not null) Record(ActivityKind.Error, relative, error.Message);
         }
-        async Task TransferAsync(string relative, ActivityKind kind, Func<CancellationToken, Task> action, CancellationToken token)
-        {
-            try { await action(token); FinishTransfer(relative, kind); }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception error) { FinishTransfer(relative, kind, error); }
-        }
         await Task.WhenAll(
             UploadPipelineAsync(uploads, settings, limits.Uploads, FinishTransfer, ct),
-            Parallel.ForEachAsync(downloads, new ParallelOptions { MaxDegreeOfParallelism = limits.Downloads, CancellationToken = ct },
-                (item, token) => new ValueTask(TransferAsync(item.Relative, ActivityKind.Download, t => ApplyRemoteAsync(item.Relative, item.File, settings, t), token))));
+            DownloadPipelineAsync(downloads, settings, limits.Downloads, FinishTransfer, ct));
         errors += await ReconcileDirectoriesAsync(localSnapshot, remoteDirectories, directoryBaseline, settings, ct);
         var final = _manifest.ReadAll();
         var finalSnapshot = await Task.Run(() => ScanLocal(settings, ct, "Checking Windows file status"), ct);
@@ -710,28 +703,107 @@ public sealed class SyncEngine : IAsyncDisposable
         }
     }
 
-    private async Task ApplyRemoteAsync(string relative, CloudObject cloud, AppSettings settings, CancellationToken ct)
+    private async Task DownloadPipelineAsync(IReadOnlyList<(string Relative, CloudObject File)> downloads,
+        AppSettings settings, int workers, Action<string, ActivityKind, Exception?> finish, CancellationToken cancellationToken)
+    {
+        if (downloads.Count == 0) return;
+        using var pipeline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var token = pipeline.Token;
+        // A network worker is reused after the last reported payload byte. Provider checksums,
+        // atomic local installation, and Windows marking continue in bounded finalization work.
+        // At most workers + 2*workers + min(workers,8) staging handles/tasks remain outstanding.
+        var pending = Channel.CreateBounded<PendingRemote>(new BoundedChannelOptions(workers * 2)
+        { FullMode = BoundedChannelFullMode.Wait, SingleReader = workers == 1, SingleWriter = workers == 1 });
+        async Task ReceiveAsync()
+        {
+            try
+            {
+                await Parallel.ForEachAsync(downloads, new ParallelOptions
+                { MaxDegreeOfParallelism = workers, CancellationToken = token }, async (item, ct) =>
+                {
+                    PendingRemote? remote = null;
+                    try
+                    {
+                        remote = await PrepareRemoteAsync(item.Relative, item.File, settings, ct);
+                        if (remote.Transfer is not null) await remote.Transfer.PayloadCompleted.WaitAsync(ct);
+                        await pending.Writer.WriteAsync(remote, ct);
+                        remote = null; // The finalizer now owns the transfer and staging handle.
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception error) { finish(item.Relative, ActivityKind.Download, error); }
+                    finally { if (remote is not null) await DisposeRemoteAsync(remote); }
+                });
+            }
+            catch { pipeline.Cancel(); throw; }
+            finally { pending.Writer.TryComplete(); }
+        }
+        async Task FinalizeAsync()
+        {
+            try
+            {
+                await foreach (var remote in pending.Reader.ReadAllAsync(token))
+                {
+                    try
+                    {
+                        await ApplyPreparedRemoteAsync(remote, settings, token);
+                        finish(remote.Relative, ActivityKind.Download, null);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception error) { finish(remote.Relative, ActivityKind.Download, error); }
+                    finally { await DisposeRemoteAsync(remote); }
+                }
+            }
+            catch { pipeline.Cancel(); throw; }
+        }
+        try
+        {
+            var finalizers = Enumerable.Range(0, Math.Min(workers, 8)).Select(_ => FinalizeAsync()).ToArray();
+            await Task.WhenAll(finalizers.Append(ReceiveAsync()));
+        }
+        finally
+        {
+            pipeline.Cancel();
+            while (pending.Reader.TryRead(out var abandoned)) await DisposeRemoteAsync(abandoned);
+        }
+    }
+
+    private async Task<PendingRemote> PrepareRemoteAsync(string relative, CloudObject cloud, AppSettings settings, CancellationToken ct)
     {
         var path = PathRules.FullPath(settings.RootPath, relative);
         SetPhase(relative, ActivityKind.Download, TransferPhase.Downloading);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var metadataOnly = settings.FilesOnDemand && (!File.Exists(path) || _placeholders.IsPlaceholder(path));
-        if (metadataOnly)
-            await _placeholders.CreateOrUpdateAsync(path, cloud, true, ct);
+        if (metadataOnly) return new(relative, cloud, null, null, null);
+        var original = File.Exists(path) ? ReadLocal(path) : null;
+        var staging = await DownloadStaging.OpenAsync(settings.RootPath, relative, cloud, ct);
+        try
+        {
+            var transfer = NativeTransferAdapters.BeginDownload(_cloud, cloud, staging.Stream, staging.Chunks, staging.CheckpointAsync,
+                new InlineProgress(p =>
+                {
+                    if (p.Bytes == p.TotalBytes) SetPhase(relative, ActivityKind.Download, TransferPhase.Verifying);
+                    UpdateProgress(relative, ActivityKind.Download, p);
+                }), ct);
+            return new(relative, cloud, original, staging, transfer);
+        }
+        catch { await staging.DisposeAsync(); throw; }
+    }
+
+    private async Task ApplyPreparedRemoteAsync(PendingRemote remote, AppSettings settings, CancellationToken ct)
+    {
+        var (relative, cloud, original, staging, transfer) = remote;
+        var path = PathRules.FullPath(settings.RootPath, relative);
+        var metadataOnly = staging is null;
+        if (metadataOnly) await _placeholders.CreateOrUpdateAsync(path, cloud, true, ct);
         else
         {
-            var original = File.Exists(path) ? ReadLocal(path) : null;
-            await using var staging = await DownloadStaging.OpenAsync(settings.RootPath, relative, cloud, ct);
-            var temporary = staging.Path;
+            var verifiedStaging = staging!;
+            var temporary = verifiedStaging.Path;
             try
             {
-                await NativeTransferAdapters.DownloadFileAsync(_cloud, cloud, staging.Stream, staging.Chunks, staging.CheckpointAsync,
-                    new InlineProgress(p =>
-                    {
-                        if (p.TotalBytes > 0 && p.Bytes == p.TotalBytes) SetPhase(relative, ActivityKind.Download, TransferPhase.Verifying);
-                        UpdateProgress(relative, ActivityKind.Download, p);
-                    }), ct);
-                await staging.Stream.DisposeAsync();
+                await transfer!.Completion;
+                ct.ThrowIfCancellationRequested();
+                await verifiedStaging.Stream.DisposeAsync();
                 File.SetLastWriteTimeUtc(temporary, cloud.ModifiedUtc.UtcDateTime);
                 if (File.Exists(path))
                 {
@@ -749,19 +821,28 @@ public sealed class SyncEngine : IAsyncDisposable
                 }
                 // Never overwrite: a file created after the atomic preservation remains intact.
                 File.Move(temporary, path, overwrite: false);
-                staging.ForgetCheckpoint();
+                verifiedStaging.ForgetCheckpoint();
                 var baseline = new SyncEntry(relative, cloud, cloud.Size, cloud.ModifiedUtc) { NativeMarkPending = true };
                 _manifest.Put(baseline);
                 ShowPendingNativeMark(baseline, ActivityKind.Download);
                 await FinishNativeMarkAsync(baseline, settings, ct);
             }
-            catch (InvalidDataException) { if (staging.Stream.CanWrite) staging.DiscardCorruptBytes(); throw; }
+            catch (InvalidDataException) { if (verifiedStaging.Stream.CanWrite) verifiedStaging.DiscardCorruptBytes(); throw; }
         }
         if (!settings.FilesOnDemand) await _placeholders.SetPinAsync(path, PinMode.AlwaysAvailable, ct);
         SaveBaseline(relative, cloud);
         Record(metadataOnly ? ActivityKind.Information : ActivityKind.Download, relative,
             metadataOnly ? "Cloud file is available in Explorer" : "Downloaded and available offline",
             metadataOnly ? 0 : cloud.Size);
+    }
+
+    private static async Task DisposeRemoteAsync(PendingRemote remote)
+    {
+        // Cancellation must stop and observe the provider before its FileStream closes. The
+        // acknowledged partial and checkpoint remain; only successful installation forgets them.
+        try { if (remote.Transfer is not null) await remote.Transfer.Completion; }
+        catch { /* Its owning worker records failure, or the cancelled cycle retains recovery state. */ }
+        finally { if (remote.Staging is not null) await remote.Staging.DisposeAsync(); }
     }
 
     private void SaveBaseline(string relative, CloudObject file)
@@ -919,6 +1000,8 @@ public sealed class SyncEngine : IAsyncDisposable
     }
     private sealed record LocalFile(long Size, DateTimeOffset WriteUtc, bool Hydrated, bool HasLocalChanges);
     private sealed record UploadedLocal(string Relative, CloudObject File, long Size, DateTimeOffset Modified);
+    private sealed record PendingRemote(string Relative, CloudObject File, LocalFile? Original,
+        DownloadStaging? Staging, NativeTransferAdapters.PendingDownload? Transfer);
     private sealed record PreparedLocal(string Relative, FileStream Source, string Sha1, DateTimeOffset Modified);
     private sealed class LocalSnapshot
     {

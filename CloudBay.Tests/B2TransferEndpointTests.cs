@@ -394,6 +394,163 @@ public sealed class B2TransferEndpointTests
     }
 
     [TestMethod]
+    public async Task FreshDiscoveryAvoidsRepeatedImmutableSourceMetadataButStillVerifiesDestination()
+    {
+        using var server = new Server();
+        server.Files["source-proof"] = Metadata("source-proof", "source/file.bin", 127, PatternHash(127), new());
+        using var store = await ConnectAsync(server);
+        var sourceEndpoint = new B2TransferEndpoint(store, Location with { Path = "source" });
+        var entry = (await sourceEndpoint.DiscoverAsync()).Entries.Single();
+        var source = sourceEndpoint.OpenSource(entry);
+        await source.ValidateAsync();
+        var destination = new B2TransferEndpoint(store, Location);
+        var receipt = await destination.UploadAsync(Request(70), source, null, (_, _) => Task.CompletedTask);
+        await destination.VerifyAsync(receipt, source);
+        Assert.AreEqual(1, server.InfoCalls, "The provider destination receipt remains independently checked; listing already proved this source identity.");
+        Assert.AreEqual(1, server.DownloadCalls);
+        Assert.AreEqual(1, server.UploadCalls);
+    }
+
+    [TestMethod]
+    public async Task SavedSourceEntryWithoutFreshDiscoveryRequiresProviderMetadataAgain()
+    {
+        using var server = new Server();
+        server.Files["saved-source"] = Metadata("saved-source", "source/file.bin", 127, PatternHash(127), new());
+        using var store = await ConnectAsync(server);
+        var location = Location with { Path = "source" };
+        var original = new B2TransferEndpoint(store, location);
+        var entry = (await original.DiscoverAsync()).Entries.Single();
+        var restarted = new B2TransferEndpoint(store, location);
+        await restarted.OpenSource(entry).ValidateAsync();
+        Assert.AreEqual(1, server.InfoCalls, "Restart cannot treat saved entry fields as provider evidence.");
+    }
+
+    [DataTestMethod]
+    [DataRow("path")]
+    [DataRow("size")]
+    [DataRow("hash")]
+    [DataRow("modified")]
+    public async Task AlteredEntryCannotReuseDiscoveryEvidence(string altered)
+    {
+        using var server = new Server();
+        server.Files["source-proof"] = Metadata("source-proof", "source/file.bin", 127, PatternHash(127), new());
+        using var store = await ConnectAsync(server);
+        var sourceEndpoint = new B2TransferEndpoint(store, Location with { Path = "source" });
+        var entry = (await sourceEndpoint.DiscoverAsync()).Entries.Single();
+        entry = altered switch
+        {
+            "path" => entry with { RelativePath = "another.bin" },
+            "size" => entry with { Size = 128 },
+            "hash" => entry with { Sha1 = new string('a', 40) },
+            _ => entry with { ModifiedUtc = Modified.AddSeconds(1) }
+        };
+        await Assert.ThrowsExceptionAsync<TransferSourceChangedException>(() =>
+            new B2TransferEndpoint(store, Location).UploadAsync(Request(71), sourceEndpoint.OpenSource(entry), null, (_, _) => Task.CompletedTask));
+        Assert.AreEqual(1, server.InfoCalls);
+        Assert.AreEqual(0, server.UploadCalls);
+        Assert.AreEqual(0, server.DownloadCalls);
+    }
+
+    [DataTestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task EmptyFileOrFolderStillChecksFreshProviderPresence(bool folder)
+    {
+        using var server = new Server();
+        server.Files["empty-source"] = Metadata("empty-source", "source/empty" + (folder ? "/" : ".bin"), 0, PatternHash(0), new());
+        using var store = await ConnectAsync(server);
+        var sourceEndpoint = new B2TransferEndpoint(store, Location with { Path = "source" });
+        var entry = (await sourceEndpoint.DiscoverAsync()).Entries.Single();
+        await sourceEndpoint.OpenSource(entry).ValidateAsync();
+        Assert.AreEqual(1, server.InfoCalls, "An empty source has no payload range response to recheck its existence.");
+    }
+
+    [TestMethod]
+    public async Task DiscoveredMoveStillPerformsFreshCurrentAndExactVersionChecks()
+    {
+        using var server = new Server();
+        server.Files["move-source"] = Metadata("move-source", "source/file.bin", 127, PatternHash(127), new());
+        using var store = await ConnectAsync(server);
+        var sourceEndpoint = new B2TransferEndpoint(store, Location with { Path = "source" });
+        var entry = (await sourceEndpoint.DiscoverAsync()).Entries.Single();
+        await sourceEndpoint.OpenSource(entry).ValidateAsync();
+        server.NewerCurrentVersion = true;
+        await Assert.ThrowsExceptionAsync<TransferSourceChangedException>(() => sourceEndpoint.DeleteSourceAsync(entry));
+        Assert.AreEqual(1, server.InfoCalls);
+        Assert.AreEqual(0, server.DeleteCalls);
+    }
+
+    [DataTestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task InvalidDiscoveryCannotSeedReusableSourceEvidence(bool aliasedVersion)
+    {
+        using var server = new Server();
+        var valid = Metadata("source-proof", "source/file.bin", 127, PatternHash(127), new());
+        server.Files["source-proof"] = valid;
+        var invalid = aliasedVersion ? Metadata("source-proof", "source/another.bin", 127, PatternHash(127), new()) :
+            (object)new { accountId = "account", bucketId = "foreign-bucket", fileId = "foreign", fileName = "source/foreign.bin",
+                action = "upload", contentLength = 127, contentSha1 = PatternHash(127), uploadTimestamp = Modified.ToUnixTimeMilliseconds(), fileInfo = new Dictionary<string, string>() };
+        server.ListOverride = _ => Json(new { files = new[] { valid, invalid }, nextFileName = (string?)null });
+        using var store = await ConnectAsync(server);
+        var endpoint = new B2TransferEndpoint(store, Location with { Path = "source" });
+        await Assert.ThrowsExceptionAsync<InvalidDataException>(() => endpoint.DiscoverAsync());
+        server.ListOverride = null;
+        await endpoint.OpenSource(new("source-proof", "file.bin", "source-proof", 127, Modified, PatternHash(127))).ValidateAsync();
+        Assert.AreEqual(1, server.InfoCalls);
+    }
+
+    [TestMethod]
+    public async Task DiscoveryEvidenceIsBoundedAndEvictedSourcesUseFreshMetadata()
+    {
+        using var server = new Server();
+        for (var index = 0; index < 4097; index++)
+            server.Files["source-" + index] = Metadata("source-" + index, "source/" + index.ToString("D4") + ".bin", 127, PatternHash(127), new());
+        var listed = server.Files.Values.Select(file => JsonSerializer.SerializeToElement(file))
+            .OrderBy(file => file.GetProperty("fileName").GetString(), StringComparer.Ordinal).ToArray();
+        server.ListOverride = body =>
+        {
+            var cursor = body.GetProperty("startFileName");
+            var start = cursor.ValueKind == JsonValueKind.Null ? 0 :
+                Array.FindIndex(listed, file => file.GetProperty("fileName").GetString() == cursor.GetString());
+            Assert.IsTrue(start >= 0);
+            var count = body.GetProperty("maxFileCount").GetInt32();
+            return Json(new { files = listed.Skip(start).Take(count).ToArray(),
+                nextFileName = start + count < listed.Length ? listed[start + count].GetProperty("fileName").GetString() : null });
+        };
+        using var store = await ConnectAsync(server);
+        store.ListPageSize = 1000;
+        var endpoint = new B2TransferEndpoint(store, Location with { Path = "source" });
+        var entries = new List<TransferEntry>();
+        string? next = null;
+        do
+        {
+            var page = await endpoint.DiscoverAsync(next);
+            entries.AddRange(page.Entries);
+            next = page.NextCursor;
+        } while (next is not null);
+        Assert.AreEqual(4097, entries.Count);
+        await endpoint.OpenSource(entries.First()).ValidateAsync();
+        await endpoint.OpenSource(entries.Last()).ValidateAsync();
+        Assert.AreEqual(1, server.InfoCalls, "Only the oldest evicted immutable proof needs another provider request.");
+    }
+
+    [TestMethod]
+    public async Task DiscoveredSourceStillRejectsCorruptRangeBeforeDestinationCommit()
+    {
+        using var server = new Server { CorruptDownload = true };
+        server.Files["source-proof"] = Metadata("source-proof", "source/file.bin", 127, PatternHash(127), new());
+        using var store = await ConnectAsync(server);
+        var sourceEndpoint = new B2TransferEndpoint(store, Location with { Path = "source" });
+        var entry = (await sourceEndpoint.DiscoverAsync()).Entries.Single();
+        await Assert.ThrowsExceptionAsync<TransferSourceChangedException>(() =>
+            new B2TransferEndpoint(store, Location).UploadAsync(Request(72), sourceEndpoint.OpenSource(entry), null, (_, _) => Task.CompletedTask));
+        Assert.AreEqual(0, server.InfoCalls);
+        Assert.IsTrue(server.UploadCalls <= 1, "Corruption may be detected during the initial source block, but cannot replay or commit the destination.");
+        Assert.AreEqual(1, server.Files.Count);
+    }
+
+    [TestMethod]
     public async Task ConflictsAndRenameAreDeterministicWithoutDuplicateVersions()
     {
         using var server = new Server();
@@ -1007,7 +1164,7 @@ public sealed class B2TransferEndpointTests
         public ConcurrentDictionary<string, object> Files { get; } = new();
         private readonly ConcurrentDictionary<string, (string Key, Dictionary<string, string> Info)> _starts = new();
         private readonly ConcurrentDictionary<int, (long Length, string Hash)> _parts = new();
-        public int AuthorizationCalls, UploadUrlCalls, UploadCalls, StartCalls, FinishCalls, CancelCalls, DeleteCalls, DownloadCalls, VersionListCalls;
+        public int AuthorizationCalls, UploadUrlCalls, UploadCalls, StartCalls, FinishCalls, CancelCalls, DeleteCalls, DownloadCalls, VersionListCalls, InfoCalls;
         public bool LoseSmallAcknowledgment, HideReceipts, CorruptPartChecksum, CorruptDownload, NewerCurrentVersion;
         public bool ExpireFirstUploadToken, ExpireFirstDownloadAuthorization;
         public bool IncludeStartsInVersionListing;
@@ -1118,6 +1275,7 @@ public sealed class B2TransferEndpointTests
                         fileName = s.Value.Key, action = "start", contentLength = 0, contentSha1 = "none", uploadTimestamp = 0, fileInfo = s.Value.Info }).ToArray() : [];
                     return Json(new { files = HideReceipts ? [] : Files.Values.Concat(starts).ToArray(), nextFileName = (string?)null, nextFileId = (string?)null });
                 case "b2_get_file_info":
+                    Interlocked.Increment(ref InfoCalls);
                     return Files.TryGetValue(body.GetProperty("fileId").GetString()!, out var infoFile) ? Json(infoFile) : Json(new { code = "file_not_present", message = "Missing" }, HttpStatusCode.NotFound);
                 case "b2_start_large_file":
                     Interlocked.Increment(ref StartCalls);

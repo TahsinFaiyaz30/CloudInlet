@@ -7,6 +7,10 @@ public sealed class B2TransferEndpoint : ITransferEndpoint
 {
     private readonly B2CloudStore _store;
     private readonly string _prefix;
+    private const int DiscoveryEvidenceLimit = 4096;
+    private readonly object _discoveryGate = new();
+    private readonly Dictionary<string, CloudObject> _discovered = new(StringComparer.Ordinal);
+    private readonly Queue<string> _discoveryOrder = new();
     public TransferLocation Location { get; }
 
     public B2TransferEndpoint(B2CloudStore store, TransferLocation location)
@@ -29,12 +33,38 @@ public sealed class B2TransferEndpoint : ITransferEndpoint
     public async Task<TransferDiscoveryPage> DiscoverAsync(string? cursor = null, CancellationToken cancellationToken = default)
     {
         var page = await _store.ListTransferPageAsync(Location.ContainerId, _prefix, cursor, false, cancellationToken).ConfigureAwait(false);
+        // A successful provider listing already binds each immutable version to
+        // this bucket, key, length, checksum and timestamp. Keep only bounded,
+        // in-memory evidence; saved entries alone never establish this proof.
+        var evidence = new Dictionary<string, CloudObject>(StringComparer.Ordinal);
+        foreach (var file in page.Files.Where(file => file.Size > 0 && file.Action == "upload" && file.Key != _prefix))
+            if (!evidence.TryAdd(file.FileId, file) && evidence[file.FileId] != file)
+                throw new InvalidDataException("B2 discovery repeated a version with different metadata.");
+        lock (_discoveryGate)
+        {
+            foreach (var file in evidence.Values)
+                if (_discovered.TryGetValue(file.FileId, out var previous) && previous != file)
+                    throw new InvalidDataException("B2 discovery changed immutable version metadata.");
+            foreach (var file in evidence.Values)
+            {
+                if (_discovered.ContainsKey(file.FileId)) continue;
+                _discovered.Add(file.FileId, file);
+                _discoveryOrder.Enqueue(file.FileId);
+                while (_discoveryOrder.Count > DiscoveryEvidenceLimit) _discovered.Remove(_discoveryOrder.Dequeue());
+            }
+        }
         return new(page.Files.Where(f => f.Key != _prefix).Select(f => new TransferEntry(f.FileId,
             f.Key[_prefix.Length..].TrimEnd('/'), f.FileId, f.Size, f.ModifiedUtc, f.Sha1,
             f.Size == 0 && f.Key.EndsWith('/'))).ToArray(), page.Next);
     }
 
-    public ITransferSourceFile OpenSource(TransferEntry entry) => new Source(_store, Location.ContainerId, ToObject(entry), entry);
+    public ITransferSourceFile OpenSource(TransferEntry entry)
+    {
+        var file = ToObject(entry);
+        bool discovered;
+        lock (_discoveryGate) discovered = _discovered.TryGetValue(file.FileId, out var evidence) && evidence == file;
+        return new Source(_store, Location.ContainerId, file, entry, discovered);
+    }
 
     public async Task<TransferReceipt?> ReconcileAsync(TransferUploadRequest request, ITransferSourceFile source,
         TransferCheckpoint? checkpoint, CancellationToken cancellationToken = default)
@@ -172,10 +202,10 @@ public sealed class B2TransferEndpoint : ITransferEndpoint
         return new(entry.Id, _prefix + relative + (entry.IsFolder ? "/" : ""), entry.Size, entry.Sha1, entry.ModifiedUtc);
     }
 
-    private sealed class Source(B2CloudStore store, string bucketId, CloudObject file, TransferEntry entry) : ITransferSourceFile
+    private sealed class Source(B2CloudStore store, string bucketId, CloudObject file, TransferEntry entry, bool discovered) : ITransferSourceFile
     {
         private readonly object _gate = new();
-        private Task? _validation;
+        private Task? _validation = discovered ? Task.CompletedTask : null;
         public TransferEntry Entry => entry;
         public Task<Stream> OpenReadAsync(long offset, long length, CancellationToken cancellationToken = default) =>
             store.OpenTransferReadAsync(file, offset, length, cancellationToken);

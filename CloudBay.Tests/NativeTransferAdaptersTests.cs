@@ -135,6 +135,54 @@ public sealed class NativeTransferAdaptersTests
         Assert.AreEqual(2, store.Verifications);
     }
 
+    [TestMethod]
+    public async Task DownloadPayloadBoundaryReleasesSchedulingBeforeProviderVerificationCompletes()
+    {
+        using var local = new TestFile([]);
+        await using var destination = local.OpenStaging();
+        using var store = new NativeStore { Payload = Encoding.UTF8.GetBytes("network finished; verification pending"), HoldDownloadCompletion = true };
+        var pending = NativeTransferAdapters.BeginDownload(store,
+            new("version", "file", store.Payload.Length, Sha1(store.Payload), DateTimeOffset.UtcNow), destination, [],
+            (_, _) => Task.CompletedTask);
+        await pending.PayloadCompleted.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.IsFalse(pending.Completion.IsCompleted, "A payload phase notification must never be accepted as successful provider verification.");
+        Assert.IsTrue(destination.CanWrite, "The caller must retain staging ownership while the provider is still checking it.");
+        store.ReleaseDownload.TrySetResult();
+        await pending.Completion;
+    }
+
+    [TestMethod]
+    public async Task CancelledDeferredDownloadSettlesBothPhasesWithoutClosingCallerStaging()
+    {
+        using var local = new TestFile([]);
+        await using var destination = local.OpenStaging();
+        using var store = new NativeStore { Payload = Encoding.UTF8.GetBytes("retained acknowledged bytes"), HoldDownloadCompletion = true };
+        using var cancellation = new CancellationTokenSource();
+        var pending = NativeTransferAdapters.BeginDownload(store,
+            new("version", "file", store.Payload.Length, Sha1(store.Payload), DateTimeOffset.UtcNow), destination, [],
+            (_, _) => Task.CompletedTask, cancellationToken: cancellation.Token);
+        await pending.PayloadCompleted.WaitAsync(TimeSpan.FromSeconds(10));
+        cancellation.Cancel();
+        try { await pending.Completion; Assert.Fail("The cancelled provider completion must propagate cancellation."); }
+        catch (OperationCanceledException) { }
+        Assert.IsTrue(destination.CanWrite);
+        Assert.AreEqual(store.Payload.Length, destination.Length);
+    }
+
+    [TestMethod]
+    public async Task InvalidPayloadPhaseCannotAuthorizeCompletionOrLeaveSchedulingWaiterHung()
+    {
+        using var local = new TestFile([]);
+        await using var destination = local.OpenStaging();
+        using var store = new NativeStore { Payload = Encoding.UTF8.GetBytes("reported length differs"), InvalidDownloadProgress = true };
+        var pending = NativeTransferAdapters.BeginDownload(store,
+            new("version", "file", store.Payload.Length, Sha1(store.Payload), DateTimeOffset.UtcNow), destination, [],
+            (_, _) => Task.CompletedTask);
+        await pending.PayloadCompleted.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.ThrowsExceptionAsync<InvalidDataException>(() => pending.Completion);
+        Assert.IsTrue(destination.CanWrite);
+    }
+
     private static string Sha1(byte[] bytes) => Convert.ToHexString(SHA1.HashData(bytes)).ToLowerInvariant();
 
     private sealed class CollectProgress : IProgress<TransferProgress>
@@ -168,6 +216,9 @@ public sealed class NativeTransferAdaptersTests
         public long DownloadStart { get; private set; }
         public bool VerificationFailure { get; set; }
         public int Verifications { get; private set; }
+        public bool HoldDownloadCompletion { get; init; }
+        public bool InvalidDownloadProgress { get; init; }
+        public TaskCompletionSource ReleaseDownload { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task<string> PrepareUploadChecksumAsync(string bucketId, string key, Stream source, long length,
             DateTimeOffset modifiedUtc, CancellationToken cancellationToken = default)
@@ -209,7 +260,8 @@ public sealed class NativeTransferAdaptersTests
             destination.Flush(true);
             var chunk = new DownloadChunk(DownloadStart, end - DownloadStart, Sha1(Payload[(int)DownloadStart..end]));
             await checkpoint(chunk, cancellationToken);
-            progress?.Report(new(end, file.Size));
+            progress?.Report(new(end, InvalidDownloadProgress ? file.Size + 1 : file.Size));
+            if (HoldDownloadCompletion) await ReleaseDownload.Task.WaitAsync(cancellationToken);
         }
 
         public Task VerifyUploadAsync(CloudObject file, string bucketId, CancellationToken cancellationToken = default)

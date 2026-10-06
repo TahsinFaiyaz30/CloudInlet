@@ -13,6 +13,95 @@ namespace CloudBay.Tests;
 public sealed class TransferPipelineTests
 {
     [TestMethod]
+    public async Task NextLocalSourceIsPreparedWhileTheActiveUploadStillOwnsItsNetworkSlot()
+    {
+        await using var h = new Harness(1);
+        for (var index = 0; index < 3; index++) await File.WriteAllTextAsync(h.Path($"file-{index}.txt"), "prepared locked snapshot");
+        h.Cloud.HoldUpload = true;
+        var work = h.Engine.SyncNowAsync();
+        await h.Cloud.FirstUpload.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await h.Cloud.SecondPreparation.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.AreEqual(0, h.Cloud.UploadedCount, "Preparation of the next source must overlap the current network request.");
+        var ready = h.Cloud.PreparedPaths.Skip(1).First();
+        Assert.ThrowsException<IOException>(() => { using var changed = new FileStream(ready, FileMode.Open, FileAccess.Write, FileShare.ReadWrite); });
+        h.Cloud.ReleaseUpload.TrySetResult();
+        await work.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.AreEqual(3, h.Cloud.UploadedCount);
+        Assert.AreEqual(ClientState.UpToDate, h.Latest.State);
+    }
+
+    [TestMethod]
+    public async Task NextDownloadStartsWhileThePriorProviderChecksumIsBlockedWithBoundedPendingStaging()
+    {
+        await using var h = new Harness(1);
+        for (var index = 0; index < 8; index++) h.Cloud.Seed($"remote-{index}.txt", "verified cloud snapshot");
+        h.Cloud.HoldDownloadCompletion = true;
+        var work = h.Engine.SyncNowAsync();
+        var snapshot = await h.WaitSnapshotAsync(value => value.ActiveTransfers == 4 &&
+            value.Transfers.Count(item => item.Phase == TransferPhase.Verifying) == 4);
+        Assert.AreEqual(4, h.Cloud.DownloadsStarted.Count, "The configured network worker must feed its bounded verification queue instead of waiting for the first checksum.");
+        Assert.AreEqual(4, snapshot.QueuedTransfers);
+        Assert.AreEqual(0, h.Manifest.ReadAll().Count, "Payload completion cannot establish a verified native baseline.");
+        Assert.AreEqual(0, h.Placeholders.Marked);
+        Assert.AreEqual(4, Directory.GetFiles(h.Path(".cloudbay/transfers"), "*.part").Length);
+        h.Cloud.ReleaseDownload.TrySetResult();
+        await work.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.AreEqual(8, h.Cloud.DownloadsStarted.Count);
+        Assert.AreEqual(8, h.Manifest.ReadAll().Count);
+        Assert.AreEqual(ClientState.UpToDate, h.Latest.State);
+    }
+
+    [TestMethod]
+    public async Task WindowsFinalizationDoesNotKeepTheNextDownloadNetworkSlotOccupied()
+    {
+        await using var h = new Harness(1);
+        for (var index = 0; index < 3; index++) h.Cloud.Seed($"remote-{index}.txt", "verified bytes awaiting native marking");
+        h.Placeholders.HoldMarks = true;
+        var work = h.Engine.SyncNowAsync();
+        await h.Placeholders.MarkStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await h.WaitSnapshotAsync(value => value.Transfers.Count(item => item.Phase == TransferPhase.Verifying) == 3);
+        Assert.AreEqual(3, h.Cloud.DownloadsStarted.Count, "Native marking must not serialize the next file's HTTPS request.");
+        Assert.AreEqual(1, h.Manifest.ReadAll().Count);
+        Assert.IsTrue(h.Manifest.ReadAll().Single().Value.NativeMarkPending);
+        h.Placeholders.ReleaseMarks.TrySetResult();
+        await work.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.AreEqual(3, h.Placeholders.Marked);
+        Assert.AreEqual(ClientState.UpToDate, h.Latest.State);
+    }
+
+    [TestMethod]
+    public async Task PauseDrainsDeferredDownloadTasksAndHandlesWhileRetainingVersionBoundCheckpoints()
+    {
+        await using var h = new Harness(1);
+        for (var index = 0; index < 8; index++) h.Cloud.Seed($"remote-{index}.txt", "recoverable completed source ranges");
+        h.Cloud.HoldDownloadCompletion = true;
+        h.Cloud.CheckpointFullDownload = true;
+        var work = h.Engine.SyncNowAsync();
+        await h.WaitSnapshotAsync(value => value.ActiveTransfers == 4 &&
+            value.Transfers.Count(item => item.Phase == TransferPhase.Verifying) == 4);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await h.Engine.QuiesceAsync(timeout.Token);
+        await work.WaitAsync(timeout.Token);
+        Assert.AreEqual(0, h.Manifest.ReadAll().Count);
+        Assert.AreEqual(0, h.Cloud.ActiveDownloads, "Quiescence must await every provider operation before disposing staging.");
+        var folder = h.Path(".cloudbay/transfers");
+        Assert.AreEqual(4, Directory.GetFiles(folder, "*.part.json").Length);
+        Assert.AreEqual(0, Directory.GetFiles(folder, "*.lock").Length);
+        foreach (var file in Directory.GetFiles(folder, "*.part"))
+        { using var exclusivelyOwned = new FileStream(file, FileMode.Open, FileAccess.ReadWrite, FileShare.None); }
+        Assert.AreEqual(ClientState.Paused, h.Latest.State);
+        h.Cloud.HoldDownloadCompletion = false;
+        h.Cloud.ReleaseDownload.TrySetResult();
+        h.Engine.Resume();
+        await h.Engine.SyncNowAsync(timeout.Token);
+        Assert.AreEqual(4, h.Cloud.ReusedDownloadRanges);
+        Assert.AreEqual(8L * System.Text.Encoding.UTF8.GetByteCount("recoverable completed source ranges"), h.Cloud.DownloadedPayloadBytes,
+            "Resuming the drained pipeline must not download its already acknowledged ranges again.");
+        Assert.AreEqual(8, h.Manifest.ReadAll().Count);
+        Assert.AreEqual(0, Directory.GetFiles(folder, "*.part.json").Length);
+    }
+
+    [TestMethod]
     public async Task ActiveUploadsShowPathsAndQueueWhileIndependentVerificationKeepsFilesDirty()
     {
         await using var h = new Harness(2);
@@ -83,6 +172,10 @@ public sealed class TransferPipelineTests
         Assert.AreEqual(0, h.Latest.ActiveTransfers);
         Assert.AreEqual(20, h.Latest.QueuedTransfers);
         Assert.IsTrue(h.Latest.Transfers.All(item => item.Phase == TransferPhase.Paused));
+        for (var index = 0; index < 20; index++)
+        {
+            using var released = new FileStream(h.Path($"file-{index}.txt"), FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        }
         h.Cloud.HoldVerification = false;
         h.Cloud.Release.TrySetResult();
         h.Engine.Resume();
@@ -614,22 +707,26 @@ public sealed class TransferPipelineTests
         public int Marked, MarkAttempts, FailMarks;
         public Exception? MarkFailure;
         public Action<string>? OnMark;
+        public bool HoldMarks;
+        public TaskCompletionSource MarkStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseMarks { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool IsPlaceholder(string path) => false;
         public bool IsHydrated(string path) => true;
         public bool HasLocalChanges(string path) => false;
         public Task ConnectAsync(string root, string identity, HydrationHandler hydrate, CancellationToken ct = default) => Task.CompletedTask;
         public Task CreateOrUpdateAsync(string path, CloudObject file, bool inSync, CancellationToken ct = default) => Task.CompletedTask;
-        public Task MarkInSyncAsync(string path, CloudObject file, CancellationToken ct = default)
+        public async Task MarkInSyncAsync(string path, CloudObject file, CancellationToken ct = default)
         {
             Interlocked.Increment(ref MarkAttempts);
             OnMark?.Invoke(path);
+            MarkStarted.TrySetResult();
+            if (HoldMarks) await ReleaseMarks.Task.WaitAsync(ct);
             if (FailMarks > 0)
             {
                 Interlocked.Decrement(ref FailMarks);
                 throw MarkFailure ?? new IOException("Windows file metadata is temporarily locked.");
             }
             Interlocked.Increment(ref Marked);
-            return Task.CompletedTask;
         }
         public Task SetPinAsync(string path, PinMode mode, CancellationToken ct = default) => Task.CompletedTask;
         public Task FreeSpaceAsync(string path, CancellationToken ct = default) => Task.CompletedTask;
@@ -642,6 +739,18 @@ public sealed class TransferPipelineTests
         private readonly ConcurrentDictionary<string, (CloudObject Object, byte[] Bytes)> _files = new();
         private int _verifying, _uploaded, _pendingVerification, _maximumPendingVerification;
         public bool HoldVerification, FailVerification, CorruptAcknowledgment, InterruptDownload;
+        public bool HoldUpload, HoldDownloadCompletion, CheckpointFullDownload;
+        private int _prepared, _activeDownloads, _reusedDownloadRanges;
+        private long _downloadedPayloadBytes;
+        public int ActiveDownloads => Volatile.Read(ref _activeDownloads);
+        public int ReusedDownloadRanges => Volatile.Read(ref _reusedDownloadRanges);
+        public long DownloadedPayloadBytes => Interlocked.Read(ref _downloadedPayloadBytes);
+        public ConcurrentQueue<string> PreparedPaths { get; } = new();
+        public ConcurrentQueue<string> DownloadsStarted { get; } = new();
+        public TaskCompletionSource FirstUpload { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SecondPreparation { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseUpload { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseDownload { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int ResumedChunks;
         public ConcurrentBag<string> Hidden { get; } = [];
         public int UploadedCount => Volatile.Read(ref _uploaded);
@@ -664,6 +773,8 @@ public sealed class TransferPipelineTests
         public async Task<CloudObject> UploadAsync(string bucket, string key, Stream source, long length, string sha1, DateTimeOffset modified,
             IProgress<TransferProgress>? progress = null, CancellationToken cancellationToken = default)
         {
+            FirstUpload.TrySetResult();
+            if (HoldUpload) await ReleaseUpload.Task.WaitAsync(cancellationToken);
             using var output = new MemoryStream(); await source.CopyToAsync(output, cancellationToken);
             progress?.Report(new(length, length));
             var file = new CloudObject(Guid.NewGuid().ToString("N"), key, length, CorruptAcknowledgment ? new string('0', 40) : sha1, modified);
@@ -674,6 +785,21 @@ public sealed class TransferPipelineTests
                 maximum = Volatile.Read(ref _maximumPendingVerification))
                 if (Interlocked.CompareExchange(ref _maximumPendingVerification, pending, maximum) == maximum) break;
             return file;
+        }
+        public async Task<string> PrepareUploadChecksumAsync(string bucketId, string key, Stream source, long length,
+            DateTimeOffset modifiedUtc, CancellationToken cancellationToken = default)
+        {
+            await TransferResources.Hashing.WaitAsync(cancellationToken);
+            try
+            {
+                var position = source.Position;
+                var hash = Convert.ToHexString(await SHA1.HashDataAsync(source, cancellationToken)).ToLowerInvariant();
+                source.Position = position;
+                PreparedPaths.Enqueue(((FileStream)source).Name);
+                if (Interlocked.Increment(ref _prepared) == 2) SecondPreparation.TrySetResult();
+                return hash;
+            }
+            finally { TransferResources.Hashing.Release(); }
         }
         public async Task VerifyUploadAsync(CloudObject file, string bucket, CancellationToken ct = default)
         {
@@ -690,21 +816,35 @@ public sealed class TransferPipelineTests
         public async Task DownloadFileAsync(CloudObject file, FileStream destination, IReadOnlyList<DownloadChunk> chunks,
             Func<DownloadChunk, CancellationToken, Task> checkpoint, IProgress<TransferProgress>? progress = null, CancellationToken cancellationToken = default)
         {
-            var bytes = _files[file.Key].Bytes;
-            OnDownloadStarting?.Invoke(destination, chunks);
-            if (InterruptDownload)
+            DownloadsStarted.Enqueue(file.Key);
+            Interlocked.Increment(ref _activeDownloads);
+            try
             {
-                await destination.WriteAsync(bytes, cancellationToken); destination.Flush(true);
-                await checkpoint(new(0, bytes.Length, Convert.ToHexString(SHA1.HashData(bytes))), cancellationToken);
-                throw new IOException("Connection interrupted.");
+                var bytes = _files[file.Key].Bytes;
+                OnDownloadStarting?.Invoke(destination, chunks);
+                if (InterruptDownload)
+                {
+                    await destination.WriteAsync(bytes, cancellationToken); destination.Flush(true);
+                    Interlocked.Add(ref _downloadedPayloadBytes, bytes.Length);
+                    await checkpoint(new(0, bytes.Length, Convert.ToHexString(SHA1.HashData(bytes))), cancellationToken);
+                    throw new IOException("Connection interrupted.");
+                }
+                ResumedChunks = chunks.Count;
+                Interlocked.Add(ref _reusedDownloadRanges, chunks.Count);
+                if (chunks.Count > 0)
+                { destination.Position = 0; var prefix = new byte[5]; await destination.ReadExactlyAsync(prefix, cancellationToken); CollectionAssert.AreEqual(bytes[..5], prefix); }
+                if (chunks.Count == 0)
+                {
+                    destination.Position = 0;
+                    await destination.WriteAsync(bytes, cancellationToken);
+                    Interlocked.Add(ref _downloadedPayloadBytes, bytes.Length);
+                }
+                destination.SetLength(bytes.Length); destination.Flush(true);
+                if (CheckpointFullDownload) await checkpoint(new(0, bytes.Length, Convert.ToHexString(SHA1.HashData(bytes))), cancellationToken);
+                progress?.Report(new(bytes.Length, bytes.Length));
+                if (HoldDownloadCompletion) await ReleaseDownload.Task.WaitAsync(cancellationToken);
             }
-            ResumedChunks = chunks.Count;
-            if (chunks.Count > 0)
-            { destination.Position = 0; var prefix = new byte[5]; await destination.ReadExactlyAsync(prefix, cancellationToken); CollectionAssert.AreEqual(bytes[..5], prefix); }
-            destination.Position = 0;
-            await destination.WriteAsync(bytes, cancellationToken);
-            destination.SetLength(bytes.Length); destination.Flush(true);
-            progress?.Report(new(bytes.Length, bytes.Length));
+            finally { Interlocked.Decrement(ref _activeDownloads); }
         }
         public Task HideAsync(string bucket, string key, CancellationToken ct = default)
         { Hidden.Add(key); _files.TryRemove(key, out _); return Task.CompletedTask; }

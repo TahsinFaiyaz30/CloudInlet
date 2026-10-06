@@ -30,6 +30,8 @@ Restart reports also include `transfer-processes-<GUID>.json` and one safe repor
 
 Use `--b2 --cloud-relay-tiny` to repeat only the RAM seed, tiny-file benchmark, storage audit and scoped cleanup. The report records the actual negotiated HTTP versions; requesting HTTP/2 does not guarantee that a provider supports it.
 
+Add `--cloud-relay-cold-source` for a controlled tiny benchmark that requires a fresh metadata GET for every source instead of reusing exact immutable version evidence from the source discovery response. It preserves destination verification, range identity checks and every other protocol step; compare API counts and elapsed timings without attributing network variation to the change.
+
 For isolated OneDrive sign-in, run `--onedrive-signin --client-id <public-client-ID> --tenant-id <tenant-ID-or-domain>`. Enable **Allow public client flows** in the Microsoft app registration. The helper prints a short-lived Microsoft device code, saves tokens only in Windows DPAPI at `%LOCALAPPDATA%\CloudBay\Validation\OneDrive`, and returns safe account/drive selections for the opt-in acceptance test. Run the helper as a hidden background process when sign-in must survive chat or terminal interruptions. No client secret is needed.
 
 To repair icons on personal folders already backed up by this installation, run:

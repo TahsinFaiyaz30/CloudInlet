@@ -8,6 +8,12 @@ namespace CloudBay.Core.Transfers;
 public static class NativeTransferAdapters
 {
     /// <summary>
+    /// Payload completion releases scheduling admission, while Completion still owns provider
+    /// checksum validation and the staging handle. Never install bytes before Completion succeeds.
+    /// </summary>
+    public sealed record PendingDownload(Task PayloadCompleted, Task Completion);
+
+    /// <summary>
     /// Prepare a writer-denying local read handle. Pass this exact handle to UploadPreparedAsync:
     /// B2 attaches its multipart checksum cache to the original FileStream identity.
     /// The caller owns the handle and keeps it open through preparation and upload.
@@ -81,6 +87,37 @@ public static class NativeTransferAdapters
         if (destination.Length != file.Size)
             throw new InvalidDataException("The downloaded file length does not match its cloud version.");
     }
+
+    /// <summary>
+    /// Separate a provider's reported payload boundary from its final verification. The caller
+    /// bounds pending downloads and retains the original staging handle until Completion settles.
+    /// Providers without an early payload report conservatively retain admission until completion.
+    /// </summary>
+    public static PendingDownload BeginDownload(ICloudStore store, CloudObject file, FileStream destination,
+        IReadOnlyList<DownloadChunk> completedChunks, Func<DownloadChunk, CancellationToken, Task> checkpoint,
+        IProgress<TransferProgress>? progress = null, CancellationToken cancellationToken = default)
+    {
+        var payloadCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task CompleteAsync()
+        {
+            try
+            {
+                await DownloadFileAsync(store, file, destination, completedChunks, checkpoint,
+                    new DownloadBoundaryProgress(value =>
+                    {
+                        if (value.TotalBytes != file.Size || value.Bytes < 0 || value.Bytes > file.Size)
+                            throw new InvalidDataException("The provider reported an invalid download byte count.");
+                        progress?.Report(value);
+                        if (value.Bytes == file.Size) payloadCompleted.TrySetResult();
+                    }), cancellationToken).ConfigureAwait(false);
+            }
+            finally { payloadCompleted.TrySetResult(); }
+        }
+        return new(payloadCompleted.Task, CompleteAsync());
+    }
+
+    private sealed class DownloadBoundaryProgress(Action<TransferProgress> report) : IProgress<TransferProgress>
+    { public void Report(TransferProgress value) => report(value); }
 
     private static void ValidateSource(FileStream source, long length)
     {
