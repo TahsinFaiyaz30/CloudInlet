@@ -111,6 +111,7 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
     public async Task<TransferReceipt?> ReconcileAsync(TransferUploadRequest request, ITransferSourceFile source,
         TransferCheckpoint? checkpoint, CancellationToken cancellationToken = default)
     {
+        request = SelectedRequest(request, checkpoint);
         var final = FullPath(request.RelativePath);
         if (source.Entry.IsFolder)
             return Directory.Exists(final) ? Receipt(request, source.Entry, final, null) : null;
@@ -129,6 +130,8 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
         TransferCheckpoint? checkpoint, Func<TransferCheckpoint, CancellationToken, Task> saveCheckpoint,
         IProgress<TransferProgress>? progress = null, CancellationToken cancellationToken = default)
     {
+        var requestedPath = request.RelativePath;
+        request = SelectedRequest(request, checkpoint);
         var final = FullPath(request.RelativePath);
         if (source.Entry.IsFolder)
         {
@@ -152,7 +155,15 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
         else if (expectedVersion != "absent")
         {
             if (request.ConflictPolicy == TransferConflictPolicy.Skip) throw new TransferSkippedException("The local destination already exists.");
-            if (request.ConflictPolicy != TransferConflictPolicy.Replace) throw new TransferConflictException("The local destination already exists.");
+            if (request.ConflictPolicy == TransferConflictPolicy.Rename)
+            {
+                request = request with { RelativePath = TransferConflictNames.RenamePath(request.RelativePath, request.OperationId) };
+                final = FullPath(request.RelativePath);
+                (expectedId, expectedVersion) = DestinationSnapshot(final);
+                if (expectedVersion != "absent")
+                    throw new TransferConflictException("The stable renamed local destination already exists. Its contents were retained.");
+            }
+            else if (request.ConflictPolicy != TransferConflictPolicy.Replace) throw new TransferConflictException("The local destination already exists.");
         }
         long offset = 0;
         var hashes = new List<DownloadChunk>();
@@ -178,6 +189,7 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
         destination.SetLength(offset);
         var data = new Dictionary<string, string> { ["destinationVersion"] = expectedVersion, ["destinationId"] = expectedId, ["relativePath"] = request.RelativePath,
             ["operation"] = request.OperationId, ["chunks"] = JsonSerializer.Serialize(hashes) };
+        data["requestedPath"] = checkpoint?.Data?.GetValueOrDefault("requestedPath") ?? requestedPath;
         if (expectedVersion != "absent") data["recoveryRelativePath"] = RecoveryRelativePath(request);
         await saveCheckpoint(new("local", request.OperationId, offset, data), cancellationToken);
         progress?.Report(new(offset, source.Entry.Size) { IsBaseline = true });
@@ -218,6 +230,8 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
             using var directoryGuards = VerifiedCloudCopyCleanup.GuardAncestors(final);
             if (expectedVersion != "absent")
                 PreserveDestinationForCommit(request, expectedId, expectedVersion, final);
+            else if (File.Exists(final) || Directory.Exists(final))
+                throw new TransferConflictException("A new local destination appeared during transfer. Its contents and the partial were retained.");
             // A file created after the exact original was preserved remains untouched.
             // The original is retained beside the destination for recovery and review.
             File.Move(partial, final, overwrite: false);
@@ -228,11 +242,22 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
 
     private void ValidateCheckpoint(TransferUploadRequest request, TransferCheckpoint checkpoint)
     {
+        var target = checkpoint.Data?.GetValueOrDefault("relativePath");
+        var original = checkpoint.Data?.GetValueOrDefault("requestedPath") ?? request.RelativePath;
         if (checkpoint.Provider != "local" || checkpoint.SessionId != request.OperationId || checkpoint.Data is null ||
-            checkpoint.Data.GetValueOrDefault("relativePath") != request.RelativePath || checkpoint.Data.GetValueOrDefault("operation") != request.OperationId)
+            checkpoint.Data.GetValueOrDefault("operation") != request.OperationId ||
+            (original != request.RelativePath && target != request.RelativePath) ||
+            (target != original && !(request.ConflictPolicy == TransferConflictPolicy.Rename && target == TransferConflictNames.RenamePath(original, request.OperationId))))
             throw new InvalidDataException("The local checkpoint belongs to a different destination.");
         if (checkpoint.Data.TryGetValue("recoveryRelativePath", out var recovery) && recovery != RecoveryRelativePath(request))
             throw new InvalidDataException("The saved local original recovery path differs from its transfer.");
+    }
+
+    private TransferUploadRequest SelectedRequest(TransferUploadRequest request, TransferCheckpoint? checkpoint)
+    {
+        if (checkpoint is null) return request;
+        ValidateCheckpoint(request, checkpoint);
+        return request with { RelativePath = checkpoint.Data!["relativePath"] };
     }
     private static TransferReceipt Receipt(TransferUploadRequest request, TransferEntry entry, string path, string? sha1,
         IReadOnlyDictionary<string, string>? data = null) =>

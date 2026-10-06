@@ -248,7 +248,7 @@ public sealed class TransferJobEngineTests
     }
 
     [TestMethod]
-    public void RenameConflictKeepsFolderHierarchyAndUsesStableFileName()
+    public void RenameConflictKeepsOriginalPathUntilTheAdapterFindsAConflict()
     {
         var plan = new TransferJobPlan(Guid.NewGuid().ToString("N"),
             new("onedrive", "source", "drive", "folder", "", "Source"),
@@ -258,7 +258,8 @@ public sealed class TransferJobEngineTests
         Assert.AreEqual("nested", TransferJobEngine.Request(plan, folder).RelativePath);
         var file = folder with { Id = "file", RelativePath = "nested/file.txt", IsFolder = false, Size = 6 };
         var request = TransferJobEngine.Request(plan, file);
-        Assert.IsTrue(request.RelativePath.StartsWith("nested/file (CloudBay "));
+        Assert.AreEqual("nested/file.txt", request.RelativePath);
+        Assert.AreEqual(TransferConflictPolicy.Rename, request.ConflictPolicy);
         Assert.AreEqual(request, TransferJobEngine.Request(plan, file));
     }
 

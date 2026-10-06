@@ -296,13 +296,8 @@ public sealed class TransferJobEngine : IAsyncDisposable
         var operation = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(plan.Id + "|" + entry.Id + "|" + entry.Version))).ToLowerInvariant();
         var path = entry.RelativePath.TrimEnd('/');
         var policy = plan.ConflictPolicy;
-        if (policy == TransferConflictPolicy.Rename && !entry.IsFolder)
-        {
-            var slash = path.TrimEnd('/').LastIndexOf('/');
-            var name = path.TrimEnd('/')[(slash + 1)..];
-            path = (slash < 0 ? "" : path[..(slash + 1)]) + Sync.PathRules.ConflictFileName(name, " (CloudBay " + operation[..12] + ")");
-            policy = TransferConflictPolicy.Fail;
-        }
+        // Adapters select a stable alternate name only when the original is
+        // occupied, and persist that selected target in their checkpoint.
         if (entry.IsFolder && policy == TransferConflictPolicy.Rename) policy = TransferConflictPolicy.Replace;
         return new(operation, path, policy);
     }

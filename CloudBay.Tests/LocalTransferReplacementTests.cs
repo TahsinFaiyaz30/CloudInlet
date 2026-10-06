@@ -9,6 +9,67 @@ namespace CloudBay.Tests;
 public sealed class LocalTransferReplacementTests
 {
     [TestMethod]
+    public async Task KeepBothRetainsTheOriginalNameWhenNoConflictExists()
+    {
+        using var fixture = new Fixture(TransferConflictPolicy.Rename, originalExists: false);
+        var receipt = await fixture.UploadAsync();
+        Assert.AreEqual("item.bin", receipt.RelativePath);
+        CollectionAssert.AreEqual(fixture.Payload, File.ReadAllBytes(fixture.Final));
+        Assert.AreEqual(1, Directory.GetFiles(fixture.DirectoryPath).Length);
+    }
+
+    [TestMethod]
+    public async Task KeepBothRenamesOnlyTheConflictingCopyAndRestoresItsSelectedTarget()
+    {
+        using var fixture = new Fixture(TransferConflictPolicy.Rename);
+        await Assert.ThrowsExceptionAsync<OperationCanceledException>(() => fixture.UploadAsync(onCheckpoint: checkpoint =>
+        {
+            if (checkpoint.Data?.GetValueOrDefault("committing") == "true") throw new OperationCanceledException();
+        }));
+        var targetName = "item (CloudBay " + fixture.Request.OperationId[..12] + ").bin";
+        Assert.AreEqual(targetName, fixture.Saved!.Data!["relativePath"]);
+        Assert.AreEqual("item.bin", fixture.Saved.Data["requestedPath"]);
+        var restarted = new LocalTransferEndpoint(LocalTransferEndpoint.ForFolder(fixture.DirectoryPath));
+        var receipt = await restarted.UploadAsync(fixture.Request, fixture.Source, fixture.Saved, (_, _) => Task.CompletedTask);
+        await restarted.VerifyAsync(receipt, fixture.Source);
+        Assert.AreEqual(targetName, receipt.RelativePath);
+        Assert.AreEqual(1, fixture.Source.Reads, "The persisted selected name and completed ranges survive restart.");
+        CollectionAssert.AreEqual(fixture.Original, File.ReadAllBytes(fixture.Final));
+        CollectionAssert.AreEqual(fixture.Payload, File.ReadAllBytes(Path.Combine(fixture.DirectoryPath, targetName)));
+        var recovered = await restarted.ReconcileAsync(fixture.Request, fixture.Source, fixture.Saved);
+        Assert.IsNotNull(recovered);
+        Assert.AreEqual(receipt.Id, recovered.Id);
+    }
+
+    [TestMethod]
+    public async Task KeepBothNeverOverwritesALateFileAtTheSavedAlternateName()
+    {
+        using var fixture = new Fixture(TransferConflictPolicy.Rename);
+        await Assert.ThrowsExceptionAsync<OperationCanceledException>(() => fixture.UploadAsync(onCheckpoint: checkpoint =>
+        {
+            if (checkpoint.Data?.GetValueOrDefault("committing") == "true") throw new OperationCanceledException();
+        }));
+        var renamedPath = Path.Combine(fixture.DirectoryPath, fixture.Saved!.Data!["relativePath"]);
+        var late = new byte[] { 1, 4, 7 };
+        File.WriteAllBytes(renamedPath, late);
+        await Assert.ThrowsExceptionAsync<TransferConflictException>(() => fixture.UploadAsync(fixture.Saved));
+        CollectionAssert.AreEqual(late, File.ReadAllBytes(renamedPath));
+        CollectionAssert.AreEqual(fixture.Original, File.ReadAllBytes(fixture.Final));
+    }
+
+    [TestMethod]
+    public async Task KeepBothRejectsAnUnrelatedSavedTarget()
+    {
+        using var fixture = new Fixture(TransferConflictPolicy.Rename);
+        await Assert.ThrowsExceptionAsync<OperationCanceledException>(() => fixture.UploadAsync(onCheckpoint: checkpoint => throw new OperationCanceledException()));
+        var data = new Dictionary<string, string>(fixture.Saved!.Data!) { ["relativePath"] = "another.bin" };
+        await Assert.ThrowsExceptionAsync<InvalidDataException>(() => fixture.UploadAsync(fixture.Saved with { Data = data }));
+        Assert.AreEqual(0, fixture.Source.Reads);
+        Assert.IsFalse(File.Exists(Path.Combine(fixture.DirectoryPath, "another.bin")));
+        CollectionAssert.AreEqual(fixture.Original, File.ReadAllBytes(fixture.Final));
+    }
+
+    [TestMethod]
     public async Task ReplacementPreservesTheExactOriginalWithoutOverwrite()
     {
         using var fixture = new Fixture();
@@ -135,12 +196,12 @@ public sealed class LocalTransferReplacementTests
         public string Recovery => Path.Combine(DirectoryPath, ".CloudBay-transfer-" + Request.OperationId + ".original");
         public string Partial => Path.Combine(DirectoryPath, ".CloudBay-transfer-" + Request.OperationId + ".part");
         public TransferCheckpoint? Saved { get; private set; }
-        public Fixture()
+        public Fixture(TransferConflictPolicy policy = TransferConflictPolicy.Replace, bool originalExists = true)
         {
             Directory.CreateDirectory(DirectoryPath);
-            File.WriteAllBytes(Final, Original);
+            if (originalExists) File.WriteAllBytes(Final, Original);
             Endpoint = new(LocalTransferEndpoint.ForFolder(DirectoryPath));
-            Request = new(Convert.ToHexString(SHA256.HashData(Guid.NewGuid().ToByteArray())).ToLowerInvariant(), "item.bin", TransferConflictPolicy.Replace);
+            Request = new(Convert.ToHexString(SHA256.HashData(Guid.NewGuid().ToByteArray())).ToLowerInvariant(), "item.bin", policy);
             Source = new(Payload);
         }
         public Task<TransferReceipt> UploadAsync(TransferCheckpoint? checkpoint = null, Action<TransferCheckpoint>? onCheckpoint = null) =>
