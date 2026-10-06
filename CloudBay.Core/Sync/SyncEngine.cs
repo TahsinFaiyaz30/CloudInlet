@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Collections.Concurrent;
 using System.Threading.Channels;
 using CloudBay.Core.Transfers;
 
@@ -299,8 +300,10 @@ public sealed class SyncEngine : IAsyncDisposable
         }
 
         uploads = uploads.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        _transfers.Queue(uploads.Select(path => (path, ActivityKind.Upload, File.Exists(PathRules.FullPath(settings.RootPath, path))
-            ? new FileInfo(PathRules.FullPath(settings.RootPath, path)).Length : 0L)));
+        var scheduledUploads = uploads.Select(relative => (Relative: relative,
+            Size: local.TryGetValue(relative, out var planned) ? planned.Size :
+                File.Exists(PathRules.FullPath(settings.RootPath, relative)) ? new FileInfo(PathRules.FullPath(settings.RootPath, relative)).Length : 0L)).ToArray();
+        _transfers.Queue(scheduledUploads.Select(item => (item.Relative, ActivityKind.Upload, item.Size)));
         _transfers.Queue(downloads.Where(item =>
         {
             var path = PathRules.FullPath(settings.RootPath, item.Relative);
@@ -321,7 +324,7 @@ public sealed class SyncEngine : IAsyncDisposable
             if (error is not null) Record(ActivityKind.Error, relative, error.Message);
         }
         await Task.WhenAll(
-            UploadPipelineAsync(uploads, settings, limits.Uploads, FinishTransfer, ct),
+            UploadPipelineAsync(scheduledUploads, settings, limits.Uploads, FinishTransfer, ct),
             DownloadPipelineAsync(downloads, settings, limits.Downloads, FinishTransfer, ct));
         errors += await ReconcileDirectoriesAsync(localSnapshot, remoteDirectories, directoryBaseline, settings, ct);
         var final = _manifest.ReadAll();
@@ -553,7 +556,7 @@ public sealed class SyncEngine : IAsyncDisposable
         return new(info.Length, info.LastWriteTimeUtc, !state.IsPlaceholder || state.IsHydrated, state.HasLocalChanges);
     }
 
-    private async Task UploadPipelineAsync(IReadOnlyList<string> uploads, AppSettings settings, int workers,
+    private async Task UploadPipelineAsync(IReadOnlyList<(string Relative, long Size)> uploads, AppSettings settings, int workers,
         Action<string, ActivityKind, Exception?> finish, CancellationToken cancellationToken)
     {
         if (uploads.Count == 0) return;
@@ -573,29 +576,54 @@ public sealed class SyncEngine : IAsyncDisposable
         // The shared hashing gate still limits disk work independently of upload slots.
         var ready = Channel.CreateBounded<PreparedLocal>(new BoundedChannelOptions(workers)
         { FullMode = BoundedChannelFullMode.Wait, SingleReader = workers == 1, SingleWriter = false });
+        var small = new ConcurrentQueue<string>(uploads.Where(item => item.Size < 8 * 1024 * 1024).Select(item => item.Relative));
+        var large = new ConcurrentQueue<string>(uploads.Where(item => item.Size >= 8 * 1024 * 1024).Select(item => item.Relative));
+        async Task PrepareOneAsync(string relative, CancellationToken ct)
+        {
+            PreparedLocal? prepared = null;
+            try
+            {
+                prepared = await PrepareLocalAsync(relative, settings, ct);
+                if (prepared is null) finish(relative, ActivityKind.Upload, null);
+                else
+                {
+                    SetPhase(relative, ActivityKind.Upload, TransferPhase.Queued);
+                    await ready.Writer.WriteAsync(prepared, ct);
+                    prepared = null; // The upload worker now owns the stable handle.
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception error) { finish(relative, ActivityKind.Upload, error); }
+            finally { if (prepared is not null) await prepared.Source.DisposeAsync(); }
+        }
+        async Task PrepareLaneAsync(ConcurrentQueue<string> preferred, ConcurrentQueue<string> fallback)
+        {
+            try
+            {
+                while (preferred.TryDequeue(out var relative) || fallback.TryDequeue(out relative))
+                {
+                    token.ThrowIfCancellationRequested();
+                    await PrepareOneAsync(relative, token);
+                }
+            }
+            catch { pipeline.Cancel(); throw; }
+        }
         async Task PrepareAsync()
         {
             try
             {
-                await Parallel.ForEachAsync(uploads, new ParallelOptions
-                { MaxDegreeOfParallelism = Math.Min(2, workers), CancellationToken = token }, async (relative, ct) =>
+                if (!small.IsEmpty && !large.IsEmpty)
                 {
-                    PreparedLocal? prepared = null;
-                    try
-                    {
-                        prepared = await PrepareLocalAsync(relative, settings, ct);
-                        if (prepared is null) finish(relative, ActivityKind.Upload, null);
-                        else
-                        {
-                            SetPhase(relative, ActivityKind.Upload, TransferPhase.Queued);
-                            await ready.Writer.WriteAsync(prepared, ct);
-                            prepared = null; // The upload worker now owns the stable handle.
-                        }
-                    }
-                    catch (OperationCanceledException) { throw; }
-                    catch (Exception error) { finish(relative, ActivityKind.Upload, error); }
-                    finally { if (prepared is not null) await prepared.Source.DisposeAsync(); }
-                });
+                    // One lane supplies short files while a long hash/hydration prepares ahead.
+                    // Source sizes are scheduling estimates from discovery; the original locked
+                    // handle remains authoritative. Both lanes share the existing hashing budget
+                    // and ready queue, independently of the configured network worker count.
+                    await Task.WhenAll(PrepareLaneAsync(small, large), PrepareLaneAsync(large, small));
+                }
+                else
+                    await Parallel.ForEachAsync(uploads, new ParallelOptions
+                    { MaxDegreeOfParallelism = Math.Min(2, workers), CancellationToken = token },
+                        (item, ct) => new ValueTask(PrepareOneAsync(item.Relative, ct)));
             }
             catch { pipeline.Cancel(); throw; }
             finally { ready.Writer.TryComplete(); }

@@ -13,6 +13,48 @@ namespace CloudBay.Tests;
 public sealed class TransferPipelineTests
 {
     [TestMethod]
+    public async Task BlockedLargeHashesDoNotDelayTinyUploadPayloads()
+    {
+        await VerifyMixedPreparationAsync(UploadMode.Manual, 2);
+    }
+
+    [DataTestMethod]
+    [DataRow(UploadMode.Manual, 1)]
+    [DataRow(UploadMode.Manual, 3)]
+    [DataRow(UploadMode.Intelligent, 3)]
+    [DataRow(UploadMode.MaximumThroughput, 3)]
+    public async Task MixedPreparationPreservesExistingUploadWorkerPreferences(UploadMode mode, int manualWorkers)
+    {
+        await VerifyMixedPreparationAsync(mode, manualWorkers);
+    }
+
+    private static async Task VerifyMixedPreparationAsync(UploadMode mode, int manualWorkers)
+    {
+        await using var h = new Harness(manualWorkers, mode);
+        for (var index = 0; index < 2; index++)
+        {
+            await using var large = new FileStream(h.Path($"a-large-{index}.bin"), FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            large.SetLength(8 * 1024 * 1024 + 1);
+        }
+        var expectedWorkers = TransferLimits.For(h.Settings).Uploads;
+        for (var index = 0; index < expectedWorkers + 2; index++) await File.WriteAllTextAsync(h.Path($"z-tiny-{index}.txt"), "tiny snapshot");
+        h.Cloud.HoldLargePreparation = true;
+        h.Cloud.HoldUpload = true;
+        var work = h.Engine.SyncNowAsync();
+        await h.Cloud.LargePreparationStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await h.Cloud.TinyPayloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await h.WaitSnapshotAsync(value => value.Transfers.Count(item => item.Phase == TransferPhase.Uploading) == expectedWorkers);
+        Assert.AreEqual(expectedWorkers, h.Cloud.ActiveUploads, "Prepared tiny files must supply the existing configured network slots while the large hash remains blocked.");
+        Assert.AreEqual(0, h.Cloud.PreparedLargeFiles, "The small payload must start before any blocked large checksum completes.");
+        h.Cloud.ReleaseUpload.TrySetResult();
+        h.Cloud.ReleaseLargePreparation.TrySetResult();
+        await work.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.IsTrue(h.Cloud.MaximumActiveUploads <= expectedWorkers, "Hash preparation lanes must never override upload concurrency preferences.");
+        Assert.AreEqual(expectedWorkers + 4, h.Cloud.UploadedCount);
+        Assert.AreEqual(ClientState.UpToDate, h.Latest.State);
+    }
+
+    [TestMethod]
     public async Task NextLocalSourceIsPreparedWhileTheActiveUploadStillOwnsItsNetworkSlot()
     {
         await using var h = new Harness(1);
@@ -660,6 +702,7 @@ public sealed class TransferPipelineTests
     {
         private readonly string _directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "CloudBay.Pipeline", Guid.NewGuid().ToString("N"));
         private readonly int _concurrency;
+        private readonly UploadMode _mode;
         public string Root => System.IO.Path.Combine(_directory, "Root");
         public FakeCloud Cloud { get; } = new();
         public FakePlaceholders Placeholders { get; } = new();
@@ -670,16 +713,17 @@ public sealed class TransferPipelineTests
         private readonly ConcurrentQueue<SyncSnapshot> _snapshots = new();
         public SyncSnapshot Latest => _snapshots.Last();
         public IEnumerable<SyncSnapshot> Snapshots => _snapshots.ToArray();
-        public Harness(int concurrency)
+        public Harness(int concurrency, UploadMode mode = UploadMode.Manual)
         {
             _concurrency = concurrency;
+            _mode = mode;
             Directory.CreateDirectory(Root);
             Manifest = new(System.IO.Path.Combine(_directory, "state.sqlite"));
             Engine = CreateEngine();
         }
-        private SyncEngine CreateEngine() => new(Cloud, Placeholders, Manifest,
-                new AppSettings { RootPath = Root, KeyId = "key", BucketId = "bucket", FilesOnDemand = false,
-                    UploadMode = UploadMode.Manual, UploadConcurrency = _concurrency, DownloadConcurrency = _concurrency },
+        public AppSettings Settings => new() { RootPath = Root, KeyId = "key", BucketId = "bucket", FilesOnDemand = false,
+            UploadMode = _mode, UploadConcurrency = _concurrency, DownloadConcurrency = _concurrency };
+        private SyncEngine CreateEngine() => new(Cloud, Placeholders, Manifest, Settings,
                 System.IO.Path.Combine(_directory, "Recovery"), Activity.Enqueue, _snapshots.Enqueue,
                 policy: () => PolicyReason, rootDisplayName: "Personal backup");
         public async Task RestartAsync()
@@ -740,6 +784,14 @@ public sealed class TransferPipelineTests
         private int _verifying, _uploaded, _pendingVerification, _maximumPendingVerification;
         public bool HoldVerification, FailVerification, CorruptAcknowledgment, InterruptDownload;
         public bool HoldUpload, HoldDownloadCompletion, CheckpointFullDownload;
+        public bool HoldLargePreparation;
+        private int _activeUploads, _maximumActiveUploads, _preparedLargeFiles;
+        public int ActiveUploads => Volatile.Read(ref _activeUploads);
+        public int MaximumActiveUploads => Volatile.Read(ref _maximumActiveUploads);
+        public int PreparedLargeFiles => Volatile.Read(ref _preparedLargeFiles);
+        public TaskCompletionSource LargePreparationStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseLargePreparation { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource TinyPayloadStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _prepared, _activeDownloads, _reusedDownloadRanges;
         private long _downloadedPayloadBytes;
         public int ActiveDownloads => Volatile.Read(ref _activeDownloads);
@@ -773,18 +825,27 @@ public sealed class TransferPipelineTests
         public async Task<CloudObject> UploadAsync(string bucket, string key, Stream source, long length, string sha1, DateTimeOffset modified,
             IProgress<TransferProgress>? progress = null, CancellationToken cancellationToken = default)
         {
-            FirstUpload.TrySetResult();
-            if (HoldUpload) await ReleaseUpload.Task.WaitAsync(cancellationToken);
-            using var output = new MemoryStream(); await source.CopyToAsync(output, cancellationToken);
-            progress?.Report(new(length, length));
-            var file = new CloudObject(Guid.NewGuid().ToString("N"), key, length, CorruptAcknowledgment ? new string('0', 40) : sha1, modified);
-            _files[key] = (file, output.ToArray());
-            Interlocked.Increment(ref _uploaded);
-            var pending = Interlocked.Increment(ref _pendingVerification);
-            for (var maximum = Volatile.Read(ref _maximumPendingVerification); pending > maximum;
-                maximum = Volatile.Read(ref _maximumPendingVerification))
-                if (Interlocked.CompareExchange(ref _maximumPendingVerification, pending, maximum) == maximum) break;
-            return file;
+            var active = Interlocked.Increment(ref _activeUploads);
+            for (var maximum = Volatile.Read(ref _maximumActiveUploads); active > maximum;
+                maximum = Volatile.Read(ref _maximumActiveUploads))
+                if (Interlocked.CompareExchange(ref _maximumActiveUploads, active, maximum) == maximum) break;
+            try
+            {
+                FirstUpload.TrySetResult();
+                using var output = new MemoryStream(); await source.CopyToAsync(output, cancellationToken);
+                if (length < 8 * 1024 * 1024) TinyPayloadStarted.TrySetResult();
+                if (HoldUpload) await ReleaseUpload.Task.WaitAsync(cancellationToken);
+                progress?.Report(new(length, length));
+                var file = new CloudObject(Guid.NewGuid().ToString("N"), key, length, CorruptAcknowledgment ? new string('0', 40) : sha1, modified);
+                _files[key] = (file, output.ToArray());
+                Interlocked.Increment(ref _uploaded);
+                var pending = Interlocked.Increment(ref _pendingVerification);
+                for (var maximum = Volatile.Read(ref _maximumPendingVerification); pending > maximum;
+                    maximum = Volatile.Read(ref _maximumPendingVerification))
+                    if (Interlocked.CompareExchange(ref _maximumPendingVerification, pending, maximum) == maximum) break;
+                return file;
+            }
+            finally { Interlocked.Decrement(ref _activeUploads); }
         }
         public async Task<string> PrepareUploadChecksumAsync(string bucketId, string key, Stream source, long length,
             DateTimeOffset modifiedUtc, CancellationToken cancellationToken = default)
@@ -792,11 +853,17 @@ public sealed class TransferPipelineTests
             await TransferResources.Hashing.WaitAsync(cancellationToken);
             try
             {
+                if (HoldLargePreparation && length >= 8 * 1024 * 1024)
+                {
+                    LargePreparationStarted.TrySetResult();
+                    await ReleaseLargePreparation.Task.WaitAsync(cancellationToken);
+                }
                 var position = source.Position;
                 var hash = Convert.ToHexString(await SHA1.HashDataAsync(source, cancellationToken)).ToLowerInvariant();
                 source.Position = position;
                 PreparedPaths.Enqueue(((FileStream)source).Name);
                 if (Interlocked.Increment(ref _prepared) == 2) SecondPreparation.TrySetResult();
+                if (length >= 8 * 1024 * 1024) Interlocked.Increment(ref _preparedLargeFiles);
                 return hash;
             }
             finally { TransferResources.Hashing.Release(); }
