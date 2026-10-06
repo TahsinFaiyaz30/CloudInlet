@@ -41,7 +41,10 @@ internal sealed class CloudTransferDialog : ContentDialog
         _direction.Items.Add("OneDrive → Backblaze B2"); _direction.Items.Add("Backblaze B2 → OneDrive");
         _direction.Items.Add("This PC → Backblaze B2"); _direction.Items.Add("Backblaze B2 → This PC");
         _direction.Items.Add("This PC → OneDrive"); _direction.Items.Add("OneDrive → This PC");
-        _direction.SelectedIndex = source?.Provider == "b2" || destination?.Provider == "onedrive" ? 1 : 0;
+        var fixedDirection = Array.FindIndex(Directions, direction =>
+            (source is null || source.Provider == direction.Source) &&
+            (destination is null || destination.Provider == direction.Destination));
+        _direction.SelectedIndex = Math.Max(0, fixedDirection);
         _direction.IsEnabled = source is null && destination is null;
         _operation.Items.Add("Copy — keep originals"); _operation.Items.Add("Move — remove verified, unchanged originals"); _operation.SelectedIndex = 0;
         _conflicts.Items.Add("Stop and ask for review"); _conflicts.Items.Add("Skip existing files");
@@ -170,6 +173,12 @@ internal sealed class CloudTransferDialog : ContentDialog
         {
             _provider = provider; _loading = true; Location = null; _parents.Clear(); _folders.Items.Clear();
             View.Children.Clear(); View.Children.Add(SourceImportDialog.Text(_heading, false));
+            if (fixedLocation is not null)
+            {
+                Location = fixedLocation;
+                View.Children.Add(SourceImportDialog.PathCard(_heading, fixedLocation.DisplayName, fixedLocation.Path));
+                _loading = false; _changed(); return;
+            }
             if (provider == "local")
             {
                 View.Children.Add(_path); _path.Text = "Choose an explicit folder on this PC";
@@ -180,12 +189,6 @@ internal sealed class CloudTransferDialog : ContentDialog
                     if (path is not null) { Location = LocalTransferEndpoint.ForFolder(path, "This PC · " + System.IO.Path.GetFileName(path)); _path.Text = path; }
                 });
                 View.Children.Add(browse); _loading = false; _changed(); return;
-            }
-            if (fixedLocation is not null)
-            {
-                Location = fixedLocation;
-                View.Children.Add(SourceImportDialog.PathCard(_heading, fixedLocation.DisplayName, fixedLocation.Path));
-                _loading = false; _changed(); return;
             }
             View.Children.Add(_account); View.Children.Add(_container);
             if (provider == "onedrive") { _account.ItemsSource = _controller.OneDriveAccounts; _account.SelectedIndex = _controller.OneDriveAccounts.Count == 1 ? 0 : -1; View.Children.Add(_connect); }

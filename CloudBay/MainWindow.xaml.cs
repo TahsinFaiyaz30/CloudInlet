@@ -2375,6 +2375,20 @@ public sealed partial class MainWindow : Window
                 if (!directReview.IsPrimaryButtonEnabled || directReview.Source?.Provider != "onedrive" || directReview.Destination?.Provider != "b2")
                     throw new InvalidOperationException("A direct cloud review must retain provider locations without creating a local destination.");
                 await CaptureImportDialogAsync(directReview, $"cloud-transfer-review-{importWidth}{suffix}");
+                var localTransferLocation = CloudBay.Core.Transfers.LocalTransferEndpoint.ForFolder(@"C:\Users\Example\CloudBay\Transfer", "This PC · Transfer");
+                foreach (var pair in new[]
+                {
+                    (localTransferLocation, directReview.Destination!), (directReview.Destination!, localTransferLocation),
+                    (localTransferLocation, directReview.Source!), (directReview.Source!, localTransferLocation),
+                    (directReview.Destination!, directReview.Source!)
+                })
+                {
+                    var fixedReview = new CloudTransferDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this), pair.Item1, pair.Item2)
+                    { XamlRoot = RootGrid.XamlRoot, RequestedTheme = theme };
+                    await fixedReview.ShowReviewPresentationAsync();
+                    if (!fixedReview.IsPrimaryButtonEnabled || fixedReview.Source != pair.Item1 || fixedReview.Destination != pair.Item2)
+                        throw new InvalidOperationException("Every fixed local/cloud direction must retain both reviewed locations.");
+                }
                 foreach (var advanced in new[] { false, true })
                 {
                     var signInPresentation = new CloudTransferDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this))
