@@ -204,8 +204,8 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
             var smallBuffer = ArrayPool<byte>.Shared.Rent((int)Math.Max(1, entry.Size));
             try
             {
-                await using var smallSource = await source.OpenReadAsync(0, entry.Size, cancellationToken);
-                await smallSource.ReadExactlyAsync(smallBuffer.AsMemory(0, (int)entry.Size), cancellationToken);
+                await using (var smallSource = await source.OpenReadAsync(0, entry.Size, cancellationToken))
+                    await smallSource.ReadExactlyAsync(smallBuffer.AsMemory(0, (int)entry.Size), cancellationToken);
                 var smallHash = Convert.ToHexString(SHA1.HashData(smallBuffer.AsSpan(0, (int)entry.Size))).ToLowerInvariant();
                 CheckSourceHash(entry, smallHash);
                 data["uploadedSha1"] = smallHash;
@@ -319,6 +319,10 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
                     contentHash?.AppendData(buffer, 0, count);
                     if (offset + count == entry.Size)
                     {
+                        // The final fragment now owns all remaining bytes in RAM.
+                        // Release source download admission before destination
+                        // checks, durable intent and the final upload response.
+                        await input.DisposeAsync().ConfigureAwait(false);
                         if (contentHash is not null) uploadedHash = Convert.ToHexString(contentHash.GetHashAndReset()).ToLowerInvariant();
                         if (!ValidSha1(uploadedHash)) throw new InvalidDataException("The OneDrive upload has no complete content checksum.");
                         CheckSourceHash(entry, uploadedHash!);
@@ -402,10 +406,22 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
         {
             // Graph commonly exposes QuickXorHash rather than a cryptographic hash on business drives.
             // In that case compare independent streaming SHA-256 reads through bounded hash buffers.
-            await using var original = await source.OpenReadAsync(0, source.Entry.Size, cancellationToken);
-            await using var destination = await _client.OpenValidatedReadAsync(Location.ContainerId, current, current, 0, current.Size, cancellationToken);
-            var sourceHash = SHA256.HashDataAsync(original, cancellationToken).AsTask();
-            var targetHash = SHA256.HashDataAsync(destination, cancellationToken).AsTask();
+            // Each hash must start consuming and dispose its own range before
+            // waiting for another download. One shared download slot then works
+            // serially, while larger limits still allow the independent reads
+            // to overlap without retaining one unconsumed response behind another.
+            async Task<byte[]> HashSourceAsync()
+            {
+                await using var original = await source.OpenReadAsync(0, source.Entry.Size, cancellationToken);
+                return await SHA256.HashDataAsync(original, cancellationToken);
+            }
+            async Task<byte[]> HashDestinationAsync()
+            {
+                await using var destination = await _client.OpenValidatedReadAsync(Location.ContainerId, current, current, 0, current.Size, cancellationToken);
+                return await SHA256.HashDataAsync(destination, cancellationToken);
+            }
+            var sourceHash = HashSourceAsync();
+            var targetHash = HashDestinationAsync();
             await Task.WhenAll(sourceHash, targetHash);
             if (!CryptographicOperations.FixedTimeEquals(sourceHash.Result, targetHash.Result))
                 throw new InvalidDataException("The OneDrive destination failed streaming SHA-256 content verification.");

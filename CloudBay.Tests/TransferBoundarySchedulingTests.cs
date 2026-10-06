@@ -161,6 +161,41 @@ public sealed class TransferBoundarySchedulingTests
     }
 
     [DataTestMethod]
+    [DataRow(7)]
+    [DataRow(2097155)]
+    [DataRow(6291473)]
+    public async Task OneDriveReleasesSourceDownloadBeforeItsFinalPayloadAndCheckpoint(int size)
+    {
+        var source = new ReplaySource(new byte[size]);
+        var reserved = false;
+        var uploads = 0;
+        object Item(int length) => new { id = "owned", name = "item.bin", size = length, eTag = length == 0 ? "empty-v1" : "complete-v1", file = new { hashes = new { sha1Hash = length == 0 ? "" : source.Entry.Sha1 } } };
+        using var http = new HttpClient(new Handler(async (request, token) =>
+        {
+            if (request.Method == HttpMethod.Get)
+                return reserved ? Json(Item(0)) : Json(new { error = new { code = "itemNotFound" } }, HttpStatusCode.NotFound);
+            if (request.Method == HttpMethod.Post)
+                return Json(new { uploadUrl = "https://upload.invalid/session", expirationDateTime = DateTimeOffset.UtcNow.AddHours(1), nextExpectedRanges = new[] { "0-" } });
+            var bytes = await request.Content!.ReadAsByteArrayAsync(token);
+            if (bytes.Length == 0) { reserved = true; return Json(Item(0)); }
+            uploads++;
+            var range = request.Content.Headers.ContentRange;
+            var final = range is null || range.To == size - 1;
+            Assert.AreEqual(final, source.RangeDisposed, "The source connection must remain available for earlier fragments and release its download slot before the final payload request.");
+            return final ? Json(Item(size)) : Json(new { expirationDateTime = DateTimeOffset.UtcNow.AddHours(1), nextExpectedRanges = new[] { (range!.To + 1) + "-" } }, HttpStatusCode.Accepted);
+        }));
+        var receipt = await OneDrive(http).UploadAsync(new(new string('c', 64), "item.bin", TransferConflictPolicy.Fail), source, null, (value, _) =>
+        {
+            if (value.AcknowledgedBytes == size)
+                Assert.IsTrue(source.RangeDisposed, "The finished source range must not retain download admission during durable completion records.");
+            return Task.CompletedTask;
+        });
+        Assert.AreEqual(source.Entry.Sha1, receipt.Sha1);
+        Assert.AreEqual(size > 5 * 1024 * 1024 ? 2 : 1, uploads);
+        Assert.AreEqual(1, source.Ranges.Count);
+    }
+
+    [DataTestMethod]
     [DataRow("item.bin")]
     [DataRow("missing-parent/item.bin")]
     public async Task FailedOneDriveSourcePreflightNeverCreatesAParentOrUploads(string path)
@@ -192,9 +227,14 @@ public sealed class TransferBoundarySchedulingTests
         public TransferEntry Entry { get; } = new("source", "item.bin", "v1", bytes.Length, DateTimeOffset.UnixEpoch,
             Convert.ToHexString(SHA1.HashData(bytes)).ToLowerInvariant());
         public List<(long Offset, long Length)> Ranges { get; } = [];
+        public bool RangeDisposed { get; private set; }
         public Task<Stream> OpenReadAsync(long offset, long length, CancellationToken cancellationToken = default)
-        { cancellationToken.ThrowIfCancellationRequested(); Ranges.Add((offset, length)); return Task.FromResult<Stream>(new MemoryStream(bytes, (int)offset, (int)length, false)); }
+        { cancellationToken.ThrowIfCancellationRequested(); Ranges.Add((offset, length)); RangeDisposed = false; return Task.FromResult<Stream>(new RangeStream(bytes, (int)offset, (int)length, () => RangeDisposed = true)); }
         public Task ValidateAsync(CancellationToken cancellationToken = default) { cancellationToken.ThrowIfCancellationRequested(); return Task.CompletedTask; }
+        private sealed class RangeStream(byte[] content, int offset, int length, Action closed) : MemoryStream(content, offset, length, false)
+        {
+            protected override void Dispose(bool disposing) { if (disposing) closed(); base.Dispose(disposing); }
+        }
     }
     private sealed class GatedSource : ITransferSourceFile
     {

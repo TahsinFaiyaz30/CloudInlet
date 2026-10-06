@@ -1098,7 +1098,7 @@
                                 </StackPanel>
                                 <StackPanel x:Name="NetworkSettingsDetail" Spacing="4" Visibility="Collapsed">
                                     <settings:SettingsCard x:Name="UploadPerformanceCard" Header="Transfer performance"
-                                        Description="Balances parallel transfers with available system resources.">
+                                        Description="Balances uploads and downloads with available system resources. Applies to local and cloud transfers.">
                                         <settings:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE895;" /></settings:SettingsCard.HeaderIcon>
                                         <ComboBox x:Name="UploadModeBox" Width="220" SelectionChanged="UploadMode_SelectionChanged"
                                                   AutomationProperties.Name="Transfer performance mode">
@@ -1108,13 +1108,13 @@
                                         </ComboBox>
                                     </settings:SettingsCard>
                                     <settings:SettingsCard x:Name="ManualConcurrencyCard" Header="Upload slots"
-                                        Description="Maximum simultaneous upload requests, shared by files and large-file parts." Visibility="Collapsed">
+                                        Description="Maximum simultaneous upload requests across accounts, shared by files and large-file parts." Visibility="Collapsed">
                                         <NumberBox x:Name="ConcurrencyBox" Width="200" Minimum="1" Maximum="16" SmallChange="1"
                                                    SpinButtonPlacementMode="Compact" ValidationMode="Disabled"
                                                    AutomationProperties.Name="Maximum simultaneous upload requests" />
                                     </settings:SettingsCard>
                                     <settings:SettingsCard x:Name="ManualDownloadConcurrencyCard" Header="Download slots"
-                                        Description="Maximum simultaneous download requests, shared by files and large-file chunks." Visibility="Collapsed">
+                                        Description="Maximum simultaneous download requests across accounts, shared by files and large-file chunks." Visibility="Collapsed">
                                         <NumberBox x:Name="DownloadConcurrencyBox" Width="200" Minimum="1" Maximum="16" SmallChange="1"
                                                    SpinButtonPlacementMode="Compact" ValidationMode="Disabled"
                                                    AutomationProperties.Name="Maximum simultaneous downloads" />

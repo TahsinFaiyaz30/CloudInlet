@@ -738,8 +738,7 @@ public sealed partial class ClientController : IAsyncDisposable
     private static void ConfigureTransport(B2CloudStore cloud, AppSettings settings)
     {
         var limits = TransferLimits.For(settings);
-        cloud.Configure(settings.UploadBytesPerSecond, settings.DownloadBytesPerSecond, limits.Uploads);
-        cloud.ConfigureDownloads(limits.Downloads);
+        cloud.Configure(settings.UploadBytesPerSecond, settings.DownloadBytesPerSecond, limits.Uploads, limits.Downloads);
     }
 
     private async Task HydrateTrackedAsync(B2CloudStore cloud, CloudObject file, string prefix, string rootName,

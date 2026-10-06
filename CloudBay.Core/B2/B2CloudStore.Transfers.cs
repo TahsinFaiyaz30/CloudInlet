@@ -147,10 +147,11 @@ public sealed partial class B2CloudStore
                 request.Headers.TryAddWithoutValidation("Authorization", auth.Token);
                 var full = offset == 0 && length == file.Size;
                 if (!full) request.Headers.Range = new RangeHeaderValue(offset, checked(offset + length - 1));
-                response = await SendAsync(request, token).ConfigureAwait(false);
+                response = await SendAsync(request, token, payloadDownload: true).ConfigureAwait(false);
                 if (!response.IsSuccessStatusCode)
                 {
                     var error = await ReadErrorAsync(response, token).ConfigureAwait(false);
+                    response.Dispose(); // Release shared request admission before authorization or retry waits.
                     if (IsExpired(error) && attempt < Attempts - 1)
                     { await ReauthorizeAsync(auth, token).ConfigureAwait(false); continue; }
                     if (!IsTransient(response.StatusCode) || attempt == Attempts - 1) throw error;
@@ -335,6 +336,7 @@ public sealed partial class B2CloudStore
                         await save(new("b2", operationId, 0, new Dictionary<string, string>(data)), CancellationToken.None).ConfigureAwait(false);
                     }
                     var error = await ReadErrorAsync(response, token).ConfigureAwait(false);
+                    response.Dispose(); // Receipt reconciliation and backoff are outside upload admission.
                     session = null;
                     if (rejectedStatus is null && content.TrailerStarted)
                     {
@@ -564,6 +566,7 @@ public sealed partial class B2CloudStore
                             if (!response.IsSuccessStatusCode)
                             {
                                 var error = await ReadErrorAsync(response, workers.Token).ConfigureAwait(false);
+                                response.Dispose();
                                 session = null;
                                 if (!IsUploadRetry(response.StatusCode, error.Code) || attempt == Attempts - 1) throw error;
                                 RollBack(); await BackoffAsync(response, attempt, workers.Token).ConfigureAwait(false); continue;
@@ -574,6 +577,7 @@ public sealed partial class B2CloudStore
                                 LongValue(json.RootElement, "partNumber") != index + 1 || LongValue(json.RootElement, "contentLength") != length ||
                                 !hash!.Equals(RequiredString(json.RootElement, "contentSha1"), StringComparison.OrdinalIgnoreCase))
                                 throw new InvalidDataException("Backblaze acknowledged a multipart range with different content.");
+                            response.Dispose(); // Durable checkpoint commits do not occupy a completed HTTP request slot.
                             await saveGate.WaitAsync(workers.Token).ConfigureAwait(false);
                             try
                             {

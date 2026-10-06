@@ -18,6 +18,7 @@ public sealed partial class B2CloudStore
         if (connections is < 1 or > 32) throw new ArgumentOutOfRangeException(nameof(connections));
         Volatile.Write(ref _downloadConnections, connections);
         _downloads.Configure(connections);
+        _requestBudget.ConfigureDownloadRequests(connections);
     }
 
     public static long GetDownloadChunkSize(long fileSize)
@@ -220,7 +221,7 @@ public sealed partial class B2CloudStore
             try
             {
                 if (attempt == 0) progress?.Report(new(0, count) { IsBaseline = true });
-                response = await SendAsync(request, token).ConfigureAwait(false);
+                response = await SendAsync(request, token, payloadDownload: true).ConfigureAwait(false);
                 if (!response.IsSuccessStatusCode)
                 {
                     var error = await ReadErrorAsync(response, token).ConfigureAwait(false);

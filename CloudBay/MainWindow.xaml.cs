@@ -1335,9 +1335,9 @@ public sealed partial class MainWindow : Window
         ManualConcurrencyCard.Visibility = ManualDownloadConcurrencyCard.Visibility = mode == UploadMode.Manual ? Visibility.Visible : Visibility.Collapsed;
         UploadPerformanceCard.Description = mode switch
         {
-            UploadMode.MaximumThroughput => "Prioritizes speed with more parallel transfers. Can use more network, CPU and disk resources.",
-            UploadMode.Manual => "Choose separate limits for simultaneous upload requests and downloads.",
-            _ => "Balances parallel transfers with available system resources."
+            UploadMode.MaximumThroughput => "Uses more parallel uploads and downloads across local and cloud transfers. Can use more system resources.",
+            UploadMode.Manual => "Choose separate upload and download limits shared across connected accounts.",
+            _ => "Balances uploads and downloads with available system resources. Applies to local and cloud transfers."
         };
     }
 

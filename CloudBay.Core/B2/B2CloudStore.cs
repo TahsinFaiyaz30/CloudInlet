@@ -32,6 +32,7 @@ public sealed partial class B2CloudStore : ICloudStore
     private readonly ConcurrencyGate _uploadRequests = new();
     private readonly BandwidthLimiter _uploadLimit;
     private readonly BandwidthLimiter _downloadLimit;
+    private readonly TransferBandwidthBudget _requestBudget;
     private readonly ConcurrentDictionary<string, ConcurrentBag<UploadSession>> _uploadSessions = new(StringComparer.Ordinal);
     private B2Credentials? _credentials;
     private Authorization? _authorization;
@@ -57,6 +58,7 @@ public sealed partial class B2CloudStore : ICloudStore
         TimeSpan? transferInactivityTimeout = null, TransferBandwidthBudget? bandwidthBudget = null)
     {
         bandwidthBudget ??= new TransferBandwidthBudget();
+        _requestBudget = bandwidthBudget;
         _uploadLimit = bandwidthBudget.Uploads;
         _downloadLimit = bandwidthBudget.Downloads;
         _metadataTimeout = ValidateTimeout(metadataTimeout ?? TimeSpan.FromSeconds(60), nameof(metadataTimeout));
@@ -86,16 +88,22 @@ public sealed partial class B2CloudStore : ICloudStore
     }
 
     /// <summary>Zero bytes/second means unlimited. Limits are shared across all simultaneous transfers.</summary>
-    public void Configure(long uploadBytesPerSecond, long downloadBytesPerSecond, int connections)
+    public void Configure(long uploadBytesPerSecond, long downloadBytesPerSecond, int connections) =>
+        Configure(uploadBytesPerSecond, downloadBytesPerSecond, connections, connections);
+
+    /// <summary>Set final upload and download request bounds without a temporary symmetric limit.</summary>
+    public void Configure(long uploadBytesPerSecond, long downloadBytesPerSecond, int uploadConnections, int downloadConnections)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentOutOfRangeException.ThrowIfNegative(uploadBytesPerSecond);
         ArgumentOutOfRangeException.ThrowIfNegative(downloadBytesPerSecond);
-        if (connections is < 1 or > 32) throw new ArgumentOutOfRangeException(nameof(connections));
-        Volatile.Write(ref _connections, connections);
-        _uploads.Configure(connections);
-        _uploadRequests.Configure(connections);
-        ConfigureDownloads(connections);
+        if (uploadConnections is < 1 or > 32) throw new ArgumentOutOfRangeException(nameof(uploadConnections));
+        if (downloadConnections is < 1 or > 32) throw new ArgumentOutOfRangeException(nameof(downloadConnections));
+        _requestBudget.ConfigureRequestLimits(uploadConnections, downloadConnections);
+        Volatile.Write(ref _connections, uploadConnections);
+        _uploads.Configure(uploadConnections);
+        _uploadRequests.Configure(uploadConnections);
+        ConfigureDownloads(downloadConnections);
         _uploadLimit.Configure(uploadBytesPerSecond);
         _downloadLimit.Configure(downloadBytesPerSecond);
     }
@@ -349,6 +357,7 @@ public sealed partial class B2CloudStore : ICloudStore
                         Persist(pending: false); Forget();
                     }
                     var error = await ReadErrorAsync(response, token).ConfigureAwait(false);
+                    response.Dispose(); // The parsed response no longer owns an active payload request.
                     // A failing upload endpoint is retired; never share it with the next file.
                     session = null;
                     if (rejectedStatus is null && bytes >= length)
@@ -665,23 +674,36 @@ public sealed partial class B2CloudStore : ICloudStore
         return request;
     }
 
-    private async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+    private async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token, bool payloadDownload = false)
     {
         request.Version = HttpVersion.Version20;
         request.VersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
         TransferInactivity? inactivity = null;
         long? sentAt = null;
+        IDisposable? payloadLease = null;
         try
         {
             // Cloud authorization/range opening and the first block must be ready
             // before sending B2 headers, rather than leaving its server waiting.
             if (request.Content is ReplayableContent prepared) await prepared.PrepareAsync(token).ConfigureAwait(false);
+            // Source preparation can wait for a shared download slot. Never hold
+            // upload admission while waiting for that source or its first block.
+            if (request.Content is SegmentContent or ReplayableContent)
+                payloadLease = await _requestBudget.EnterUploadAsync(token).ConfigureAwait(false);
+            else if (payloadDownload)
+                payloadLease = await _requestBudget.EnterDownloadAsync(token).ConfigureAwait(false);
             inactivity = new TransferInactivity(token,
                 request.Content is SegmentContent or ReplayableContent ? _transferInactivityTimeout : _metadataTimeout);
             if (request.Content is SegmentContent segment) segment.Inactivity = inactivity;
             if (request.Content is ReplayableContent replayable) replayable.Inactivity = inactivity;
             sentAt = Stopwatch.GetTimestamp();
-            return await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, inactivity.Token).ConfigureAwait(false);
+            var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, inactivity.Token).ConfigureAwait(false);
+            if (payloadLease is not null)
+            {
+                TransferBandwidthBudget.AttachResponseLease(response, payloadLease);
+                payloadLease = null;
+            }
+            return response;
         }
         catch (OperationCanceledException error) when (!token.IsCancellationRequested)
         { throw SafeTransportException(error, "The connection to Backblaze B2 timed out. Changes will retry automatically."); }
@@ -693,6 +715,7 @@ public sealed partial class B2CloudStore : ICloudStore
         { throw SafeTransportException(error, "The connection to Backblaze B2 failed. Check your network connection."); }
         finally
         {
+            payloadLease?.Dispose();
             if (request.Content is SegmentContent uploaded) uploaded.Inactivity = null;
             if (request.Content is ReplayableContent replayed)
             {

@@ -273,6 +273,7 @@ public sealed partial class B2CloudStore
                                     break;
                                 }
                                 var error = await ReadErrorAsync(response, workersCts.Token).ConfigureAwait(false);
+                                response.Dispose(); // Release the payload request before its retry delay.
                                 session = null;
                                 if (!IsUploadRetry(response.StatusCode, error.Code) || attempt == Attempts - 1) throw error;
                                 RollBackAttempt(sentThisAttempt);

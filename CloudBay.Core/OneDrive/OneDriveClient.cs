@@ -20,6 +20,7 @@ public sealed class OneDriveClient
     private readonly OneDriveAuthClient _auth;
     private readonly BandwidthLimiter _uploadLimit;
     private readonly BandwidthLimiter _downloadLimit;
+    private readonly TransferBandwidthBudget _requestBudget;
     private readonly ConcurrencyGate _uploads = new();
     private readonly ConcurrencyGate _downloads = new();
     private static readonly TimeSpan InactivityTimeout = TimeSpan.FromMinutes(2);
@@ -30,6 +31,7 @@ public sealed class OneDriveClient
     {
         _auth = auth; _http = http ?? SharedHttp;
         bandwidthBudget ??= new TransferBandwidthBudget();
+        _requestBudget = bandwidthBudget;
         _uploadLimit = bandwidthBudget.Uploads;
         _downloadLimit = bandwidthBudget.Downloads;
     }
@@ -46,6 +48,7 @@ public sealed class OneDriveClient
         if (downloadConnections is < 1 or > 32) throw new ArgumentOutOfRangeException(nameof(downloadConnections));
         _uploads.Configure(uploadConnections);
         _downloads.Configure(downloadConnections);
+        _requestBudget.ConfigureRequestLimits(uploadConnections, downloadConnections);
         _uploadLimit.Configure(uploadBytesPerSecond);
         _downloadLimit.Configure(downloadBytesPerSecond);
     }
@@ -347,18 +350,40 @@ public sealed class OneDriveClient
         }
     }
 
-    private async Task<HttpResponseMessage> SendContentAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    private async Task<HttpResponseMessage> SendContentAsync(HttpRequestMessage request, CancellationToken cancellationToken, bool payloadDownload = false)
     {
         request.Version = HttpVersion.Version20;
         request.VersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
         // Cap a stalled request rather than total transfer duration, so intentional
         // bandwidth caps and very large healthy uploads do not expire mid-file.
-        using var inactivity = new TransferInactivity(cancellationToken, InactivityTimeout);
-        if (request.Content is ProgressMemoryContent content) content.Inactivity = inactivity;
-        try { return await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, inactivity.Token).ConfigureAwait(false); }
+        IDisposable? payloadLease = null;
+        TransferInactivity? inactivity = null;
+        try
+        {
+            // Memory payloads have already finished cloud source reads before
+            // reaching this method; metadata requests need no directional slot.
+            if (request.Content is ProgressMemoryContent)
+                payloadLease = await _requestBudget.EnterUploadAsync(cancellationToken).ConfigureAwait(false);
+            else if (payloadDownload)
+                payloadLease = await _requestBudget.EnterDownloadAsync(cancellationToken).ConfigureAwait(false);
+            inactivity = new TransferInactivity(cancellationToken, InactivityTimeout);
+            if (request.Content is ProgressMemoryContent content) content.Inactivity = inactivity;
+            var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, inactivity.Token).ConfigureAwait(false);
+            if (payloadLease is not null)
+            {
+                TransferBandwidthBudget.AttachResponseLease(response, payloadLease);
+                payloadLease = null;
+            }
+            return response;
+        }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         { throw new HttpRequestException("The connection to OneDrive stopped responding. Saved transfer progress is retained."); }
-        finally { if (request.Content is ProgressMemoryContent uploaded) uploaded.Inactivity = null; }
+        finally
+        {
+            payloadLease?.Dispose();
+            if (request.Content is ProgressMemoryContent uploaded) uploaded.Inactivity = null;
+            inactivity?.Dispose();
+        }
     }
 
     private async Task<HttpResponseMessage> SendDownloadAsync(Uri url, RangeHeaderValue range, CancellationToken cancellationToken)
@@ -368,7 +393,7 @@ public sealed class OneDriveClient
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             request.Headers.Range = range;
-            var response = await SendContentAsync(request, cancellationToken);
+            var response = await SendContentAsync(request, cancellationToken, payloadDownload: true);
             if ((int)response.StatusCode is 301 or 302 or 303 or 307 or 308)
             {
                 var location = response.Headers.Location;
