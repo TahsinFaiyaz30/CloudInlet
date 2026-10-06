@@ -247,7 +247,7 @@ public sealed partial class B2CloudStore
         {
             return source.Entry.Size < MultipartThreshold
                 ? await UploadTransferSmallAsync(bucketId, key, upload.OperationId, sourceId, source, saved, save, progress, token).ConfigureAwait(false)
-                : await UploadTransferLargeAsync(bucketId, key, upload.OperationId, sourceId, source, saved, save, progress, token).ConfigureAwait(false);
+                : await UploadTransferLargeAsync(bucketId, key, upload.OperationId, sourceId, source, saved, save, progress, upload.ConflictPolicy, token).ConfigureAwait(false);
         }
         finally { _uploads.Exit(); }
     }
@@ -255,14 +255,13 @@ public sealed partial class B2CloudStore
     private static Dictionary<string, string> TransferData(string key, string operationId, string sourceId, string kind) =>
         new(StringComparer.Ordinal) { ["key"] = key, ["operation_id"] = operationId, ["source_id"] = sourceId, ["kind"] = kind };
 
-    private HttpRequestMessage TransferUploadRequest(UploadSession session, ITransferSourceFile source, long offset,
-        long length, Action<int>? progress, CancellationToken token)
+    private static HttpRequestMessage TransferUploadRequest(UploadSession session, ReplayableContent content, long length)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, session.Url);
         request.Headers.ExpectContinue = false;
         request.Headers.TryAddWithoutValidation("Authorization", session.Token);
         request.Headers.TryAddWithoutValidation("X-Bz-Content-Sha1", "hex_digits_at_end");
-        request.Content = new ReplayableContent(source, offset, length, _uploadLimit, progress, token);
+        request.Content = content;
         request.Content.Headers.ContentLength = checked(length + 40);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("b2/x-auto");
         return request;
@@ -287,26 +286,29 @@ public sealed partial class B2CloudStore
         {
             for (var attempt = 0; attempt < Attempts; attempt++)
             {
+                long bytes = 0;
+                progress?.Report(new(0, source.Entry.Size) { IsBaseline = true });
+                await using var content = new ReplayableContent(source, 0, source.Entry.Size, _uploadLimit,
+                    count => progress?.Report(new(Interlocked.Add(ref bytes, count), source.Entry.Size)), token);
+                content.BeginPreparation(token);
                 while (session is null && pool.TryTake(out var cached))
                     if (cached.ExpiresUtc > DateTimeOffset.UtcNow) session = cached;
                 session ??= await GetUploadSessionAsync(bucketId, null, token).ConfigureAwait(false);
-                long bytes = 0;
-                progress?.Report(new(0, source.Entry.Size) { IsBaseline = true });
-                using var request = TransferUploadRequest(session, source, 0, source.Entry.Size,
-                    count => progress?.Report(new(Interlocked.Add(ref bytes, count), source.Entry.Size)), token);
+                using var request = TransferUploadRequest(session, content, source.Entry.Size);
                 request.Headers.TryAddWithoutValidation("X-Bz-File-Name", EncodeName(key));
                 request.Headers.TryAddWithoutValidation("X-Bz-Info-src_last_modified_millis", source.Entry.ModifiedUtc.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture));
                 request.Headers.TryAddWithoutValidation("X-Bz-Info-cloudbay_upload_id", operationId);
                 request.Headers.TryAddWithoutValidation("X-Bz-Info-cloudbay_source_id", sourceId);
                 data["pending"] = "true";
                 await save(new("b2", operationId, 0, new Dictionary<string, string>(data)), token).ConfigureAwait(false);
-                var content = (ReplayableContent)request.Content!;
                 HttpStatusCode? observedStatus = null;
+                Version? observedVersion = null;
                 HttpStatusCode? rejectedStatus = null;
                 try
                 {
                     using var response = await SendAsync(request, token).ConfigureAwait(false);
                     observedStatus = response.StatusCode;
+                    observedVersion = response.Version;
                     if (response.IsSuccessStatusCode)
                     {
                         using var json = await ReadDocumentAsync(response, token).ConfigureAwait(false);
@@ -333,7 +335,8 @@ public sealed partial class B2CloudStore
                     session = null;
                     if (rejectedStatus is null && content.TrailerStarted)
                     {
-                        await RecordUncertaintyAsync("provider_response", response.StatusCode, error.Code).ConfigureAwait(false);
+                        await RecordUncertaintyAsync("provider_response", response.StatusCode, error.Code, content: content,
+                            responseVersion: response.Version).ConfigureAwait(false);
                         var receipt = await FindTransferReceiptAsync(bucketId, key, operationId, source, token).ConfigureAwait(false);
                         if (receipt is not null) return BindTransferContentHash(receipt, content.Sha1);
                         throw UnknownOutcome("cloud upload", error);
@@ -345,6 +348,7 @@ public sealed partial class B2CloudStore
                 }
                 catch (Exception error) when (error is TransferSourceChangedException or InvalidDataException && !content.TrailerStarted)
                 {
+                    if (content.SendMilliseconds is null) reusable = true;
                     data["pending"] = "false";
                     await save(new("b2", operationId, 0, new Dictionary<string, string>(data)), CancellationToken.None).ConfigureAwait(false);
                     throw;
@@ -353,7 +357,8 @@ public sealed partial class B2CloudStore
                     error is InvalidOperationException && observedStatus is not null ||
                     error is IOException and not B2RequestException and not UnknownTransferOutcomeException and not TransferSourceChangedException)
                 {
-                    session = null;
+                    if (content.SendMilliseconds is null) reusable = true;
+                    else session = null;
                     if (rejectedStatus is { } status)
                     {
                         if (error is OperationCanceledException) throw;
@@ -375,7 +380,8 @@ public sealed partial class B2CloudStore
                     }
                     await RecordUncertaintyAsync(error is OperationCanceledException ? "cancelled_after_body" :
                         observedStatus is { } responseStatus && (int)responseStatus is >= 200 and < 300 ? "acknowledgment_unreadable" :
-                        observedStatus is not null ? "provider_error_body_unreadable" : "transport_after_body", observedStatus).ConfigureAwait(false);
+                        observedStatus is not null ? "provider_error_body_unreadable" : "transport_after_body", observedStatus,
+                        transportError: error, content: content, responseVersion: observedVersion).ConfigureAwait(false);
                     if (error is OperationCanceledException) throw;
                     var receipt = await FindTransferReceiptAsync(bucketId, key, operationId, source, token).ConfigureAwait(false);
                     if (receipt is not null) return BindTransferContentHash(receipt, content.Sha1);
@@ -388,13 +394,35 @@ public sealed partial class B2CloudStore
         }
         finally { if (reusable && session is not null) pool.Add(session); _uploadRequests.Exit(); }
 
-        Task RecordUncertaintyAsync(string category, HttpStatusCode? status, string? safeCode = null)
+        Task RecordUncertaintyAsync(string category, HttpStatusCode? status, string? safeCode = null, Exception? transportError = null,
+            ReplayableContent? content = null, Version? responseVersion = null)
         {
             data["failure_category"] = category;
             if (status is { } value) data["response_status"] = ((int)value).ToString(CultureInfo.InvariantCulture);
             else data.Remove("response_status");
             if (safeCode is not null) data["response_code"] = safeCode;
             else data.Remove("response_code");
+            if (transportError is HttpRequestException)
+            {
+                var failure = ClassifyTransportFailure(transportError);
+                data["transport_error"] = failure.RequestError.ToString();
+                data["transport_inner_types"] = failure.InnerTypes;
+                data["transport_hresult"] = failure.HResult;
+                if (failure.SocketError is { } socket) data["transport_socket_error"] = socket;
+                if (failure.InnerHResult is { } innerHResult) data["transport_inner_hresult"] = innerHResult;
+            }
+            if (content is not null)
+            {
+                if (content.SourceOpenMilliseconds is { } opened) data["source_open_ms"] = opened.ToString(CultureInfo.InvariantCulture);
+                if (content.FirstBlockMilliseconds is { } first) data["source_first_block_ms"] = first.ToString(CultureInfo.InvariantCulture);
+                if (content.SourceReadMilliseconds is { } read) data["source_read_ms"] = read.ToString(CultureInfo.InvariantCulture);
+                if (content.SendMilliseconds is { } send) data["request_send_ms"] = send.ToString(CultureInfo.InvariantCulture);
+                data["prepared_bytes"] = content.PreparedBytes.ToString(CultureInfo.InvariantCulture);
+                data["sent_bytes"] = content.SentBytes.ToString(CultureInfo.InvariantCulture);
+                data["request_version"] = "2.0";
+                data["request_version_policy"] = "RequestVersionOrLower";
+            }
+            if (responseVersion is { Major: 1 or 2 or 3, Minor: 0 or 1 }) data["response_version"] = responseVersion.ToString(2);
             // Only bounded classifications and the allowlisted B2 error code are
             // durable. Exception messages can contain URLs or credentials.
             return save(new("b2", operationId, 0, new Dictionary<string, string>(data)), CancellationToken.None);
@@ -408,7 +436,8 @@ public sealed partial class B2CloudStore
 
     private async Task<TransferReceipt> UploadTransferLargeAsync(string bucketId, string key, string operationId,
         string sourceId, ITransferSourceFile source, TransferCheckpoint? saved,
-        Func<TransferCheckpoint, CancellationToken, Task> save, IProgress<TransferProgress>? progress, CancellationToken token)
+        Func<TransferCheckpoint, CancellationToken, Task> save, IProgress<TransferProgress>? progress,
+        TransferConflictPolicy conflictPolicy, CancellationToken token)
     {
         var data = TransferData(key, operationId, sourceId, "large");
         var partSize = saved?.Data is { } old && long.TryParse(old.GetValueOrDefault("part_size"), CultureInfo.InvariantCulture, out var size)
@@ -471,7 +500,7 @@ public sealed partial class B2CloudStore
                 {
                     var recoveredReceipt = await FindTransferReceiptAsync(bucketId, key, operationId, source, token).ConfigureAwait(false);
                     if (recoveredReceipt is not null) return recoveredReceipt;
-                    return await UploadTransferLargeAsync(bucketId, key, operationId, sourceId, source, null, save, progress, token).ConfigureAwait(false);
+                    return await UploadTransferLargeAsync(bucketId, key, operationId, sourceId, source, null, save, progress, conflictPolicy, token).ConfigureAwait(false);
                 }
             }
             foreach (var part in parts)
@@ -519,10 +548,12 @@ public sealed partial class B2CloudStore
                     var length = Math.Min(partSize, source.Entry.Size - offset);
                     for (var attempt = 0; attempt < Attempts; attempt++)
                     {
-                        session ??= await GetUploadSessionAsync(bucketId, fileId, workers.Token).ConfigureAwait(false);
                         long sent = 0;
-                        using var request = TransferUploadRequest(session, source, offset, length, count =>
+                        await using var content = new ReplayableContent(source, offset, length, _uploadLimit, count =>
                         { lock (gate) { sent += count; displayed += count; progress?.Report(new(Math.Min(displayed, source.Entry.Size), source.Entry.Size)); } }, workers.Token);
+                        content.BeginPreparation(workers.Token);
+                        session ??= await GetUploadSessionAsync(bucketId, fileId, workers.Token).ConfigureAwait(false);
+                        using var request = TransferUploadRequest(session, content, length);
                         request.Headers.TryAddWithoutValidation("X-Bz-Part-Number", (index + 1).ToString(CultureInfo.InvariantCulture));
                         try
                         {
@@ -553,7 +584,7 @@ public sealed partial class B2CloudStore
                             break;
                         }
                         catch (Exception error) when ((error is HttpRequestException || error is IOException and not B2RequestException and not TransferSourceChangedException) && attempt < Attempts - 1)
-                        { session = null; RollBack(); await BackoffAsync(null, attempt, workers.Token).ConfigureAwait(false); }
+                        { if (content.SendMilliseconds is not null) session = null; RollBack(); await BackoffAsync(null, attempt, workers.Token).ConfigureAwait(false); }
 
                         void RollBack() { lock (gate) { displayed -= sent; progress?.Report(new(Math.Max(0, displayed), source.Entry.Size) { IsBaseline = true }); } }
                     }
@@ -563,6 +594,15 @@ public sealed partial class B2CloudStore
             finally { _uploadRequests.Exit(); }
         })).ConfigureAwait(false);
         await source.ValidateAsync(token).ConfigureAwait(false);
+        if (conflictPolicy is TransferConflictPolicy.Fail or TransferConflictPolicy.Skip or TransferConflictPolicy.Rename &&
+            await FindTransferCurrentAsync(bucketId, key, token).ConfigureAwait(false) is not null)
+        {
+            var receipt = await FindTransferReceiptAsync(bucketId, key, operationId, source, token).ConfigureAwait(false);
+            if (receipt is not null) { progress?.Report(new(source.Entry.Size, source.Entry.Size) { IsBaseline = true }); return receipt; }
+            // Native B2 name creation has no atomic If-None-Match primitive. This
+            // final guard stops observed late conflicts before committing parts.
+            throw new TransferConflictException("The selected B2 destination became occupied before multipart completion. The unfinished upload and source are retained.");
+        }
         var completed = await FinishAsync(fileId, hashes.Select(h => h ?? throw new InvalidDataException("An upload part is missing.")).ToArray(), token).ConfigureAwait(false);
         if (completed.Key != key || completed.Size != source.Entry.Size || completed.FileId != fileId || completed.Action != "upload")
             throw new InvalidDataException("Backblaze returned an invalid completed multipart receipt.");

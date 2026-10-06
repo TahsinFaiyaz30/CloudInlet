@@ -45,6 +45,7 @@ public sealed class B2TransferEndpoint : ITransferEndpoint
         // No checkpoint means this planned item has never attempted remote creation;
         // its normal conflict lookup is sufficient and avoids a version-list round trip.
         if (checkpoint is null) return null;
+        ValidateCheckpoint(request, source, checkpoint);
         if (source.Entry.IsFolder && !key.EndsWith('/')) key += "/";
         var receipt = await _store.FindTransferReceiptAsync(Location.ContainerId, key, request.OperationId, source, cancellationToken).ConfigureAwait(false);
         return receipt is null ? null : receipt with { RelativePath = request.ConflictPolicy == TransferConflictPolicy.Rename
@@ -57,6 +58,33 @@ public sealed class B2TransferEndpoint : ITransferEndpoint
     {
         var key = CheckpointKey(request, checkpoint);
         if (source.Entry.IsFolder && !key.EndsWith('/')) key += "/";
+        var originalKey = _prefix + request.RelativePath.Replace('\\', '/').TrimEnd('/') + (source.Entry.IsFolder ? "/" : "");
+        var alternateSelected = key != originalKey;
+        if (checkpoint is not null)
+        {
+            ValidateCheckpoint(request, source, checkpoint);
+            if (checkpoint.AcknowledgedBytes == 0 && checkpoint.Data!.GetValueOrDefault("kind") == "small" &&
+                checkpoint.Data!.GetValueOrDefault("pending") == "false")
+            {
+                // A definite small-upload rejection created no remote file. A
+                // restart must recheck its selected path against today's conflicts.
+                // Once selected, an alternate name is retained even if the original
+                // later becomes available.
+                checkpoint = null;
+            }
+            else if (checkpoint.Data!.GetValueOrDefault("kind") == "large" &&
+                request.ConflictPolicy is TransferConflictPolicy.Rename or TransferConflictPolicy.Fail or TransferConflictPolicy.Skip &&
+                await _store.FindTransferCurrentAsync(Location.ContainerId, key, cancellationToken).ConfigureAwait(false) is not null)
+            {
+                var recovered = await _store.FindTransferReceiptAsync(Location.ContainerId, key, request.OperationId, source, cancellationToken).ConfigureAwait(false);
+                if (recovered is not null)
+                {
+                    progress?.Report(new(source.Entry.Size, source.Entry.Size) { IsBaseline = true });
+                    return recovered with { RelativePath = key[_prefix.Length..].TrimEnd('/') };
+                }
+                throw new TransferConflictException("The selected B2 upload path became occupied. Its unfinished upload and source are retained for review.");
+            }
+        }
         if (checkpoint is null)
         {
             var current = await _store.FindTransferCurrentAsync(Location.ContainerId, key, cancellationToken).ConfigureAwait(false);
@@ -68,6 +96,8 @@ public sealed class B2TransferEndpoint : ITransferEndpoint
                     throw new TransferConflictException("The B2 destination already contains this name.");
                 if (request.ConflictPolicy == TransferConflictPolicy.Rename)
                 {
+                    if (alternateSelected)
+                        throw new TransferConflictException("The stable renamed B2 destination became occupied and belongs to another operation.");
                     key = RenamedKey(request) + (source.Entry.IsFolder ? "/" : "");
                     if (await _store.FindTransferCurrentAsync(Location.ContainerId, key, cancellationToken).ConfigureAwait(false) is not null)
                         throw new TransferConflictException("The stable renamed B2 destination already exists and belongs to another operation.");
@@ -100,7 +130,8 @@ public sealed class B2TransferEndpoint : ITransferEndpoint
         var expected = _prefix + relative;
         var key = checkpoint?.Data?.GetValueOrDefault("key") ?? expected;
         if (key != expected && key != expected + "/" &&
-            !(request.ConflictPolicy == TransferConflictPolicy.Rename && (key == RenamedKey(request) || key == RenamedKey(request) + "/")))
+            !(request.ConflictPolicy == TransferConflictPolicy.Rename && (key == RenamedKey(request) || key == RenamedKey(request) + "/" ||
+                key == LegacyRenamedKey(request) || key == LegacyRenamedKey(request) + "/")))
             throw new InvalidDataException("The saved B2 destination path differs from the reviewed plan.");
         return key;
     }
@@ -109,11 +140,26 @@ public sealed class B2TransferEndpoint : ITransferEndpoint
     {
         if (request.OperationId is not { Length: 64 } || !request.OperationId.All(Uri.IsHexDigit))
             throw new ArgumentException("A stable SHA256 operation identity is required.", nameof(request));
+        return _prefix + TransferConflictNames.RenamePath(request.RelativePath.TrimEnd('/'), request.OperationId);
+    }
+
+    private string LegacyRenamedKey(TransferUploadRequest request)
+    {
+        if (request.OperationId is not { Length: 64 } || !request.OperationId.All(Uri.IsHexDigit))
+            throw new ArgumentException("A stable SHA256 operation identity is required.", nameof(request));
         var relative = request.RelativePath.Replace('\\', '/').TrimEnd('/');
         var slash = relative.LastIndexOf('/');
         var dot = relative.LastIndexOf('.');
         if (dot <= slash) dot = relative.Length;
         return _prefix + relative[..dot] + " (" + request.OperationId[..12] + ")" + relative[dot..];
+    }
+
+    private static void ValidateCheckpoint(TransferUploadRequest request, ITransferSourceFile source, TransferCheckpoint checkpoint)
+    {
+        if (checkpoint.Provider != "b2" || checkpoint.Data is null ||
+            checkpoint.Data.GetValueOrDefault("operation_id") != request.OperationId ||
+            checkpoint.Data.GetValueOrDefault("source_id") != B2CloudStore.TransferSourceId(source))
+            throw new InvalidDataException("The saved B2 checkpoint belongs to another source or transfer operation.");
     }
 
     private CloudObject ToObject(TransferEntry entry)

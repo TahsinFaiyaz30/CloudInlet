@@ -1,9 +1,12 @@
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Sockets;
 using System.Runtime.CompilerServices;
+using System.Security.Authentication;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -666,23 +669,84 @@ public sealed partial class B2CloudStore : ICloudStore
     {
         request.Version = HttpVersion.Version20;
         request.VersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
-        using var inactivity = new TransferInactivity(token,
-            request.Content is SegmentContent or ReplayableContent ? _transferInactivityTimeout : _metadataTimeout);
-        if (request.Content is SegmentContent segment) segment.Inactivity = inactivity;
-        if (request.Content is ReplayableContent replayable) replayable.Inactivity = inactivity;
-        try { return await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, inactivity.Token).ConfigureAwait(false); }
-        catch (OperationCanceledException) when (!token.IsCancellationRequested)
-        { throw new HttpRequestException("The connection to Backblaze B2 timed out. Changes will retry automatically."); }
+        TransferInactivity? inactivity = null;
+        long? sentAt = null;
+        try
+        {
+            // Cloud authorization/range opening and the first block must be ready
+            // before sending B2 headers, rather than leaving its server waiting.
+            if (request.Content is ReplayableContent prepared) await prepared.PrepareAsync(token).ConfigureAwait(false);
+            inactivity = new TransferInactivity(token,
+                request.Content is SegmentContent or ReplayableContent ? _transferInactivityTimeout : _metadataTimeout);
+            if (request.Content is SegmentContent segment) segment.Inactivity = inactivity;
+            if (request.Content is ReplayableContent replayable) replayable.Inactivity = inactivity;
+            sentAt = Stopwatch.GetTimestamp();
+            return await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, inactivity.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException error) when (!token.IsCancellationRequested)
+        { throw SafeTransportException(error, "The connection to Backblaze B2 timed out. Changes will retry automatically."); }
         catch (HttpRequestException) when (request.Content is ReplayableContent { SourceError: TransferSourceChangedException })
         { throw ((ReplayableContent)request.Content).SourceError!; }
         catch (HttpRequestException) when (request.Content is ReplayableContent { SourceError: InvalidDataException })
         { throw ((ReplayableContent)request.Content).SourceError!; }
-        catch (HttpRequestException) { throw new HttpRequestException("The connection to Backblaze B2 failed. Check your network connection."); }
+        catch (HttpRequestException error)
+        { throw SafeTransportException(error, "The connection to Backblaze B2 failed. Check your network connection."); }
         finally
         {
             if (request.Content is SegmentContent uploaded) uploaded.Inactivity = null;
-            if (request.Content is ReplayableContent replayed) replayed.Inactivity = null;
+            if (request.Content is ReplayableContent replayed)
+            {
+                if (sentAt is { } started) replayed.SendMilliseconds = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+                replayed.Inactivity = null;
+                await replayed.StopPreparationAsync().ConfigureAwait(false);
+            }
+            inactivity?.Dispose();
         }
+    }
+
+    private const string TransportFailureKey = "CloudBay.B2.TransportFailure";
+    private sealed record TransportFailure(HttpRequestError RequestError, string InnerTypes, string? SocketError,
+        string HResult, string? InnerHResult);
+
+    private static HttpRequestException SafeTransportException(Exception original, string message)
+    {
+        var classification = ClassifyTransportFailure(original);
+        // Preserve the framework's bounded error category while removing messages,
+        // URLs, credentials and arbitrary inner exceptions from public diagnostics.
+        var safe = new HttpRequestException(classification.RequestError, message, inner: null,
+            statusCode: (original as HttpRequestException)?.StatusCode);
+        safe.Data[TransportFailureKey] = classification;
+        return safe;
+    }
+
+    private static TransportFailure ClassifyTransportFailure(Exception error)
+    {
+        if (error.Data[TransportFailureKey] is TransportFailure saved) return saved;
+        var category = error is HttpRequestException request && Enum.IsDefined(request.HttpRequestError)
+            ? request.HttpRequestError : HttpRequestError.Unknown;
+        var innerTypes = new List<string>(4);
+        string? socketError = null, innerHResult = null;
+        for (var current = error; current is not null && innerTypes.Count < 4; current = current.InnerException)
+        {
+            if (current is SocketException socket)
+                socketError ??= Enum.IsDefined(socket.SocketErrorCode) ? socket.SocketErrorCode.ToString() : "Unknown";
+            if (current == error) continue;
+            innerTypes.Add(current switch
+            {
+                SocketException => "SocketException",
+                HttpRequestException => "HttpRequestException",
+                AuthenticationException => "AuthenticationException",
+                InvalidDataException => "InvalidDataException",
+                IOException => "IOException",
+                OperationCanceledException => "OperationCanceledException",
+                TimeoutException => "TimeoutException",
+                ObjectDisposedException => "ObjectDisposedException",
+                _ => "Other"
+            });
+            innerHResult = unchecked((uint)current.HResult).ToString("x8", CultureInfo.InvariantCulture);
+        }
+        return new(category, string.Join(">", innerTypes), socketError,
+            unchecked((uint)error.HResult).ToString("x8", CultureInfo.InvariantCulture), innerHResult);
     }
 
     private async Task<JsonDocument> ReadDocumentAsync(HttpResponseMessage response, CancellationToken token)

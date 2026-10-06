@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -411,6 +412,426 @@ public sealed class B2TransferEndpointTests
     }
 
     [TestMethod]
+    public async Task RenameKeepsOriginalPathWhenDestinationIsAbsent()
+    {
+        using var server = new Server();
+        using var store = await ConnectAsync(server);
+        var endpoint = new B2TransferEndpoint(store, Location);
+        var request = Request(41, TransferConflictPolicy.Rename) with { RelativePath = "folder.v1/file.bin" };
+        TransferCheckpoint? saved = null;
+        var receipt = await endpoint.UploadAsync(request, new Source(127), null,
+            (value, _) => { saved = value; return Task.CompletedTask; });
+
+        Assert.AreEqual(request.RelativePath, receipt.RelativePath);
+        Assert.AreEqual("dest/" + request.RelativePath, saved!.Data!["key"]);
+        Assert.AreEqual(1, server.UploadCalls);
+        Assert.AreEqual(1, server.Files.Count);
+    }
+
+    [DataTestMethod]
+    [DataRow(HttpRequestError.ResponseEnded, false)]
+    [DataRow(HttpRequestError.HttpProtocolError, false)]
+    [DataRow(HttpRequestError.ConnectionError, true)]
+    public async Task TransportUncertaintyPreservesBoundedErrorCategoryWithoutReplayingOrLeakingMessages(HttpRequestError category, bool socketFailure)
+    {
+        var inner = socketFailure ? new IOException("private-token https://secret.invalid/upload", new SocketException((int)SocketError.ConnectionReset))
+            : new IOException("private-token https://secret.invalid/upload");
+        var failure = new HttpRequestException(category, "private-token https://secret.invalid/upload", inner);
+        using var server = new Server { SmallTransportFailure = failure };
+        using var store = await ConnectAsync(server);
+        var endpoint = new B2TransferEndpoint(store, Location);
+        var source = new Source(4096);
+        var request = Request(51);
+        TransferCheckpoint? saved = null;
+
+        await AssertIOExceptionAsync(() => endpoint.UploadAsync(request, source, null,
+            (value, _) => { saved = value; return Task.CompletedTask; }));
+        Assert.AreEqual("transport_after_body", saved!.Data!["failure_category"]);
+        Assert.AreEqual(category.ToString(), saved.Data["transport_error"]);
+        Assert.AreEqual(socketFailure ? "IOException>SocketException" : "IOException", saved.Data["transport_inner_types"]);
+        Assert.AreEqual(unchecked((uint)failure.HResult).ToString("x8"), saved.Data["transport_hresult"]);
+        if (socketFailure) Assert.AreEqual("ConnectionReset", saved.Data["transport_socket_error"]);
+        else Assert.IsFalse(saved.Data.ContainsKey("transport_socket_error"));
+        Assert.AreEqual("true", saved.Data["pending"]);
+        Assert.AreEqual(0, saved.AcknowledgedBytes);
+        Assert.AreEqual("4096", saved.Data["prepared_bytes"]);
+        Assert.AreEqual("4096", saved.Data["sent_bytes"]);
+        Assert.IsTrue(long.Parse(saved.Data["source_first_block_ms"]) >= 0);
+        Assert.IsTrue(long.Parse(saved.Data["request_send_ms"]) >= 0);
+        Assert.IsFalse(saved.Data.ContainsKey("response_version"), "A requested HTTP version does not prove which protocol the lost response used.");
+        var durable = JsonSerializer.Serialize(saved);
+        Assert.IsFalse(durable.Contains("private-token", StringComparison.Ordinal));
+        Assert.IsFalse(durable.Contains("secret.invalid", StringComparison.Ordinal));
+        Assert.IsFalse(durable.Contains(failure.Message, StringComparison.Ordinal));
+
+        await AssertIOExceptionAsync(() => endpoint.UploadAsync(request, source, saved, (_, _) => Task.CompletedTask));
+        Assert.AreEqual(1, server.UploadCalls);
+        Assert.AreEqual(1, source.Opens.Count);
+        Assert.AreEqual(0, server.Files.Count);
+    }
+
+    [DataTestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task TransportDiagnosticInnerCategoriesAreAllowlistedAndBounded(bool deepChain)
+    {
+        Exception inner = new InvalidOperationException("private-token arbitrary provider detail");
+        if (deepChain) for (var i = 0; i < 8; i++) inner = new IOException("private-token nested detail", inner);
+        using var server = new Server { SmallTransportFailure = new HttpRequestException(HttpRequestError.ResponseEnded, "private-token", inner) };
+        using var store = await ConnectAsync(server);
+        var endpoint = new B2TransferEndpoint(store, Location);
+        TransferCheckpoint? saved = null;
+        await AssertIOExceptionAsync(() => endpoint.UploadAsync(Request(52), new Source(4096), null,
+            (value, _) => { saved = value; return Task.CompletedTask; }));
+        Assert.AreEqual(deepChain ? "IOException>IOException>IOException>IOException" : "Other", saved!.Data!["transport_inner_types"]);
+        Assert.IsFalse(JsonSerializer.Serialize(saved).Contains("private-token", StringComparison.Ordinal));
+        Assert.AreEqual(1, server.UploadCalls);
+    }
+
+    [TestMethod]
+    public async Task SlowCloudPreparationOverlapsEndpointAcquisitionAndFinishesBeforeB2PayloadRequest()
+    {
+        using var server = new Server();
+        using var store = await ConnectAsync(server);
+        var endpoint = new B2TransferEndpoint(store, Location);
+        var opened = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowOpen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var endpointRequested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var source = new Source(4096)
+        {
+            BeforeOpen = async token => { opened.TrySetResult(); await allowOpen.Task.WaitAsync(token); },
+            BeforeFirstRead = async token => { reading.TrySetResult(); await allowRead.Task.WaitAsync(token); }
+        };
+        server.UploadUrlObserver = () => endpointRequested.TrySetResult();
+        server.BeforePayloadCopy = () => { Assert.IsTrue(source.ReadBytes > 0); return Task.CompletedTask; };
+        var transfer = endpoint.UploadAsync(Request(53), source, null, (_, _) => Task.CompletedTask);
+        try
+        {
+            await Task.WhenAll(opened.Task, endpointRequested.Task).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.AreEqual(0, server.UploadCalls, "B2 headers must wait for the cloud range.");
+            allowOpen.TrySetResult();
+            await reading.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.AreEqual(0, server.UploadCalls, "B2 headers must also wait for the first source block.");
+        }
+        finally { allowOpen.TrySetResult(); allowRead.TrySetResult(); }
+        var receipt = await transfer;
+        Assert.AreEqual(source.Entry.Size, receipt.Size);
+        Assert.AreEqual(1, source.Opens.Count, "Preparation and serialization reuse one source connection.");
+        Assert.AreEqual(1, source.Disposals);
+        Assert.AreEqual(1, server.UploadCalls);
+    }
+
+    [TestMethod]
+    public async Task ReadAheadStaysBoundedWhileB2SocketHasNotConsumedAnyPayload()
+    {
+        using var server = new Server();
+        using var store = await ConnectAsync(server);
+        var endpoint = new B2TransferEndpoint(store, Location);
+        var filled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var source = new Source(2 * 1024 * 1024);
+        source.ReadObserver = count => { if (source.ReadBytes >= 5 * 64 * 1024) filled.TrySetResult(); };
+        server.BeforePayloadCopy = async () =>
+        {
+            await filled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.IsTrue(source.ReadBytes <= 5 * 64 * 1024, "Four queued blocks and one producer block bound preparation.");
+        };
+        await endpoint.UploadAsync(Request(54), source, null, (_, _) => Task.CompletedTask);
+        Assert.AreEqual(source.Entry.Size, source.ReadBytes);
+        Assert.AreEqual(1, source.Opens.Count);
+        Assert.AreEqual(1, source.Disposals);
+    }
+
+    [TestMethod]
+    public async Task CancellationDuringFirstCloudBlockSendsNoB2PayloadAndDisposesSource()
+    {
+        using var server = new Server();
+        using var store = await ConnectAsync(server);
+        var endpoint = new B2TransferEndpoint(store, Location);
+        using var cancellation = new CancellationTokenSource();
+        var reading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var source = new Source(4096) { BeforeFirstRead = async token =>
+            { reading.TrySetResult(); await Task.Delay(Timeout.Infinite, token); } };
+        TransferCheckpoint? saved = null;
+        var transfer = endpoint.UploadAsync(Request(55), source, null,
+            (value, _) => { saved = value; return Task.CompletedTask; }, cancellationToken: cancellation.Token);
+        await reading.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await cancellation.CancelAsync();
+        try { await transfer; Assert.Fail("Expected cancellation during source preparation."); }
+        catch (OperationCanceledException) { }
+        Assert.AreEqual(0, server.UploadCalls);
+        Assert.AreEqual(0, server.Files.Count);
+        Assert.AreEqual(1, source.Opens.Count);
+        Assert.AreEqual(1, source.Disposals);
+        if (saved is not null) Assert.AreEqual("false", saved.Data!["pending"]);
+    }
+
+    [TestMethod]
+    public async Task EarlyTokenRejectionDisposesUnusedReadAheadAndRetriesWithOneFreshRange()
+    {
+        using var server = new Server { ExpireFirstUploadToken = true };
+        using var store = await ConnectAsync(server);
+        var endpoint = new B2TransferEndpoint(store, Location);
+        var source = new Source(2 * 1024 * 1024);
+        await endpoint.UploadAsync(Request(57), source, null, (_, _) => Task.CompletedTask);
+        Assert.AreEqual(2, server.UploadCalls);
+        Assert.AreEqual(2, server.UploadUrlCalls);
+        Assert.AreEqual(2, source.Opens.Count);
+        Assert.AreEqual(2, source.Disposals, "A source opened before a bodyless rejection must still be disposed.");
+        Assert.IsTrue(source.ReadBytes <= source.Entry.Size + 5 * 64 * 1024, "An unconsumed rejected request cannot read the entire source.");
+        Assert.AreEqual(1, server.Files.Count);
+    }
+
+    [DataTestMethod]
+    [DataRow(TransferConflictPolicy.Fail)]
+    [DataRow(TransferConflictPolicy.Skip)]
+    [DataRow(TransferConflictPolicy.Rename)]
+    public async Task LateMultipartDestinationConflictStopsBeforeFinishAndRetainsAcknowledgedParts(TransferConflictPolicy policy)
+    {
+        using var server = new Server();
+        using var store = await ConnectAsync(server);
+        store.Configure(0, 0, 1);
+        var endpoint = new B2TransferEndpoint(store, Location);
+        var source = new Source(70 * 1024 * 1024);
+        var request = Request(56, policy);
+        TransferCheckpoint? saved = null;
+        await Assert.ThrowsExceptionAsync<TransferConflictException>(() => endpoint.UploadAsync(request, source, null,
+            (value, _) =>
+            {
+                saved = value;
+                if (value.AcknowledgedBytes == source.Entry.Size)
+                    server.Files["late-foreign"] = Metadata("late-foreign", value.Data!["key"], 127, PatternHash(127), new());
+                return Task.CompletedTask;
+            }));
+        Assert.AreEqual(source.Entry.Size, saved!.AcknowledgedBytes);
+        Assert.AreEqual(1, server.StartCalls);
+        Assert.AreEqual(0, server.FinishCalls);
+        Assert.AreEqual(0, server.CancelCalls);
+        var priorReads = source.Opens.Count;
+        await Assert.ThrowsExceptionAsync<TransferConflictException>(() => endpoint.UploadAsync(request, source, saved, (_, _) => Task.CompletedTask));
+        Assert.AreEqual(priorReads, source.Opens.Count);
+        Assert.AreEqual(1, server.StartCalls);
+        Assert.AreEqual(1, server.Files.Count);
+    }
+
+    [TestMethod]
+    public async Task ConflictingRenameUsesSharedStableSuffixWithoutRenamingParentFolder()
+    {
+        using var server = new Server();
+        const string original = "folder.v1/file.bin";
+        server.Files["foreign"] = Metadata("foreign", "dest/" + original, 127, PatternHash(127), new());
+        using var store = await ConnectAsync(server);
+        var endpoint = new B2TransferEndpoint(store, Location);
+        var request = Request(42, TransferConflictPolicy.Rename) with { RelativePath = original };
+        var expected = "folder.v1/file (CloudBay " + request.OperationId[..12] + ").bin";
+        TransferCheckpoint? saved = null;
+        var receipt = await endpoint.UploadAsync(request, new Source(127), null,
+            (value, _) => { saved = value; return Task.CompletedTask; });
+
+        Assert.AreEqual(expected, receipt.RelativePath);
+        Assert.AreEqual("dest/" + expected, saved!.Data!["key"]);
+        Assert.IsTrue(server.Files.ContainsKey("foreign"));
+        Assert.AreEqual(1, server.UploadCalls);
+        Assert.AreEqual(2, server.Files.Count);
+    }
+
+    [TestMethod]
+    public async Task UnfinishedRenamedMultipartResumesSelectedKeyEvenWhenOriginalBecomesAvailable()
+    {
+        using var server = new Server();
+        const string original = "folder.v1/file.bin";
+        server.Files["foreign"] = Metadata("foreign", "dest/" + original, 127, PatternHash(127), new());
+        var request = Request(43, TransferConflictPolicy.Rename) with { RelativePath = original };
+        var expected = "folder.v1/file (CloudBay " + request.OperationId[..12] + ").bin";
+        var source = new Source(70 * 1024 * 1024);
+        TransferCheckpoint? saved = null;
+        using (var store = await ConnectAsync(server))
+        {
+            store.Configure(0, 0, 1);
+            var endpoint = new B2TransferEndpoint(store, Location);
+            await Assert.ThrowsExceptionAsync<OperationCanceledException>(() => endpoint.UploadAsync(request, source, null,
+                (value, _) => { saved = value; if (value.AcknowledgedBytes > 0) throw new OperationCanceledException(); return Task.CompletedTask; }));
+        }
+        Assert.AreEqual("dest/" + expected, saved!.Data!["key"]);
+        Assert.IsTrue(saved.AcknowledgedBytes > 0);
+        var acknowledged = source.Opens.Single();
+        server.Files.TryRemove("foreign", out _);
+        using (var restarted = await ConnectAsync(server))
+        {
+            restarted.Configure(0, 0, 1);
+            var endpoint = new B2TransferEndpoint(restarted, Location);
+            var receipt = await endpoint.UploadAsync(request, source, saved,
+                (value, _) => { saved = value; return Task.CompletedTask; });
+            Assert.AreEqual(expected, receipt.RelativePath);
+            Assert.AreEqual(receipt.Id, (await endpoint.ReconcileAsync(request, source, saved))!.Id);
+        }
+        Assert.AreEqual("dest/" + expected, saved!.Data!["key"]);
+        Assert.AreEqual(1, source.Opens.Count(range => range.Offset == acknowledged.Offset), "Acknowledged source ranges are not retransferred.");
+        Assert.AreEqual(1, server.StartCalls);
+        Assert.AreEqual(1, server.FinishCalls);
+        Assert.AreEqual(1, server.Files.Count);
+    }
+
+    [TestMethod]
+    public async Task DefinitelyRejectedRenameRechecksOriginalConflictBeforeRestart()
+    {
+        using var server = new Server { RejectSmallUpload = HttpStatusCode.Forbidden };
+        var source = new Source(4096);
+        var request = Request(44, TransferConflictPolicy.Rename);
+        TransferCheckpoint? saved = null;
+        using (var store = await ConnectAsync(server))
+        {
+            var endpoint = new B2TransferEndpoint(store, Location);
+            await Assert.ThrowsExceptionAsync<B2RequestException>(() => endpoint.UploadAsync(request, source, null,
+                (value, _) => { saved = value; return Task.CompletedTask; }));
+        }
+        Assert.AreEqual("false", saved!.Data!["pending"]);
+        server.RejectSmallUpload = null;
+        server.Files["foreign"] = Metadata("foreign", "dest/" + request.RelativePath, 127, PatternHash(127), new());
+        var expected = "file-44 (CloudBay " + request.OperationId[..12] + ").bin";
+        using (var restarted = await ConnectAsync(server))
+        {
+            var endpoint = new B2TransferEndpoint(restarted, Location);
+            var receipt = await endpoint.UploadAsync(request, source, saved,
+                (value, _) => { saved = value; return Task.CompletedTask; });
+            Assert.AreEqual(expected, receipt.RelativePath);
+        }
+        Assert.AreEqual("dest/" + expected, saved!.Data!["key"]);
+        Assert.IsTrue(server.Files.ContainsKey("foreign"));
+        Assert.AreEqual(2, server.Files.Count);
+        Assert.AreEqual(2, server.UploadCalls);
+    }
+
+    [TestMethod]
+    public async Task DefinitelyRejectedSelectedRenameKeepsAlternateWhenOriginalBecomesAvailable()
+    {
+        using var server = new Server { RejectSmallUpload = HttpStatusCode.Forbidden };
+        var source = new Source(4096);
+        var request = Request(45, TransferConflictPolicy.Rename);
+        var expected = "file-45 (CloudBay " + request.OperationId[..12] + ").bin";
+        server.Files["foreign"] = Metadata("foreign", "dest/" + request.RelativePath, 127, PatternHash(127), new());
+        TransferCheckpoint? saved = null;
+        using (var store = await ConnectAsync(server))
+        {
+            var endpoint = new B2TransferEndpoint(store, Location);
+            await Assert.ThrowsExceptionAsync<B2RequestException>(() => endpoint.UploadAsync(request, source, null,
+                (value, _) => { saved = value; return Task.CompletedTask; }));
+        }
+        Assert.AreEqual("dest/" + expected, saved!.Data!["key"]);
+        server.Files.TryRemove("foreign", out _);
+        server.RejectSmallUpload = null;
+        using (var restarted = await ConnectAsync(server))
+        {
+            var endpoint = new B2TransferEndpoint(restarted, Location);
+            var receipt = await endpoint.UploadAsync(request, source, saved, (_, _) => Task.CompletedTask);
+            Assert.AreEqual(expected, receipt.RelativePath);
+        }
+        Assert.AreEqual(1, server.Files.Count);
+        Assert.AreEqual(2, server.UploadCalls);
+    }
+
+    [TestMethod]
+    public async Task ForeignFileAtSelectedUnfinishedRenameStopsWithoutStartingAnotherUpload()
+    {
+        using var server = new Server();
+        var request = Request(46, TransferConflictPolicy.Rename);
+        server.Files["foreign-original"] = Metadata("foreign-original", "dest/" + request.RelativePath, 127, PatternHash(127), new());
+        var source = new Source(70 * 1024 * 1024);
+        TransferCheckpoint? saved = null;
+        using (var store = await ConnectAsync(server))
+        {
+            store.Configure(0, 0, 1);
+            var endpoint = new B2TransferEndpoint(store, Location);
+            await Assert.ThrowsExceptionAsync<OperationCanceledException>(() => endpoint.UploadAsync(request, source, null,
+                (value, _) => { saved = value; if (value.AcknowledgedBytes > 0) throw new OperationCanceledException(); return Task.CompletedTask; }));
+        }
+        server.Files["foreign-alternate"] = Metadata("foreign-alternate", saved!.Data!["key"], 127, PatternHash(127), new());
+        var priorReads = source.Opens.Count;
+        var priorUploads = server.UploadCalls;
+        using (var restarted = await ConnectAsync(server))
+        {
+            var endpoint = new B2TransferEndpoint(restarted, Location);
+            await Assert.ThrowsExceptionAsync<TransferConflictException>(() => endpoint.UploadAsync(request, source, saved, (_, _) => Task.CompletedTask));
+        }
+        Assert.AreEqual(priorReads, source.Opens.Count);
+        Assert.AreEqual(priorUploads, server.UploadCalls);
+        Assert.AreEqual(1, server.StartCalls);
+        Assert.AreEqual(0, server.FinishCalls);
+        Assert.AreEqual(0, server.CancelCalls);
+    }
+
+    [TestMethod]
+    public async Task LegacyRenamedReceiptRemainsRecoverableAtItsOriginalSelectedKey()
+    {
+        using var server = new Server();
+        var request = Request(47, TransferConflictPolicy.Rename);
+        var source = new Source(127, sha1: PatternHash(127));
+        var sourceId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+            { source.Entry.Id, source.Entry.Version, source.Entry.Size, source.Entry.ModifiedUtc })))).ToLowerInvariant();
+        var relative = "file-47 (" + request.OperationId[..12] + ").bin";
+        var data = new Dictionary<string, string> { ["key"] = "dest/" + relative, ["operation_id"] = request.OperationId,
+            ["source_id"] = sourceId, ["kind"] = "small", ["pending"] = "true" };
+        server.Files["legacy-copy"] = Metadata("legacy-copy", data["key"], source.Entry.Size, source.Entry.Sha1, new()
+            { ["cloudbay_upload_id"] = request.OperationId, ["cloudbay_source_id"] = sourceId });
+        var checkpoint = new TransferCheckpoint("b2", request.OperationId, 0, data);
+        using var store = await ConnectAsync(server);
+        var endpoint = new B2TransferEndpoint(store, Location);
+        var receipt = await endpoint.ReconcileAsync(request, source, checkpoint);
+        Assert.IsNotNull(receipt);
+        Assert.AreEqual(relative, receipt.RelativePath);
+        Assert.AreEqual(receipt.Id, (await endpoint.UploadAsync(request, source, checkpoint, (_, _) => Task.CompletedTask)).Id);
+        Assert.AreEqual(0, server.UploadCalls);
+        Assert.AreEqual(0, source.Opens.Count);
+        Assert.AreEqual(1, server.Files.Count);
+    }
+
+    [DataTestMethod]
+    [DataRow("dest/unrelated.bin")]
+    [DataRow("another-prefix/file-48.bin")]
+    [DataRow("dest/file-48 (CloudBay 000000000000).bin")]
+    public async Task UnrelatedCheckpointKeyIsRejectedBeforeReceiptLookupOrPayload(string unrelatedKey)
+    {
+        using var server = new Server();
+        using var store = await ConnectAsync(server);
+        var endpoint = new B2TransferEndpoint(store, Location);
+        var source = new Source(127);
+        var request = Request(48, TransferConflictPolicy.Rename);
+        TransferCheckpoint? saved = null;
+        await endpoint.UploadAsync(request, source, null, (value, _) => { saved = value; return Task.CompletedTask; });
+        var data = new Dictionary<string, string>(saved!.Data!) { ["key"] = unrelatedKey };
+        var unrelated = saved with { Data = data };
+        var priorReads = source.Opens.Count;
+        var priorUploads = server.UploadCalls;
+        var priorListings = server.VersionListCalls;
+
+        await Assert.ThrowsExceptionAsync<InvalidDataException>(() => endpoint.ReconcileAsync(request, source, unrelated));
+        await Assert.ThrowsExceptionAsync<InvalidDataException>(() => endpoint.UploadAsync(request, source, unrelated, (_, _) => Task.CompletedTask));
+
+        Assert.AreEqual(priorReads, source.Opens.Count);
+        Assert.AreEqual(priorUploads, server.UploadCalls);
+        Assert.AreEqual(priorListings, server.VersionListCalls);
+    }
+
+    [TestMethod]
+    public async Task ForeignOperationCannotTurnCheckpointIntoFreshRejectedUpload()
+    {
+        using var server = new Server();
+        using var store = await ConnectAsync(server);
+        var endpoint = new B2TransferEndpoint(store, Location);
+        var source = new Source(127);
+        var request = Request(49, TransferConflictPolicy.Rename);
+        TransferCheckpoint? saved = null;
+        await endpoint.UploadAsync(request, source, null, (value, _) => { saved = value; return Task.CompletedTask; });
+        var data = new Dictionary<string, string>(saved!.Data!) { ["operation_id"] = Request(50).OperationId, ["pending"] = "false" };
+        var unrelated = saved with { Data = data };
+        await Assert.ThrowsExceptionAsync<InvalidDataException>(() => endpoint.ReconcileAsync(request, source, unrelated));
+        await Assert.ThrowsExceptionAsync<InvalidDataException>(() => endpoint.UploadAsync(request, source, unrelated, (_, _) => Task.CompletedTask));
+        Assert.AreEqual(1, server.UploadCalls);
+        Assert.AreEqual(1, source.Opens.Count);
+    }
+
+    [TestMethod]
     public async Task MoveRefusesNewerCurrentSourceAndDeletesOnlyExactImmutableVersion()
     {
         using var server = new Server();
@@ -523,15 +944,28 @@ public sealed class B2TransferEndpointTests
         public TransferEntry Entry { get; } = new("source", "source.bin", "immutable-v1", size, Modified, sha1, folder);
         public ConcurrentBag<(long Offset, long Length)> Opens { get; } = [];
         public bool Changed { get; init; }
+        public Func<CancellationToken, Task>? BeforeOpen { get; init; }
+        public Func<CancellationToken, Task>? BeforeFirstRead { get; init; }
+        public Action<int>? ReadObserver { get; set; }
+        public long ReadBytes;
+        public int Disposals;
         public Task ValidateAsync(CancellationToken cancellationToken = default) => Changed
             ? Task.FromException(new TransferSourceChangedException("Source changed.")) : Task.CompletedTask;
-        public Task<Stream> OpenReadAsync(long offset, long length, CancellationToken cancellationToken = default)
-        { Opens.Add((offset, length)); return Task.FromResult<Stream>(new PatternStream(offset, length)); }
+        public async Task<Stream> OpenReadAsync(long offset, long length, CancellationToken cancellationToken = default)
+        {
+            Opens.Add((offset, length));
+            if (BeforeOpen is not null) await BeforeOpen(cancellationToken);
+            return new PatternStream(offset, length, beforeFirstRead: BeforeFirstRead,
+                readObserver: count => { Interlocked.Add(ref ReadBytes, count); ReadObserver?.Invoke(count); },
+                disposed: () => Interlocked.Increment(ref Disposals));
+        }
     }
 
-    private sealed class PatternStream(long offset, long length, bool corrupt = false) : Stream
+    private sealed class PatternStream(long offset, long length, bool corrupt = false,
+        Func<CancellationToken, Task>? beforeFirstRead = null, Action<int>? readObserver = null, Action? disposed = null) : Stream
     {
         private long _position;
+        private bool _readStarted, _disposed;
         public override bool CanRead => true;
         public override bool CanWrite => false;
         public override bool CanSeek => false;
@@ -543,17 +977,22 @@ public sealed class B2TransferEndpointTests
             for (var i = 0; i < read; i++) buffer[start + i] = (byte)((offset + _position + i) % 251);
             if (corrupt && _position == 0 && read > 0) buffer[start] ^= 0xff;
             _position += read;
+            readObserver?.Invoke(read);
             return read;
         }
-        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (!_readStarted) { _readStarted = true; if (beforeFirstRead is not null) await beforeFirstRead(cancellationToken); }
             var read = (int)Math.Min(buffer.Length, length - _position);
             for (var i = 0; i < read; i++) buffer.Span[i] = (byte)((offset + _position + i) % 251);
             if (corrupt && _position == 0 && read > 0) buffer.Span[0] ^= 0xff;
             _position += read;
-            return ValueTask.FromResult(read);
+            readObserver?.Invoke(read);
+            return read;
         }
+        protected override void Dispose(bool disposing)
+        { if (disposing && !_disposed) { _disposed = true; disposed?.Invoke(); } base.Dispose(disposing); }
         public override void Flush() => throw new NotSupportedException();
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();
@@ -578,6 +1017,9 @@ public sealed class B2TransferEndpointTests
         public bool BreakErrorBody, MalformedErrorBody, NonObjectErrorBody, RejectOnlyOnce, MalformedSmallAcknowledgment,
             BreakSmallAcknowledgmentBody, NonObjectSmallAcknowledgment;
         public Func<JsonElement, HttpResponseMessage>? ListOverride;
+        public HttpRequestException? SmallTransportFailure;
+        public Action? UploadUrlObserver;
+        public Func<Task>? BeforePayloadCopy;
 
         public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
@@ -593,6 +1035,7 @@ public sealed class B2TransferEndpointTests
             if (request.RequestUri.Host == "upload.invalid")
             {
                 Interlocked.Increment(ref UploadCalls);
+                if (BeforePayloadCopy is not null) await BeforePayloadCopy();
                 if (ExpireFirstUploadToken)
                 {
                     ExpireFirstUploadToken = false;
@@ -622,6 +1065,7 @@ public sealed class B2TransferEndpointTests
                         : MalformedErrorBody ? MalformedResponse(rejectedStatus)
                         : Json(new { code = RejectSmallCode, message = "Generated provider rejection." }, rejectedStatus);
                 }
+                if (SmallTransportFailure is { } transportFailure) throw transportFailure;
                 var key = Uri.UnescapeDataString(request.Headers.GetValues("X-Bz-File-Name").Single());
                 var info = request.Headers.Where(h => h.Key.StartsWith("X-Bz-Info-", StringComparison.OrdinalIgnoreCase))
                     .ToDictionary(h => h.Key[10..].ToLowerInvariant(), h => Uri.UnescapeDataString(h.Value.Single()));
@@ -659,7 +1103,7 @@ public sealed class B2TransferEndpointTests
             var body = bodyDocument.RootElement;
             switch (operation)
             {
-                case "b2_get_upload_url": Interlocked.Increment(ref UploadUrlCalls); return Json(new { uploadUrl = "https://upload.invalid/small", authorizationToken = "upload-token" });
+                case "b2_get_upload_url": Interlocked.Increment(ref UploadUrlCalls); UploadUrlObserver?.Invoke(); return Json(new { uploadUrl = "https://upload.invalid/small", authorizationToken = "upload-token" });
                 case "b2_get_upload_part_url": return Json(new { uploadUrl = "https://upload.invalid/large", authorizationToken = "part-token" });
                 case "b2_list_file_names":
                     if (ListOverride is not null) return ListOverride(body);
