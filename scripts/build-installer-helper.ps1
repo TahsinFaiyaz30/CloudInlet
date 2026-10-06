@@ -5,11 +5,11 @@ $appRoot = [IO.Path]::GetFullPath($AppFolder)
 for ($ancestor = [IO.DirectoryInfo]$appRoot; $null -ne $ancestor; $ancestor = $ancestor.Parent) {
     if ($ancestor.Exists -and ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The installer helper destination contains a linked directory.' }
 }
-if (!(Test-Path -LiteralPath (Join-Path $appRoot 'CloudBay.exe'))) { throw 'Build the complete application payload before adding the installer helper.' }
-dotnet build (Join-Path $repository 'packaging/InstallerHelper/CloudBay.InstallerHelper.csproj') -c Release -v:minimal | Out-Host
+if (!(Test-Path -LiteralPath (Join-Path $appRoot 'CloudInlet.exe'))) { throw 'Build the complete application payload before adding the installer helper.' }
+dotnet build (Join-Path $repository 'packaging/InstallerHelper/CloudInlet.InstallerHelper.csproj') -c Release -v:minimal | Out-Host
 if ($LASTEXITCODE -ne 0) { throw 'The installer/update helper build failed.' }
 $helperRoot = Join-Path $repository 'packaging/InstallerHelper/bin/Release/net472'
-foreach ($name in @('CloudBay.SetupHelper.exe', 'CloudBay.SetupHelper.exe.config')) {
+foreach ($name in @('CloudInlet.SetupHelper.exe', 'CloudInlet.SetupHelper.exe.config')) {
     $source = Join-Path $helperRoot $name
     $target = Join-Path $appRoot $name
     if (Test-Path -LiteralPath $target) {
@@ -28,7 +28,7 @@ foreach ($name in @('WiX-5.0.2-LICENSE.txt', 'Inno-6.7.3-LICENSE.txt')) {
     if ((Test-Path -LiteralPath $target) -and ((Get-Item -LiteralPath $target -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The installer notice is a linked file.' }
     Copy-Item -LiteralPath (Join-Path $repository ('packaging/licenses/' + $name)) -Destination $target -Force
 }
-$sourceRoot = Join-Path $notices 'CloudBay-sources'
+$sourceRoot = Join-Path $notices 'CloudInlet-sources'
 if ((Test-Path -LiteralPath $sourceRoot) -and ((Get-Item -LiteralPath $sourceRoot -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The installer source destination is a linked directory.' }
 New-Item -ItemType Directory -Path $sourceRoot -Force | Out-Null
 foreach ($folder in @('InstallerActions', 'InstallerHelper', 'InstallerShared')) {
@@ -57,8 +57,8 @@ Their complete corresponding upstream source and build files are available at:
 https://github.com/wixtoolset/wix/tree/aa65968c419420d32e3e1b647aea0082f5ca5b78 .
 Source archive: https://github.com/wixtoolset/wix/archive/aa65968c419420d32e3e1b647aea0082f5ca5b78.zip .
 
-The CloudBay custom-action and setup-helper source used by this payload is retained
-in `CloudBay-sources`, alongside its project/build configuration. CloudBay's own
+The CloudInlet custom-action and setup-helper source used by this payload is retained
+in `CloudInlet-sources`, alongside its project/build configuration. CloudInlet's own
 source is covered by the repository MIT license. Upstream WiX components retain
 their MS-RL terms; inclusion of those components does not change their license.
 '@ | Set-Content -LiteralPath $installerNotice -Encoding utf8NoBOM

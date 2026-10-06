@@ -1,6 +1,7 @@
 $ErrorActionPreference = 'Stop'
-$installRoot = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Programs\CloudBay'))
-if (![IO.Path]::GetFullPath($PSScriptRoot).Equals($installRoot, [StringComparison]::OrdinalIgnoreCase)) {
+$installRoot = [IO.Path]::GetFullPath($PSScriptRoot)
+$allowedRoots = @('CloudInlet', 'CloudBay') | ForEach-Object { [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA ('Programs\' + $_))) }
+if (!($allowedRoots | Where-Object { $_.Equals($installRoot, [StringComparison]::OrdinalIgnoreCase) })) {
     throw 'Run the installed uninstaller from the Windows Installed apps list.'
 }
 for ($ancestor = [IO.DirectoryInfo]$installRoot; $null -ne $ancestor; $ancestor = $ancestor.Parent) {
@@ -11,33 +12,58 @@ for ($ancestor = [IO.DirectoryInfo]$installRoot; $null -ne $ancestor; $ancestor 
 # Never leave online-only data behind without its provider. Disconnect in the app first.
 $providerPath = 'Software\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager'
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$registrationPrefix = "CloudBay!$sid!"
+$registrationPrefixes = @("CloudInlet!$sid!", "CloudBay!$sid!")
 $registrations = @(
     foreach ($hive in @([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryHive]::CurrentUser)) {
         $registry = [Microsoft.Win32.RegistryKey]::OpenBaseKey($hive, [Microsoft.Win32.RegistryView]::Registry64)
         try {
             $providerKey = $registry.OpenSubKey($providerPath)
             if ($null -ne $providerKey) {
-                try { $providerKey.GetSubKeyNames() | Where-Object { $_.StartsWith($registrationPrefix, [StringComparison]::Ordinal) } }
+                try {
+                    $providerKey.GetSubKeyNames() | Where-Object {
+                        $registration = $_
+                        !!($registrationPrefixes | Where-Object { $registration.StartsWith($_, [StringComparison]::Ordinal) })
+                    }
+                }
                 finally { $providerKey.Dispose() }
             }
         } finally { $registry.Dispose() }
     }
 )
 if ($registrations.Count -gt 0) {
-    throw 'Open CloudBay Settings and disconnect the account first. CloudBay downloads all files and restores Windows folder locations before uninstallation can proceed.'
+    throw 'Open CloudInlet Settings and disconnect the account first so Windows folder locations and online-only files are handled before uninstallation.'
 }
-$processes = @(Get-Process -Name CloudBay -ErrorAction SilentlyContinue)
-if ($processes.Count -gt 0) { throw 'Quit CloudBay from the tray menu, then run uninstallation again.' }
-$shortcutDirectory = [IO.Path]::GetFullPath((Join-Path ([Environment]::GetFolderPath('Programs')) 'CloudBay'))
+$processes = @(Get-Process -Name CloudInlet, CloudBay -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($installRoot + '\', [StringComparison]::OrdinalIgnoreCase) })
+if ($processes.Count -gt 0) { throw 'Quit CloudInlet from the tray menu, then run uninstallation again.' }
 $programsDirectory = [IO.Path]::GetFullPath([Environment]::GetFolderPath('Programs'))
-if (!$shortcutDirectory.StartsWith($programsDirectory + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid shortcut directory.' }
-if ((Test-Path -LiteralPath $shortcutDirectory) -and ((Get-Item -LiteralPath $shortcutDirectory).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-    throw 'The Start menu folder contains a link. Uninstallation stopped.'
+$shell = New-Object -ComObject WScript.Shell
+foreach ($name in @('CloudInlet', 'CloudBay')) {
+    $shortcutDirectory = [IO.Path]::GetFullPath((Join-Path $programsDirectory $name))
+    if (!$shortcutDirectory.StartsWith($programsDirectory + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid shortcut directory.' }
+    if ((Test-Path -LiteralPath $shortcutDirectory) -and ((Get-Item -LiteralPath $shortcutDirectory).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw 'The Start menu folder contains a link. Uninstallation stopped.'
+    }
+    $shortcutPath = Join-Path $shortcutDirectory ($name + '.lnk')
+    if (Test-Path -LiteralPath $shortcutPath) {
+        if ((Get-Item -LiteralPath $shortcutPath -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'The Start menu shortcut contains a link.' }
+        $link = $shell.CreateShortcut($shortcutPath)
+        if ($link.TargetPath -and [IO.Path]::GetFullPath($link.TargetPath).StartsWith($installRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
+            Remove-Item -LiteralPath $shortcutPath -Force
+            if (!(Get-ChildItem -LiteralPath $shortcutDirectory -Force)) { Remove-Item -LiteralPath $shortcutDirectory -Force }
+        }
+    }
+    $run = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name $name -ErrorAction SilentlyContinue
+    if ($run -and $run.$name -match '^"(?<image>[^\"]+)"(?:\s|$)' -and
+        [IO.Path]::GetFullPath($Matches.image).StartsWith($installRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        Remove-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name $name
+    }
+    $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\' + $name
+    $registration = Get-ItemProperty -LiteralPath $uninstallKey -ErrorAction SilentlyContinue
+    if ($registration -and $registration.InstallLocation -and
+        [IO.Path]::GetFullPath([string]$registration.InstallLocation).Equals($installRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        Remove-Item -LiteralPath $uninstallKey -Recurse -Force
+    }
 }
-if (Test-Path -LiteralPath $shortcutDirectory) { Remove-Item -LiteralPath $shortcutDirectory -Recurse -Force }
-Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name CloudBay -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudBay' -Recurse -Force -ErrorAction SilentlyContinue
 # The validated target contains binaries only; per-user state, local folders, and B2 data are retained.
 if (Test-Path -LiteralPath $installRoot) { Remove-Item -LiteralPath $installRoot -Recurse -Force }
-Write-Output 'CloudBay uninstalled. Local files, B2 versions, and recovery data were retained.'
+Write-Output 'CloudInlet uninstalled. Local files, B2 versions, and recovery data were retained.'

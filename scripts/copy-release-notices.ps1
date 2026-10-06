@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $appRoot = [IO.Path]::GetFullPath($AppFolder)
 $assets = Get-Content -LiteralPath $AssetsPath -Raw | ConvertFrom-Json
-$dependencies = Get-Content -LiteralPath (Join-Path $appRoot 'CloudBay.deps.json') -Raw | ConvertFrom-Json
+$dependencies = Get-Content -LiteralPath (Join-Path $appRoot 'CloudInlet.deps.json') -Raw | ConvertFrom-Json
 $packageFolders = @($assets.packageFolders.PSObject.Properties.Name)
 $licenseRoot = Join-Path $appRoot 'Licenses'
 New-Item -ItemType Directory -Path $licenseRoot -Force | Out-Null
@@ -115,7 +115,7 @@ foreach ($required in @('Microsoft.NETCore.App.Runtime.win-x64', 'Microsoft.Wind
     $record = @($records | Where-Object package -eq $required)
     if ($record.Count -ne 1 -or $record[0].files.Count -eq 0) { throw "Required runtime notices are missing: $required" }
 }
-Copy-Notice (Join-Path $PSScriptRoot '../packaging/licenses/README.md') 'README.md' 'CloudBay/packaging/licenses/README.md' | Out-Null
+Copy-Notice (Join-Path $PSScriptRoot '../packaging/licenses/README.md') 'README.md' 'CloudInlet/packaging/licenses/README.md' | Out-Null
 [pscustomobject]@{ runtimeTarget = $runtime; packages = @($records.ToArray()) } |
     ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $licenseRoot 'packages.json') -Encoding utf8
 Write-Output "Retained license metadata for $($records.Count) resolved packages and runtime packs."

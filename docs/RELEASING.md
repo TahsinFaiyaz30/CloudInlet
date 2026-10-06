@@ -1,6 +1,6 @@
 # Versions, releases, and updates
 
-`version.json` is the version source for CloudBay, its libraries, and the Windows installers. The public baseline is **1.0.0**. Assembly and MSIX versions append a fourth zero; MSI versions use the three central components. Major and minor must be at most 255, and patch at most 65535, so every distribution can represent the same version.
+`version.json` is the version source for CloudInlet, its libraries, and the Windows installers. The public baseline is **1.0.0**. Assembly and MSIX versions append a fourth zero; MSI versions use the three central components. Major and minor must be at most 255, and patch at most 65535, so every distribution can represent the same version.
 
 Both normal builds and packaging validate the central document. A malformed JSON document, duplicate version property, leading-zero component, prerelease suffix, or out-of-range component fails before producing a release.
 
@@ -28,14 +28,16 @@ Repository administrators can additionally enable GitHub's **immutable releases*
 
 ## Download inventory
 
-Every GitHub release contains these six packages:
+Every GitHub release contains these six canonical packages:
 
 | Build | EXE installer | MSI installer | Portable app |
 |---|---|---|---|
-| Release | `CloudBay-X.Y.Z-win-x64-release-setup.exe` | `CloudBay-X.Y.Z-win-x64-release-setup.msi` | `CloudBay-X.Y.Z-win-x64-release-portable.zip` |
-| Debug | `CloudBay-X.Y.Z-win-x64-debug-setup.exe` | `CloudBay-X.Y.Z-win-x64-debug-setup.msi` | `CloudBay-X.Y.Z-win-x64-debug-portable.zip` |
+| Release | `CloudInlet-X.Y.Z-win-x64-release-setup.exe` | `CloudInlet-X.Y.Z-win-x64-release-setup.msi` | `CloudInlet-X.Y.Z-win-x64-release-portable.zip` |
+| Debug | `CloudInlet-X.Y.Z-win-x64-debug-setup.exe` | `CloudInlet-X.Y.Z-win-x64-debug-setup.msi` | `CloudInlet-X.Y.Z-win-x64-debug-portable.zip` |
 
-`updates-v1.json` records the repository, version/tag, build flavor, installer kind, architecture, filename, byte count, and SHA-256 for each variant. `SHA256SUMS.txt` provides a conventional checksum list. `release-validation.json` records the source commit, build/test results for both configurations, and signing status. Each manifest installer is bounded to 1 GiB, matching the app updater's validation limit.
+`updates-v2.json` records the repository, version/tag, build flavor, installer kind, architecture, filename, byte count, and SHA-256 for each variant. `SHA256SUMS.txt` provides a conventional checksum list. `release-validation.json` records the source commit, build/test results for both configurations, and signing status. Each manifest installer is bounded to 1 GiB, matching the app updater's validation limit.
+
+The release also includes byte-identical `CloudBay-...` package aliases and `updates-v1.json` for the static 1.1.2 compatibility bridge. See [rename and updater compatibility](REBRANDING.md).
 
 The installer products are per-user and do not require administrator rights. Release and Debug have separate installation directories, startup registrations, instance identities, backup roots, and client state. Updates preserve the actual installed startup and desktop-shortcut choices and leave account credentials, backup configuration, and Windows folder mappings intact. Changing between EXE and MSI for the same build flavor requires an explicit installation change; silent updates never switch that identity.
 
@@ -43,7 +45,7 @@ Portable ZIPs contain the complete self-contained app and do not silently instal
 
 Moving between Microsoft Store and EXE/MSI is a manual channel change. Uninstall the former installer before installing the other distribution so its old startup registration does not compete with the new one. Keep the client data and backed-up folders; changing the package format does not require deleting the cloud account, credentials, or backup files. Automatic updates stay within the installed channel.
 
-To build complete packages locally from a fresh `artifacts/release-build` directory:
+To build complete packages locally from a fresh `artifacts/release-build` directory (use `-WorkDirectory artifacts/<fresh-path>` to retain older builds):
 
 ```powershell
 $version = (.\scripts\get-release-version.ps1).version
@@ -52,7 +54,7 @@ $version = (.\scripts\get-release-version.ps1).version
 .\scripts\generate-update-manifest.ps1 -Version $version -AssetDirectory artifacts/packages
 ```
 
-`build-release-artifacts.ps1` performs the build, tests, self-contained publish, license copying, update-worker build, optional signing, EXE/MSI compilation, and portable ZIP creation in that order. Installer tool versions are pinned by `get-installer-tools.ps1`. CI uses `-HostedTests`; local desktop release acceptance should run the complete test suite. `test-release-scripts.ps1` exercises version bounds, missing payload rejection, all update variants, draft publication, immutable reruns, digest mismatch, stale main, and Store identity gates using an isolated local Git remote and a fake GitHub transport. It never publishes test assets to GitHub.
+`build-release-artifacts.ps1` performs the build, tests, self-contained publish, license copying, update-worker build, optional signing, EXE/MSI compilation, and portable ZIP creation in that order. Installer tool versions are pinned by `get-installer-tools.ps1`. CI uses `-HostedTests`; local desktop release acceptance runs all tests except the explicitly opted-in `LiveProvider` category. Run real-provider acceptance separately using the isolated account configuration. `test-release-scripts.ps1` exercises version bounds, missing payload rejection, all update variants, draft publication, immutable reruns, digest mismatch, stale main, and Store identity gates using an isolated local Git remote and a fake GitHub transport. It never publishes test assets to GitHub.
 
 ## GitHub signing configuration
 
@@ -60,8 +62,8 @@ The `github-release` environment supports these optional secrets:
 
 | Secret | Value |
 |---|---|
-| `CLOUDBAY_SIGNING_PFX_BASE64` | Base64 of the publisher's code-signing PFX |
-| `CLOUDBAY_SIGNING_PFX_PASSWORD` | PFX password |
+| `CLOUDINLET_SIGNING_PFX_BASE64` | Base64 of the publisher's code-signing PFX |
+| `CLOUDINLET_SIGNING_PFX_PASSWORD` | PFX password |
 
 When configured, app-owned binaries, the external update worker, EXE, and MSI are signed with SHA-256 and an RFC 3161 timestamp and verified before publication. Secrets are read from environment values rather than command arguments. Temporary private-key files and certificates imported by the build are removed afterward. With no certificate configured, the pipeline deliberately produces unsigned packages and records that status. Unsigned local packaging is supported; Windows can display its publisher/security warning when first installing those packages.
 
@@ -85,10 +87,10 @@ Set these repository variables from the reserved app's **Product identity**:
 
 | Variable | Partner Center value |
 |---|---|
-| `CLOUDBAY_STORE_IDENTITY_NAME` | Package/Identity/Name |
-| `CLOUDBAY_STORE_PUBLISHER` | Package/Identity/Publisher, including the full `CN=` value |
-| `CLOUDBAY_STORE_PUBLISHER_DISPLAY_NAME` | Package/Properties/PublisherDisplayName |
-| `CLOUDBAY_STORE_APPLICATION_ID` | Store application ID used by the submission API |
+| `CLOUDINLET_STORE_IDENTITY_NAME` | Package/Identity/Name |
+| `CLOUDINLET_STORE_PUBLISHER` | Package/Identity/Publisher, including the full `CN=` value |
+| `CLOUDINLET_STORE_PUBLISHER_DISPLAY_NAME` | Package/Properties/PublisherDisplayName |
+| `CLOUDINLET_STORE_APPLICATION_ID` | Store application ID used by the submission API |
 
 After these are present, GitHub release packaging can also attach the production `.msix`, `.msixupload`, and package identity record. The **Microsoft Store** workflow can independently package any verified published tag. It downloads the matching Release portable ZIP and checks its bytes against that release's manifest before repackaging. Use `submit: false` to retain upload artifacts without contacting Partner Center.
 
@@ -96,9 +98,9 @@ For API submission, associate an Entra application with Partner Center and confi
 
 | Secret | Value |
 |---|---|
-| `CLOUDBAY_STORE_TENANT_ID` | Entra tenant GUID |
-| `CLOUDBAY_STORE_CLIENT_ID` | Entra application/client GUID |
-| `CLOUDBAY_STORE_CLIENT_SECRET` | Associated application's client secret |
+| `CLOUDINLET_STORE_TENANT_ID` | Entra tenant GUID |
+| `CLOUDINLET_STORE_CLIENT_ID` | Entra application/client GUID |
+| `CLOUDINLET_STORE_CLIENT_SECRET` | Associated application's client secret |
 
 Microsoft requires reserving the app and completing an initial Partner Center submission, including age ratings, before the API can create later submissions. The workflow preserves the existing listing, uploads only the new package, refuses to replace an already-pending draft, and commits only when `submit: true` is explicitly selected. Its default publication mode is Manual; Immediate must be selected intentionally. Credential values, bearer tokens, and signed Azure upload URLs are omitted from errors. See [Microsoft's submission prerequisites](https://learn.microsoft.com/en-us/windows/uwp/monetize/create-and-manage-submissions-using-windows-store-services) and [submission API process](https://learn.microsoft.com/en-us/windows/uwp/monetize/manage-app-submissions).
 
@@ -113,6 +115,6 @@ Local manifest/schema validation can run before any reservation:
     -Version 1.0.0 -OutputDirectory artifacts/store-validation -LocalValidationIdentity
 ```
 
-The separate `CloudBay.LocalValidation` identity produces unsigned test MSIX/MSIXUPLOAD files. It is not installable as a trusted public Store package without a suitable local test signature, and the submission script rejects it by reading the embedded manifest, even if its file is renamed. Production packages use the exact reserved identity; Microsoft manages Store signing and updates after a successful submission.
+The separate `CloudInlet.LocalValidation` identity produces unsigned test MSIX/MSIXUPLOAD files. It is not installable as a trusted public Store package without a suitable local test signature, and the submission script rejects it by reading the embedded manifest, even if its file is renamed. Production packages use the exact reserved identity; Microsoft manages Store signing and updates after a successful submission.
 
 On a desktop with Windows Developer Mode already enabled, `test-store-runtime.ps1 -PackagePath path\to\local-validation.msix` can development-register only this test identity and activate its isolated runtime probe. The probe checks real package identity, the Store update channel, package location, compiled version, and the declared startup task. Validation records process exit evidence, stops on an early crash, and caps an unresponsive probe at 60 seconds. The script removes that exact test registration afterward and verifies that regular account settings, credential bytes, and Windows folder mappings are unchanged. It does not enable Developer Mode, install a certificate, change machine trust, connect a backup account, or turn on the startup task.

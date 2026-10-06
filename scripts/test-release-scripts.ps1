@@ -25,14 +25,16 @@ $remote = Join-Path $workspace 'remote.git'
 $assets = Join-Path $workspace 'assets'
 New-Item -ItemType Directory -Path $fixture, $assets | Out-Null
 Invoke-TestGit -Arguments @('init', '--quiet', '--initial-branch=main', $fixture)
-Invoke-TestGit -Arguments @('-C', $fixture, 'config', 'user.name', 'CloudBay release tests')
+Invoke-TestGit -Arguments @('-C', $fixture, 'config', 'user.name', 'CloudInlet release tests')
 Invoke-TestGit -Arguments @('-C', $fixture, 'config', 'user.email', 'release-tests@example.invalid')
 Set-FixtureVersion '1.0.0'
 Invoke-TestGit -Arguments @('-C', $fixture, 'add', 'version.json')
 Invoke-TestGit -Arguments @('-C', $fixture, 'commit', '--quiet', '-m', 'Create isolated version fixture')
 $savedOutput = $env:GITHUB_OUTPUT
 $savedToken = $env:GH_TOKEN
-$savedStoreSecret = $env:CLOUDBAY_STORE_CLIENT_SECRET
+$savedStoreSecret = $env:CLOUDINLET_STORE_CLIENT_SECRET
+$savedLegacyStoreSecret = $env:CLOUDBAY_STORE_CLIENT_SECRET
+$env:CLOUDBAY_STORE_CLIENT_SECRET = $null
 if (Test-Path Function:/global:gh) { throw 'Release tests require the normal external gh command, without a pre-existing global mock.' }
 try {
     $source = & (Join-Path $PSScriptRoot 'get-release-version.ps1') -RepositoryRoot $fixture -CheckRelease
@@ -53,19 +55,19 @@ try {
     foreach ($badDocument in @('garbage 1.0.0', '{"version":"1.0.0","version":"2.0.0"}', '{"version":"1.0.0-beta"}', '{"version":"256.0.0"}', '{"version":"1.0.65536"}', '{"version":"01.0.0"}')) {
         Set-Content -LiteralPath (Join-Path $fixture 'version.json') -Value $badDocument -Encoding utf8NoBOM
         Assert-Rejected { & (Join-Path $PSScriptRoot 'get-release-version.ps1') -RepositoryRoot $fixture } 'Packaging rejects malformed, duplicated, noncanonical, or unrepresentable central versions.'
-        $diagnostics = @(& dotnet msbuild $validationProject -t:ValidateCloudBayVersion -nologo -verbosity:quiet 2>&1)
+        $diagnostics = @(& dotnet msbuild $validationProject -t:ValidateCloudInletVersion -nologo -verbosity:quiet 2>&1)
         Assert-True ($LASTEXITCODE -ne 0) 'The build rejects the same invalid central version document.'
     }
     Set-FixtureVersion '255.255.65535'
-    $diagnostics = @(& dotnet msbuild $validationProject -t:ValidateCloudBayVersion -nologo -verbosity:quiet 2>&1)
+    $diagnostics = @(& dotnet msbuild $validationProject -t:ValidateCloudInletVersion -nologo -verbosity:quiet 2>&1)
     Assert-True ($LASTEXITCODE -eq 0) 'The compiler accepts the maximum version shared by MSI, MSIX, and assemblies.'
     Set-FixtureVersion '1.0.0'
     $defaultProject = Join-Path $fixture 'DefaultConfiguration.proj'
     '<Project><Import Project="Directory.Build.props" /><Import Project="Directory.Build.targets" /></Project>' | Set-Content -LiteralPath $defaultProject -Encoding utf8NoBOM
-    $properties = & dotnet msbuild $defaultProject -getProperty:Configuration,CloudBayBuildFlavor,DefineConstants -nologo | ConvertFrom-Json
-    Assert-True ($LASTEXITCODE -eq 0 -and $properties.Properties.Configuration -ceq 'Debug' -and $properties.Properties.CloudBayBuildFlavor -ceq 'Debug' -and $properties.Properties.DefineConstants.Contains('CLOUDBAY_DEBUG')) 'Default Debug builds compile the separate Debug product identity.'
-    $properties = & dotnet msbuild $defaultProject -p:Configuration=Release -getProperty:CloudBayBuildFlavor,DefineConstants -nologo | ConvertFrom-Json
-    Assert-True ($LASTEXITCODE -eq 0 -and $properties.Properties.CloudBayBuildFlavor -ceq 'Release' -and !$properties.Properties.DefineConstants.Contains('CLOUDBAY_DEBUG')) 'Release builds retain the Release product identity.'
+    $properties = & dotnet msbuild $defaultProject -getProperty:Configuration,CloudInletBuildFlavor,DefineConstants -nologo | ConvertFrom-Json
+    Assert-True ($LASTEXITCODE -eq 0 -and $properties.Properties.Configuration -ceq 'Debug' -and $properties.Properties.CloudInletBuildFlavor -ceq 'Debug' -and $properties.Properties.DefineConstants.Contains('CLOUDINLET_DEBUG')) 'Default Debug builds compile the separate Debug product identity.'
+    $properties = & dotnet msbuild $defaultProject -p:Configuration=Release -getProperty:CloudInletBuildFlavor,DefineConstants -nologo | ConvertFrom-Json
+    Assert-True ($LASTEXITCODE -eq 0 -and $properties.Properties.CloudInletBuildFlavor -ceq 'Release' -and !$properties.Properties.DefineConstants.Contains('CLOUDINLET_DEBUG')) 'Release builds retain the Release product identity.'
     Set-FixtureVersion '1.0.0'
     foreach ($component in @('Patch', 'Minor', 'Major')) {
         Set-FixtureVersion '1.0.0'
@@ -85,19 +87,29 @@ try {
     Invoke-TestGit -Arguments @('-C', $fixture, 'tag', '-d', 'v1.0.0')
     foreach ($flavor in @('Release', 'Debug')) {
         foreach ($ending in @('setup.exe', 'setup.msi', 'portable.zip')) {
-            [IO.File]::WriteAllBytes((Join-Path $assets "CloudBay-1.0.0-win-x64-$($flavor.ToLowerInvariant())-$ending"), [Text.Encoding]::UTF8.GetBytes("fixture $flavor $ending"))
+            [IO.File]::WriteAllBytes((Join-Path $assets "CloudInlet-1.0.0-win-x64-$($flavor.ToLowerInvariant())-$ending"), [Text.Encoding]::UTF8.GetBytes("fixture $flavor $ending"))
         }
     }
     & (Join-Path $PSScriptRoot 'generate-update-manifest.ps1') -Version '1.0.0' -AssetDirectory $assets | Out-Null
-    $manifest = Get-Content -LiteralPath (Join-Path $assets 'updates-v1.json') -Raw | ConvertFrom-Json
-    Assert-True ($manifest.assets.Count -eq 6 -and $manifest.repository -ceq 'TahsinFaiyaz30/CloudBay' -and $manifest.tag -ceq 'v1.0.0') 'The manifest carries all six immutable variants.'
+    $manifest = Get-Content -LiteralPath (Join-Path $assets 'updates-v2.json') -Raw | ConvertFrom-Json
+    $legacyManifest = Get-Content -LiteralPath (Join-Path $assets 'updates-v1.json') -Raw | ConvertFrom-Json
+    Assert-True ($manifest.schemaVersion -eq 2 -and $manifest.assets.Count -eq 6 -and $manifest.repository -ceq 'TahsinFaiyaz30/CloudInlet' -and $manifest.tag -ceq 'v1.0.0') 'The modern manifest carries all six immutable canonical variants.'
+    Assert-True ($legacyManifest.schemaVersion -eq 1 -and $legacyManifest.assets.Count -eq 6 -and $legacyManifest.repository -ceq 'TahsinFaiyaz30/CloudBay' -and $legacyManifest.tag -ceq $manifest.tag) 'The legacy bridge preserves the repository, schema, and variants accepted by released CloudBay updaters.'
     foreach ($asset in $manifest.assets) {
         $path = Join-Path $assets $asset.fileName
         Assert-True ($asset.size -eq (Get-Item -LiteralPath $path).Length -and $asset.sha256 -ceq (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()) 'Every manifest byte count and digest describes its actual asset.'
+        $legacy = @($legacyManifest.assets | Where-Object { $_.buildFlavor -ceq $asset.buildFlavor -and $_.installerKind -ceq $asset.installerKind })
+        Assert-True ($legacy.Count -eq 1 -and $legacy[0].fileName -ceq $asset.fileName.Replace('CloudInlet-', 'CloudBay-') -and $legacy[0].size -eq $asset.size -and $legacy[0].sha256 -ceq $asset.sha256) 'Each legacy asset is the same verified canonical package with its old updater name.'
+        Assert-True ((Get-FileHash -LiteralPath (Join-Path $assets $legacy[0].fileName) -Algorithm SHA256).Hash.ToLowerInvariant() -ceq $asset.sha256) 'Compatibility aliases are physically byte identical.'
     }
+    $legacyFixture = Join-Path $assets $legacyManifest.assets[0].fileName
+    $savedAlias = [IO.File]::ReadAllBytes($legacyFixture)
+    [IO.File]::WriteAllText($legacyFixture, 'different legacy alias')
+    Assert-Rejected { & (Join-Path $PSScriptRoot 'generate-update-manifest.ps1') -Version '1.0.0' -AssetDirectory $assets } 'Different legacy bytes cannot be silently replaced or published.' 'Legacy update alias differs'
+    [IO.File]::WriteAllBytes($legacyFixture, $savedAlias)
     Assert-Rejected { & (Join-Path $PSScriptRoot 'generate-update-manifest.ps1') -Version '1.0.0' -AssetDirectory $assets -Repository 'other/repository' } 'Another repository cannot supply the trusted update feed.'
     Assert-Rejected { & (Join-Path $PSScriptRoot 'generate-update-manifest.ps1') -Version '256.0.0' -AssetDirectory $assets } 'Manifest versions obey the installer version limits.'
-    $required = Join-Path $assets 'CloudBay-1.0.0-win-x64-debug-setup.exe'
+    $required = Join-Path $assets 'CloudInlet-1.0.0-win-x64-debug-setup.exe'
     $original = [IO.File]::ReadAllBytes($required)
     [IO.File]::WriteAllBytes($required, [byte[]]::new(0))
     Assert-Rejected { & (Join-Path $PSScriptRoot 'generate-update-manifest.ps1') -Version '1.0.0' -AssetDirectory $assets } 'Empty installers cannot become public update candidates.'
@@ -114,34 +126,34 @@ try {
     $evidence = @{ version = '1.0.0'; sourceRevision = $revision; configurations = @(@{configuration='Debug';buildSucceeded=$true;testsPassed=1;testsFailed=0;testsSkipped=0}, @{configuration='Release';buildSucceeded=$true;testsPassed=1;testsFailed=0;testsSkipped=0}) }
     $evidence | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $assets 'release-validation.json') -Encoding utf8NoBOM
     $env:GH_TOKEN = 'isolated-test-no-network'
-    $global:CloudBayReleaseTestState = @{ exists=$false; draft=$true; assets=[Collections.Generic.List[object]]::new(); uploads=0; publications=0; lookups=0; byId=0; creations=0; starterDeletes=0; blockFreshList=$true; interruptAfter=2; expectedRevision=$revision }
+    $global:CloudInletReleaseTestState = @{ exists=$false; draft=$true; assets=[Collections.Generic.List[object]]::new(); uploads=0; publications=0; lookups=0; byId=0; creations=0; starterDeletes=0; blockFreshList=$true; interruptAfter=2; expectedRevision=$revision }
     function global:gh {
         $arguments = @($args)
-        $state = $global:CloudBayReleaseTestState
+        $state = $global:CloudInletReleaseTestState
         $global:LASTEXITCODE = 0
-        if ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudBay/releases/tags/v1.0.0') {
+        if ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudInlet/releases/tags/v1.0.0') {
             $state.lookups++
             if (!$state.exists -or $state.draft) { $global:LASTEXITCODE = 1; return }
             @{ id=42;tag_name='v1.0.0';draft=$state.draft;assets=@($state.assets) } | ConvertTo-Json -Depth 6 -Compress
-        } elseif ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudBay/releases/42' -and $arguments -contains 'PATCH') {
-            Assert-True ($state.assets.Count -eq 9 -and $arguments -contains 'draft=false' -and $arguments -contains 'make_latest=true') 'Publication by release ID occurs only after all required files have been uploaded.'
+        } elseif ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudInlet/releases/42' -and $arguments -contains 'PATCH') {
+            Assert-True ($state.assets.Count -eq 16 -and $arguments -contains 'draft=false' -and $arguments -contains 'make_latest=true') 'Publication by release ID occurs only after both feeds and all canonical and legacy packages have been uploaded.'
             $state.draft = $false; $state.publications++
             @{ id=42;tag_name='v1.0.0';draft=$false;published_at='2026-10-05T00:00:00Z';assets=@($state.assets) } | ConvertTo-Json -Depth 6 -Compress
-        } elseif ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudBay/releases/42') {
+        } elseif ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudInlet/releases/42') {
             $state.byId++
             @{ id=42;tag_name='v1.0.0';draft=$state.draft;assets=@($state.assets) } | ConvertTo-Json -Depth 6 -Compress
-        } elseif ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudBay/releases?per_page=100') {
+        } elseif ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudInlet/releases?per_page=100') {
             Assert-True ($arguments -contains '--slurp') 'Release lookup must parse all paginated JSON pages safely.'
             if ($state.exists -and $state.blockFreshList) { throw 'A fresh draft is not available through the release list yet.' }
             if ($state.exists) { '[[' + (@{id=42;tag_name='v1.0.0';draft=$state.draft;assets=@($state.assets)} | ConvertTo-Json -Depth 6 -Compress) + ']]' }
             else { '[[]]' }
-        } elseif ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudBay/releases' -and $arguments -contains 'POST') {
+        } elseif ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudInlet/releases' -and $arguments -contains 'POST') {
             $requestPath = $arguments[[Array]::IndexOf($arguments, '--input') + 1]
             $request = Get-Content -LiteralPath $requestPath -Raw | ConvertFrom-Json
             Assert-True ($request.draft -and !$request.prerelease -and $request.tag_name -ceq 'v1.0.0' -and $request.target_commitish -ceq $state.expectedRevision -and $request.generate_release_notes -and $request.body -match 'SHA-256') 'Creation requests an unpublished exact-source release with generated notes and package guidance.'
             $state.exists = $true; $state.creations++
             @{ id=42;tag_name='v1.0.0';draft=$true;assets=@($state.assets) } | ConvertTo-Json -Depth 6 -Compress
-        } elseif ($arguments[0] -ceq 'api' -and $arguments[1].StartsWith('https://uploads.github.com/repos/TahsinFaiyaz30/CloudBay/releases/42/assets?name=', [StringComparison]::Ordinal)) {
+        } elseif ($arguments[0] -ceq 'api' -and $arguments[1].StartsWith('https://uploads.github.com/repos/TahsinFaiyaz30/CloudInlet/releases/42/assets?name=', [StringComparison]::Ordinal)) {
             $file = Get-Item -LiteralPath $arguments[[Array]::IndexOf($arguments, '--input') + 1]
             if ($state.interruptAfter -gt 0 -and $state.uploads -eq $state.interruptAfter) {
                 $state.assets.Add(@{id=123; name=$file.Name; size=0; digest=$null; state='starter'})
@@ -150,49 +162,49 @@ try {
             Assert-True ($arguments -contains 'POST' -and $arguments -contains 'Content-Type: application/octet-stream' -and $arguments[1].EndsWith([Uri]::EscapeDataString($file.Name), [StringComparison]::Ordinal)) 'Binary assets upload to the authoritative release ID with the exact encoded file name.'
             $state.assets.Add(@{ name=$file.Name;size=$file.Length;digest=('sha256:' + (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant());state='uploaded' })
             $state.uploads++
-        } elseif ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudBay/releases/assets/123' -and $arguments -contains 'DELETE') {
+        } elseif ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudInlet/releases/assets/123' -and $arguments -contains 'DELETE') {
             $starter = @($state.assets | Where-Object { $_.id -eq 123 })
             Assert-True ($state.draft -and $starter.Count -eq 1 -and $starter[0].state -ceq 'starter' -and $starter[0].size -eq 0) 'Recovery deletes only a zero-byte incomplete upload on the unpublished draft.'
             [void]$state.assets.Remove($starter[0]); $state.starterDeletes++
         } else { throw 'Unexpected gh invocation in isolated tests. Network access is forbidden.' }
     }
     Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } 'An interrupted upload leaves a private draft.' 'Simulated interrupted draft upload'
-    Assert-True ($global:CloudBayReleaseTestState.draft -and $global:CloudBayReleaseTestState.uploads -eq 2 -and $global:CloudBayReleaseTestState.publications -eq 0) 'Incomplete assets remain unpublished.'
-    Assert-True ($global:CloudBayReleaseTestState.creations -eq 1) 'A newly created draft uses the creation response without querying an unavailable list or tag endpoint.'
+    Assert-True ($global:CloudInletReleaseTestState.draft -and $global:CloudInletReleaseTestState.uploads -eq 2 -and $global:CloudInletReleaseTestState.publications -eq 0) 'Incomplete assets remain unpublished.'
+    Assert-True ($global:CloudInletReleaseTestState.creations -eq 1) 'A newly created draft uses the creation response without querying an unavailable list or tag endpoint.'
     Assert-True (@(Get-ChildItem -LiteralPath $assets -Filter '.release-create-*.json').Count -eq 0) 'The temporary release creation request is removed after creation.'
-    $global:CloudBayReleaseTestState.interruptAfter = 0
-    $global:CloudBayReleaseTestState.blockFreshList = $false
+    $global:CloudInletReleaseTestState.interruptAfter = 0
+    $global:CloudInletReleaseTestState.blockFreshList = $false
     $url = & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision
-    Assert-True ($url -ceq 'https://github.com/TahsinFaiyaz30/CloudBay/releases/tag/v1.0.0' -and $global:CloudBayReleaseTestState.uploads -eq 9 -and $global:CloudBayReleaseTestState.publications -eq 1) 'A complete release creates one draft, uploads the verified inventory, and publishes once.'
-    Assert-True ($global:CloudBayReleaseTestState.starterDeletes -eq 1) 'An interrupted starter asset is recovered before retrying its exact file.'
-    Assert-True ($global:CloudBayReleaseTestState.byId -ge 1) 'Draft integrity uses the release ID when the tag endpoint returns 404.'
+    Assert-True ($url -ceq 'https://github.com/TahsinFaiyaz30/CloudInlet/releases/tag/v1.0.0' -and $global:CloudInletReleaseTestState.uploads -eq 16 -and $global:CloudInletReleaseTestState.publications -eq 1) 'A complete release creates one draft, uploads the verified dual feed inventory, and publishes once.'
+    Assert-True ($global:CloudInletReleaseTestState.starterDeletes -eq 1) 'An interrupted starter asset is recovered before retrying its exact file.'
+    Assert-True ($global:CloudInletReleaseTestState.byId -ge 1) 'Draft integrity uses the release ID when the tag endpoint returns 404.'
     & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision | Out-Null
-    Assert-True ($global:CloudBayReleaseTestState.uploads -eq 9 -and $global:CloudBayReleaseTestState.publications -eq 1) 'Re-running a published identical release never replaces or re-uploads bytes.'
-    $global:CloudBayReleaseTestState.assets[0].digest = 'sha256:' + ('0' * 64)
+    Assert-True ($global:CloudInletReleaseTestState.uploads -eq 16 -and $global:CloudInletReleaseTestState.publications -eq 1) 'Re-running a published identical release never replaces or re-uploads bytes.'
+    $global:CloudInletReleaseTestState.assets[0].digest = 'sha256:' + ('0' * 64)
     Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } 'Different remote bytes are rejected rather than clobbered.'
-    Assert-True ($global:CloudBayReleaseTestState.uploads -eq 9) 'Immutable mismatch performs no asset replacement.'
-    Assert-True ($global:CloudBayReleaseTestState.starterDeletes -eq 1) 'Different uploaded bytes are never deleted during recovery.'
+    Assert-True ($global:CloudInletReleaseTestState.uploads -eq 16) 'Immutable mismatch performs no asset replacement.'
+    Assert-True ($global:CloudInletReleaseTestState.starterDeletes -eq 1) 'Different uploaded bytes are never deleted during recovery.'
     Invoke-TestGit -Arguments @('-C', $fixture, 'commit', '--quiet', '--allow-empty', '-m', 'Simulate newer main while release is building')
     Invoke-TestGit -Arguments @('-C', $fixture, 'push', '--quiet', 'origin', 'main')
     Invoke-TestGit -Arguments @('-C', $fixture, 'checkout', '--quiet', '--detach', $revision)
     Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } 'A superseded CI source cannot publish over newer main.'
     Remove-Item Function:/global:gh
-    $env:CLOUDBAY_STORE_CLIENT_SECRET = $null
+    $env:CLOUDINLET_STORE_CLIENT_SECRET = $null
     Assert-Rejected { & (Join-Path $PSScriptRoot 'submit-store-package.ps1') -PackagePath (Join-Path $workspace 'absent.msix') } 'Unconfigured Store publishing stops before authentication or mutation.'
     Assert-Rejected { & (Join-Path $PSScriptRoot 'build-store-package.ps1') -AppFolder $workspace -Version '1.0.0' -OutputDirectory (Join-Path $workspace 'store') -PackageIdentityName '' -Publisher '' -PublisherDisplayName '' } 'Missing Partner Center identity cannot silently produce a production Store package.'
     Assert-Rejected { & (Join-Path $PSScriptRoot 'build-store-package.ps1') -AppFolder $workspace -Version '1.0.0' -OutputDirectory (Join-Path $workspace 'store') -LocalValidationIdentity -PackageIdentityName 'Production.Identity' } 'Local sample and production Store identities cannot be mixed.'
     $sampleFolder = Join-Path $workspace 'sample-manifest'
     New-Item -ItemType Directory -Path $sampleFolder | Out-Null
-    '<Package><Identity Name="CloudBay.LocalValidation" Publisher="CN=CloudBay Local Validation" ProcessorArchitecture="x64" /></Package>' | Set-Content -LiteralPath (Join-Path $sampleFolder 'AppxManifest.xml') -Encoding utf8NoBOM
+    '<Package><Identity Name="CloudInlet.LocalValidation" Publisher="CN=CloudInlet Local Validation" ProcessorArchitecture="x64" /></Package>' | Set-Content -LiteralPath (Join-Path $sampleFolder 'AppxManifest.xml') -Encoding utf8NoBOM
     $renamedSample = Join-Path $workspace 'production.msix'
     [IO.Compression.ZipFile]::CreateFromDirectory($sampleFolder, $renamedSample)
-    $env:CLOUDBAY_STORE_CLIENT_SECRET = 'fixture-not-a-credential'
+    $env:CLOUDINLET_STORE_CLIENT_SECRET = 'fixture-not-a-credential'
     Assert-Rejected {
         & (Join-Path $PSScriptRoot 'submit-store-package.ps1') -PackagePath $renamedSample -ApplicationId 'ABC123456789' -TenantId '11111111-1111-1111-1111-111111111111' -ClientId '22222222-2222-2222-2222-222222222222' -PackageIdentityName 'Production.Identity' -Publisher 'CN=Production'
     } 'Renaming a local Store sample cannot bypass the actual embedded identity check.' '^Provide the production Store package matching'
 
     # A message handler replaces HTTPS transport so the complete Store request graph can be tested without credentials or network access.
-    if (!('CloudBay.ReleaseTests.StoreHandler' -as [type])) {
+    if (!('CloudInlet.ReleaseTests.StoreHandler' -as [type])) {
         Add-Type -TypeDefinition @'
 using System;
 using System.Net;
@@ -200,7 +212,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading;
 using System.Threading.Tasks;
-namespace CloudBay.ReleaseTests {
+namespace CloudInlet.ReleaseTests {
     public sealed class StoreHandler : HttpMessageHandler {
         public string Scenario = "Success";
         public int RootGets, Creates, Updates, Uploads, Commits, StatusGets;
@@ -241,16 +253,16 @@ namespace CloudBay.ReleaseTests {
     $productionFixture = Join-Path $workspace 'matching-production.msix'
     [IO.Compression.ZipFile]::CreateFromDirectory($sampleFolder, $productionFixture)
     $submissionArguments = @{ PackagePath=$productionFixture;ApplicationId='ABC123456789';TenantId='11111111-1111-1111-1111-111111111111';ClientId='22222222-2222-2222-2222-222222222222';PackageIdentityName='Production.Identity';Publisher='CN=Production' }
-    $handler = [CloudBay.ReleaseTests.StoreHandler]::new()
+    $handler = [CloudInlet.ReleaseTests.StoreHandler]::new()
     $result = & (Join-Path $PSScriptRoot 'submit-store-package.ps1') @submissionArguments -HttpHandler $handler
     Assert-True ($handler.RootGets -eq 1 -and $handler.Creates -eq 1 -and $handler.Updates -eq 1 -and $handler.Uploads -eq 1 -and $handler.Commits -eq 0 -and $result -match 'Commit was not requested') 'Preparing a Store draft follows the API request graph without committing implicitly.'
     $updated = $handler.UpdatedJson | ConvertFrom-Json
     Assert-True ($updated.targetPublishMode -ceq 'Manual' -and $updated.applicationPackages[0].fileStatus -ceq 'PendingDelete' -and $updated.applicationPackages[1].fileStatus -ceq 'PendingUpload' -and $updated.listings.'en-us'.description -ceq 'Existing listing') 'Store updates replace packages while preserving listing data and explicit publication mode.'
-    $handler = [CloudBay.ReleaseTests.StoreHandler]::new()
+    $handler = [CloudInlet.ReleaseTests.StoreHandler]::new()
     & (Join-Path $PSScriptRoot 'submit-store-package.ps1') @submissionArguments -HttpHandler $handler -CommitSubmission | Out-Null
     Assert-True ($handler.Commits -eq 1 -and $handler.StatusGets -eq 1) 'Explicit submission commits exactly once and confirms processing status.'
     foreach ($scenario in @('Pending','Mutation503','LongCooldown','LongDateCooldown')) {
-        $handler = [CloudBay.ReleaseTests.StoreHandler]::new(); $handler.Scenario = $scenario
+        $handler = [CloudInlet.ReleaseTests.StoreHandler]::new(); $handler.Scenario = $scenario
         Assert-Rejected { & (Join-Path $PSScriptRoot 'submit-store-package.ps1') @submissionArguments -HttpHandler $handler -CommitSubmission } "Store scenario $scenario stops with a controlled error." '^(Partner Center already|Store API returned|Store requested a long)'
         Assert-True ($handler.Creates -le 1 -and $handler.Uploads -eq 0 -and $handler.Commits -eq 0) "Store scenario $scenario performs no duplicate mutation or premature cooldown retry."
     }
@@ -258,8 +270,9 @@ namespace CloudBay.ReleaseTests {
     Write-Output "Release automation passed $script:assertions assertions. Fixtures: $workspace"
 } finally {
     if (Test-Path Function:/global:gh) { Remove-Item Function:/global:gh }
-    Remove-Variable -Name CloudBayReleaseTestState -Scope Global -ErrorAction SilentlyContinue
+    Remove-Variable -Name CloudInletReleaseTestState -Scope Global -ErrorAction SilentlyContinue
     $env:GITHUB_OUTPUT = $savedOutput
     $env:GH_TOKEN = $savedToken
-    $env:CLOUDBAY_STORE_CLIENT_SECRET = $savedStoreSecret
+    $env:CLOUDINLET_STORE_CLIENT_SECRET = $savedStoreSecret
+    $env:CLOUDBAY_STORE_CLIENT_SECRET = $savedLegacyStoreSecret
 }

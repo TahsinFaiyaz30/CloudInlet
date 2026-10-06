@@ -14,7 +14,7 @@ permissions:
   actions: write
 
 concurrency:
-  group: cloudbay-version
+  group: cloudinlet-version
   cancel-in-progress: false
 
 jobs:

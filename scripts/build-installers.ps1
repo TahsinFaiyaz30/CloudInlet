@@ -25,22 +25,22 @@ function Assert-NormalTree([string]$Path) {
 }
 Assert-NormalTree $appRoot
 Assert-NormalTree $outputRoot
-$appExe = Join-Path $appRoot 'CloudBay.exe'
-if (!(Test-Path -LiteralPath $appExe)) { throw 'AppFolder must contain the full published CloudBay application.' }
+$appExe = Join-Path $appRoot 'CloudInlet.exe'
+if (!(Test-Path -LiteralPath $appExe)) { throw 'AppFolder must contain the full published CloudInlet application.' }
 $productVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($appExe).ProductVersion.Split('+')[0]
 if ($productVersion -ne $Version) { throw "The application version ($productVersion) does not match installer version ($Version)." }
 if (Get-ChildItem -LiteralPath $appRoot -Recurse -File | Where-Object { $_.Name -match '^(credentials\.dpapi|settings\.json|.*\.(sqlite|sqlite-wal|sqlite-shm))$' }) { throw 'Published application contains private client state.' }
 if (!(Test-Path -LiteralPath (Join-Path $appRoot 'THIRD-PARTY-NOTICES.md'))) { throw 'Copy third-party notices into the application payload before building installers.' }
 New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
 if (!$HelperPrepared) { & (Join-Path $PSScriptRoot 'build-installer-helper.ps1') -AppFolder $appRoot }
-$helperFile = Join-Path $appRoot 'CloudBay.SetupHelper.exe'
+$helperFile = Join-Path $appRoot 'CloudInlet.SetupHelper.exe'
 if (!(Test-Path -LiteralPath $helperFile)) { throw 'The installer/update helper is missing from the application payload.' }
 $tools = & (Join-Path $PSScriptRoot 'get-installer-tools.ps1') -InnoCompiler $InnoCompiler -WixToolPath $WixToolPath
 $flavor = $Configuration.ToLowerInvariant()
-$productName = if ($Configuration -eq 'Debug') { 'CloudBay Debug' } else { 'CloudBay' }
-$startupName = if ($Configuration -eq 'Debug') { 'CloudBayDebug' } else { 'CloudBay' }
+$productName = if ($Configuration -eq 'Debug') { 'CloudInlet Debug' } else { 'CloudInlet' }
+$startupName = if ($Configuration -eq 'Debug') { 'CloudInletDebug' } else { 'CloudInlet' }
 $upgradeCode = if ($Configuration -eq 'Debug') { '14BA2C55-3BED-4F8C-927B-2157E7852A96' } else { '7C2B596C-321A-4F07-9A96-C2E83136223D' }
-$assetName = "CloudBay-$Version-win-x64-$flavor-setup"
+$assetName = "CloudInlet-$Version-win-x64-$flavor-setup"
 foreach ($extension in @('exe', 'msi')) {
     if (Test-Path -LiteralPath (Join-Path $outputRoot "$assetName.$extension")) { throw 'Installer output already exists. Use a fresh output directory so published version bytes stay immutable.' }
 }
@@ -53,14 +53,14 @@ $distribution.installerKind = 'Msi'
 $msiMetadata = Join-Path $stagingRoot 'distribution-msi.json'
 $distribution | ConvertTo-Json | Set-Content -LiteralPath $msiMetadata -Encoding utf8NoBOM
 
-& $tools.InnoCompiler '/Qp' "/DAppFolder=$appRoot" "/DAppVersion=$Version" "/DBuildFlavor=$Configuration" "/DSourceRevision=$SourceRevision" "/DOutputDirectory=$stagingRoot" "/DOutputName=$assetName" "/DRepository=$repository" "/DMetadataFile=$exeMetadata" "/DHelperFile=$helperFile" (Join-Path $repository 'packaging/CloudBay.iss')
+& $tools.InnoCompiler '/Qp' "/DAppFolder=$appRoot" "/DAppVersion=$Version" "/DBuildFlavor=$Configuration" "/DSourceRevision=$SourceRevision" "/DOutputDirectory=$stagingRoot" "/DOutputName=$assetName" "/DRepository=$repository" "/DMetadataFile=$exeMetadata" "/DHelperFile=$helperFile" (Join-Path $repository 'packaging/CloudInlet.iss')
 if ($LASTEXITCODE -ne 0) { throw 'EXE installer compilation failed.' }
 
 # Managed DTF code is packaged inside a native x64 MSI custom-action DLL.
 # It never depends on the application's own .NET runtime or user data.
-dotnet build (Join-Path $repository 'packaging/InstallerActions/CloudBay.InstallerActions.csproj') -c Release -p:Platform=x64 -v:minimal | Out-Host
+dotnet build (Join-Path $repository 'packaging/InstallerActions/CloudInlet.InstallerActions.csproj') -c Release -p:Platform=x64 -v:minimal | Out-Host
 if ($LASTEXITCODE -ne 0) { throw 'MSI installer actions build failed.' }
-$actionsDll = Join-Path $repository 'packaging/InstallerActions/bin/x64/Release/net472/CloudBay.InstallerActions.CA.dll'
+$actionsDll = Join-Path $repository 'packaging/InstallerActions/bin/x64/Release/net472/CloudInlet.InstallerActions.CA.dll'
 if (!(Test-Path -LiteralPath $actionsDll)) { throw 'The native MSI custom-action wrapper was not generated.' }
 
 function Xml([string]$Value) { [Security.SecurityElement]::Escape($Value) }
@@ -78,6 +78,8 @@ function Stable-Guid([string]$Value) {
         ([Guid]::new($guidBytes)).ToString('D')
     } finally { $algorithm.Dispose() }
 }
+# Keep the installed distribution key recognized by the already-running
+# CloudBay update worker. Display names and launch targets use CloudInlet.
 $registry = "Software\CloudBay\Distribution\$Configuration\Msi"
 $components = [Collections.Generic.List[string]]::new()
 $directories = [Text.StringBuilder]::new()
@@ -86,7 +88,7 @@ function Append-Directory([string]$Folder, [string]$Relative, [string]$Directory
         if ($file.Name -eq 'distribution.json') { continue }
         $relativeFile = if ($Relative) { $Relative + '\' + $file.Name } else { $file.Name }
         $componentId = Stable-Id ($Configuration + '|component|' + $relativeFile.ToLowerInvariant())
-        $fileId = if ($relativeFile -eq 'CloudBay.exe') { 'CloudBayExe' } else { Stable-Id ('file|' + $relativeFile.ToLowerInvariant()) }
+        $fileId = if ($relativeFile -eq 'CloudInlet.exe') { 'CloudInletExe' } else { Stable-Id ('file|' + $relativeFile.ToLowerInvariant()) }
         $guid = Stable-Guid ($Configuration + '|Msi|' + $relativeFile.ToLowerInvariant())
         $components.Add($componentId)
         [void]$directories.AppendLine("<Component Id=`"$componentId`" Guid=`"$guid`" Bitness=`"always64`"><File Id=`"$fileId`" Source=`"$(Xml $file.FullName)`" /><RegistryValue Root=`"HKCU`" Key=`"$(Xml $registry)\Files`" Name=`"$componentId`" Value=`"1`" Type=`"integer`" KeyPath=`"yes`" /></Component>")
@@ -101,22 +103,22 @@ function Append-Directory([string]$Folder, [string]$Relative, [string]$Directory
 }
 Append-Directory $appRoot '' 'INSTALLDIR'
 $componentRefs = ($components | ForEach-Object { "<ComponentRef Id=`"$_`" />" }) -join "`n"
-$wxs = Join-Path $stagingRoot 'CloudBay.wxs'
+$wxs = Join-Path $stagingRoot 'CloudInlet.wxs'
 @"
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
-  <Package Name="$(Xml $productName)" Manufacturer="CloudBay" Version="$Version" Language="1033" UpgradeCode="$upgradeCode" Scope="perUser" InstallerVersion="500">
-    <MajorUpgrade Schedule="afterInstallInitialize" MigrateFeatures="no" DowngradeErrorMessage="A newer build of CloudBay is already installed." />
+  <Package Name="$(Xml $productName)" Manufacturer="CloudInlet" Version="$Version" Language="1033" UpgradeCode="$upgradeCode" Scope="perUser" InstallerVersion="500">
+    <MajorUpgrade Schedule="afterInstallInitialize" MigrateFeatures="no" DowngradeErrorMessage="A newer build of CloudInlet is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="medium" />
     <Property Id="CB_FLAVOR" Value="$Configuration" />
     <Property Id="CB_REVISION" Value="$SourceRevision" />
     <Property Id="UPDATE" Secure="yes" />
     <Property Id="INSTALLDIR" Secure="yes" />
     <Property Id="ARPNOMODIFY" Value="1" />
-    <Property Id="ARPURLINFOABOUT" Value="https://github.com/TahsinFaiyaz30/CloudBay" />
-    <Property Id="ARPPRODUCTICON" Value="CloudBayIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/TahsinFaiyaz30/CloudInlet" />
+    <Property Id="ARPPRODUCTICON" Value="CloudInletIcon" />
     <Property Id="MSIRESTARTMANAGERCONTROL" Value="Disable" />
-    <Launch Condition="Installed OR (VersionNT64 AND CB_WINDOWS_BUILD &gt;= 22000)" Message="CloudBay requires 64-bit Windows 11 or later." />
-    <Icon Id="CloudBayIcon" SourceFile="$(Xml (Join-Path $appRoot 'Assets/CloudBay.ico'))" />
+    <Launch Condition="Installed OR (VersionNT64 AND CB_WINDOWS_BUILD &gt;= 22000)" Message="CloudInlet requires 64-bit Windows 11 or later." />
+    <Icon Id="CloudInletIcon" SourceFile="$(Xml (Join-Path $appRoot 'Assets/CloudInlet.ico'))" />
     <Binary Id="InstallerActions" SourceFile="$(Xml $actionsDll)" />
     <CustomAction Id="CheckWindowsVersion" BinaryRef="InstallerActions" DllEntry="CheckWindowsVersion" Execute="immediate" Return="check" />
     <CustomAction Id="PrepareInstall" BinaryRef="InstallerActions" DllEntry="PrepareInstall" Execute="immediate" Return="check" />
@@ -142,23 +144,23 @@ $wxs = Join-Path $stagingRoot 'CloudBay.wxs'
         <RegistryValue Root="HKCU" Key="$(Xml $registry)" Name="Version" Value="$Version" Type="string" />
         <RegistryValue Root="HKCU" Key="$(Xml $registry)" Name="BuildFlavor" Value="$Configuration" Type="string" />
       </Component>
-      <Component Id="StartupComponent" Guid="$(Stable-Guid "$Configuration|Msi|startup")" Bitness="always64">
-        <RegistryValue Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="$startupName" Value="&quot;[INSTALLDIR]CloudBay.exe&quot; --background" Type="string" KeyPath="yes" />
+      <Component Id="StartupComponent" Guid="$(Stable-Guid "$Configuration|Msi|cloudinlet-startup")" Bitness="always64">
+        <RegistryValue Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="$startupName" Value="&quot;[INSTALLDIR]CloudInlet.exe&quot; --background" Type="string" KeyPath="yes" />
       </Component>
     </Directory></Directory></StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder"><Component Id="StartMenuShortcut" Guid="$(Stable-Guid "$Configuration|Msi|startmenu")" Bitness="always64">
-      <Shortcut Id="CloudBayStartMenu" Name="$(Xml $productName)" Target="[INSTALLDIR]CloudBay.exe" WorkingDirectory="INSTALLDIR" Icon="CloudBayIcon" />
+      <Shortcut Id="CloudInletStartMenu" Name="$(Xml $productName)" Target="[INSTALLDIR]CloudInlet.exe" WorkingDirectory="INSTALLDIR" Icon="CloudInletIcon" />
       <RegistryValue Root="HKCU" Key="$(Xml $registry)" Name="StartMenuShortcut" Value="1" Type="integer" KeyPath="yes" />
     </Component></StandardDirectory>
     <StandardDirectory Id="DesktopFolder"><Component Id="DesktopShortcutComponent" Guid="$(Stable-Guid "$Configuration|Msi|desktop")" Bitness="always64">
-      <Shortcut Id="CloudBayDesktop" Name="$(Xml $productName)" Target="[INSTALLDIR]CloudBay.exe" WorkingDirectory="INSTALLDIR" Icon="CloudBayIcon" />
+      <Shortcut Id="CloudInletDesktop" Name="$(Xml $productName)" Target="[INSTALLDIR]CloudInlet.exe" WorkingDirectory="INSTALLDIR" Icon="CloudInletIcon" />
       <RegistryValue Root="HKCU" Key="$(Xml $registry)" Name="DesktopShortcut" Value="1" Type="integer" KeyPath="yes" />
     </Component></StandardDirectory>
     <Feature Id="Main" Title="$(Xml $productName)" Level="1" AllowAbsent="no" Display="expand" ConfigurableDirectory="INSTALLDIR">
       $componentRefs
       <ComponentRef Id="DistributionMetadata" /><ComponentRef Id="StartMenuShortcut" />
-      <Feature Id="Startup" Title="Start with Windows" Description="Start CloudBay in the background when you sign in." Level="1"><ComponentRef Id="StartupComponent" /></Feature>
-      <Feature Id="DesktopShortcut" Title="Desktop shortcut" Description="Create a CloudBay shortcut on the desktop." Level="2"><ComponentRef Id="DesktopShortcutComponent" /></Feature>
+      <Feature Id="Startup" Title="Start with Windows" Description="Start CloudInlet in the background when you sign in." Level="1"><ComponentRef Id="StartupComponent" /></Feature>
+      <Feature Id="DesktopShortcut" Title="Desktop shortcut" Description="Create a CloudInlet shortcut on the desktop." Level="2"><ComponentRef Id="DesktopShortcutComponent" /></Feature>
     </Feature>
     <ui:WixUI Id="WixUI_FeatureTree" />
     <WixVariable Id="WixUILicenseRtf" Value="$(Xml (Join-Path $repository 'packaging/License.rtf'))" />

@@ -10,7 +10,7 @@ using Microsoft.Win32;
 using WixToolset.Dtf.WindowsInstaller;
 using FileAttributes = System.IO.FileAttributes;
 
-namespace CloudBay.Packaging
+namespace CloudInlet.Packaging
 {
     // These actions run as the installing user, never elevated. Paths are data;
     // no PowerShell, command interpreter, taskkill, or process-name termination.
@@ -50,13 +50,13 @@ namespace CloudBay.Packaging
                 }
                 using (var other = UserKey(session, Key(flavor, "Exe")))
                     if (other?.GetValue("InstallDirectory") is string)
-                        throw new InvalidOperationException("CloudBay is installed using the EXE installer. Uninstall that installer before changing to MSI. Your backup settings and files will be preserved.");
+                        throw new InvalidOperationException("CloudInlet is installed using the EXE installer. Uninstall that installer before changing to MSI. Your backup settings and files will be preserved.");
 
                 using (var previous = UserKey(session, Key(flavor, "Msi")))
                 {
                     var previousDirectory = previous?.GetValue("InstallDirectory") as string;
                     if (session["UPDATE"] == "1" && string.IsNullOrEmpty(previousDirectory))
-                        throw new InvalidOperationException("This update requires an existing MSI installation of the same CloudBay build.");
+                        throw new InvalidOperationException("This update requires an existing MSI installation of the same CloudInlet build.");
                     if (string.IsNullOrEmpty(session["INSTALLDIR"]))
                         session["INSTALLDIR"] = string.IsNullOrEmpty(previousDirectory) ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", AppName(flavor)) : previousDirectory;
                     if (!string.IsNullOrEmpty(previousDirectory))
@@ -64,9 +64,12 @@ namespace CloudBay.Packaging
                         // On automatic updates, install into the actual remembered location.
                         if (session["UPDATE"] == "1") session["INSTALLDIR"] = previousDirectory;
                         using (var run = UserKey(session, @"Software\Microsoft\Windows\CurrentVersion\Run"))
-                            session["CB_CURRENT_STARTUP"] = run?.GetValue(RunName(flavor)) is string ? "1" : "0";
-                        session["CB_CURRENT_DESKTOP"] = File.Exists(DesktopShortcut(flavor)) ? "1" : "0";
+                            session["CB_CURRENT_STARTUP"] = run?.GetValue(RunName(flavor)) is string || run?.GetValue(LegacyRunName(flavor)) is string ? "1" : "0";
+                        session["CB_CURRENT_DESKTOP"] = File.Exists(DesktopShortcut(flavor)) || File.Exists(LegacyDesktopShortcut(flavor)) ? "1" : "0";
                         session["CB_PREVIOUS_INSTALL"] = "1";
+                        using (var approved = UserKey(session, @"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"))
+                            if (approved?.GetValue(RunName(flavor)) == null && approved?.GetValue(LegacyRunName(flavor)) is byte[] approval)
+                                session["CB_LEGACY_STARTUP_APPROVAL"] = Convert.ToBase64String(approval);
                         if (session["UPDATE"] == "1")
                         {
                             session["Preselected"] = "1";
@@ -100,6 +103,8 @@ namespace CloudBay.Packaging
                 data.Add("Revision", session["CB_REVISION"]);
                 data.Add("Startup", WillInstall(session, "Startup") ? "1" : "0");
                 data.Add("Desktop", WillInstall(session, "DesktopShortcut") ? "1" : "0");
+                data.Add("UserSID", session["UserSID"]);
+                data.Add("LegacyStartupApproval", session["CB_LEGACY_STARTUP_APPROVAL"]);
                 session["WriteDistribution"] = data.ToString();
                 return ActionResult.Success;
             });
@@ -130,6 +135,14 @@ namespace CloudBay.Packaging
                     throw new IOException("Installation metadata cannot be a linked file.");
                 using (var output = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None))
                     new DataContractJsonSerializer(typeof(Distribution)).WriteObject(output, descriptor);
+                if (!string.IsNullOrEmpty(data["LegacyStartupApproval"]))
+                {
+                    if (!data["UserSID"].StartsWith("S-1-", StringComparison.Ordinal)) throw new IOException("The installing user could not be identified.");
+                    using (var users = RegistryKey.OpenBaseKey(RegistryHive.Users, RegistryView.Registry64))
+                    using (var approved = users.CreateSubKey(data["UserSID"] + @"\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"))
+                        if (approved.GetValue(RunName(data["Flavor"])) == null)
+                            approved.SetValue(RunName(data["Flavor"]), Convert.FromBase64String(data["LegacyStartupApproval"]), RegistryValueKind.Binary);
+                }
                 return ActionResult.Success;
             });
         }
@@ -148,10 +161,10 @@ namespace CloudBay.Packaging
             try { return action(); }
             catch (Exception error)
             {
-                session.Log("CloudBay installer: {0}", error.Message);
+                session.Log("CloudInlet installer: {0}", error.Message);
                 using (var record = new Record(1))
                 {
-                    record.FormatString = "CloudBay could not complete installation: [1]";
+                    record.FormatString = "CloudInlet could not complete installation: [1]";
                     record[1] = error.Message;
                     session.Message(InstallMessage.Error, record);
                 }
@@ -160,8 +173,10 @@ namespace CloudBay.Packaging
         }
 
         private static string Flavor(Session session) => session["CB_FLAVOR"] == "Debug" ? "Debug" : "Release";
-        private static string AppName(string flavor) => flavor == "Debug" ? "CloudBay Debug" : "CloudBay";
-        private static string RunName(string flavor) => flavor == "Debug" ? "CloudBayDebug" : "CloudBay";
+        private static string AppName(string flavor) => flavor == "Debug" ? "CloudInlet Debug" : "CloudInlet";
+        private static string RunName(string flavor) => flavor == "Debug" ? "CloudInletDebug" : "CloudInlet";
+        private static string LegacyRunName(string flavor) => flavor == "Debug" ? "CloudBayDebug" : "CloudBay";
+        // Old update workers and cross-installer checks require this identity.
         private static string Key(string flavor, string kind) => @"Software\CloudBay\Distribution\" + flavor + @"\" + kind;
         private static RegistryKey? UserKey(Session session, string path)
         {
@@ -173,6 +188,7 @@ namespace CloudBay.Packaging
                 return users.OpenSubKey(sid + "\\" + path);
         }
         private static string DesktopShortcut(string flavor) => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), AppName(flavor) + ".lnk");
+        private static string LegacyDesktopShortcut(string flavor) => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), (flavor == "Debug" ? "CloudBay Debug" : "CloudBay") + ".lnk");
 
         private static string ValidateDirectory(string value)
         {
@@ -180,7 +196,8 @@ namespace CloudBay.Packaging
             if (!Path.IsPathRooted(value) || value.IndexOf('"') >= 0 || path.Length < 8 || path == Path.GetPathRoot(path)?.TrimEnd('\\') || path.StartsWith(@"\\", StringComparison.Ordinal))
                 throw new IOException("Choose a normal, local installation directory.");
             var state = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CloudBay");
-            if (IsWithin(path, state) || IsWithin(path, Environment.GetFolderPath(Environment.SpecialFolder.Windows)))
+            var brandedState = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CloudInlet");
+            if (IsWithin(path, state) || IsWithin(path, brandedState) || IsWithin(path, Environment.GetFolderPath(Environment.SpecialFolder.Windows)))
                 throw new IOException("The application cannot be installed into Windows or its private backup settings directory.");
             for (var ancestor = new DirectoryInfo(path); ancestor != null; ancestor = ancestor.Parent)
                 if (ancestor.Exists && (ancestor.Attributes & FileAttributes.ReparsePoint) != 0)

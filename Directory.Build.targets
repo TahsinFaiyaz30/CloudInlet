@@ -1,15 +1,15 @@
 <Project>
-  <Target Name="ValidateCloudBayVersion" BeforeTargets="PrepareForBuild;CollectPackageReferences;GetAssemblyVersion">
-    <Error Condition="'$(_CloudBayVersionDocumentValid)' != 'True'"
+  <Target Name="ValidateCloudInletVersion" BeforeTargets="PrepareForBuild;CollectPackageReferences;GetAssemblyVersion">
+    <Error Condition="'$(_CloudInletVersionDocumentValid)' != 'True'"
            Text="version.json must contain exactly one version property with a canonical stable X.Y.Z value." />
     <PropertyGroup>
-      <_CloudBayEffectiveVersionValid>$([System.Text.RegularExpressions.Regex]::IsMatch('$(Version)', '\A(?:0|[1-9][0-9]{0,4})\.(?:0|[1-9][0-9]{0,4})\.(?:0|[1-9][0-9]{0,4})\z'))</_CloudBayEffectiveVersionValid>
+      <_CloudInletEffectiveVersionValid>$([System.Text.RegularExpressions.Regex]::IsMatch('$(Version)', '\A(?:0|[1-9][0-9]{0,4})\.(?:0|[1-9][0-9]{0,4})\.(?:0|[1-9][0-9]{0,4})\z'))</_CloudInletEffectiveVersionValid>
     </PropertyGroup>
-    <Error Condition="'$(_CloudBayEffectiveVersionValid)' != 'True'"
-           Text="CloudBay Version must be a canonical stable X.Y.Z value." />
-    <Error Condition="$([System.Version]::Parse('$(CloudBayBaseVersion)').Major) &gt; 255 Or $([System.Version]::Parse('$(CloudBayBaseVersion)').Minor) &gt; 255 Or $([System.Version]::Parse('$(CloudBayBaseVersion)').Build) &gt; 65535"
+    <Error Condition="'$(_CloudInletEffectiveVersionValid)' != 'True'"
+           Text="CloudInlet Version must be a canonical stable X.Y.Z value." />
+    <Error Condition="$([System.Version]::Parse('$(CloudInletBaseVersion)').Major) &gt; 255 Or $([System.Version]::Parse('$(CloudInletBaseVersion)').Minor) &gt; 255 Or $([System.Version]::Parse('$(CloudInletBaseVersion)').Build) &gt; 65535"
            Text="version.json exceeds common Windows Installer limits: major/minor at most 255, patch at most 65535." />
     <Error Condition="$([System.Version]::Parse('$(Version)').Major) &gt; 255 Or $([System.Version]::Parse('$(Version)').Minor) &gt; 255 Or $([System.Version]::Parse('$(Version)').Build) &gt; 65535"
-           Text="CloudBay Version exceeds common Windows Installer limits: major/minor at most 255, patch at most 65535." />
+           Text="CloudInlet Version exceeds common Windows Installer limits: major/minor at most 255, patch at most 65535." />
   </Target>
 </Project>

@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <ProjectReference Include="../../CloudInlet.Core/CloudInlet.Core.csproj" />
+    <Compile Include="../../CloudInlet/Windows/CloudFiles/CloudFilesNative.cs" Link="Native/CloudFilesNative.cs" />
+    <Compile Include="../../CloudInlet/Windows/CloudFiles/HydrationStream.cs" Link="Native/HydrationStream.cs" />
+    <Compile Include="../../CloudInlet/Windows/CloudFiles/WindowsPlaceholderService.cs" Link="Native/WindowsPlaceholderService.cs" />
+    <Compile Include="../../CloudInlet/Application/ClientController.cs" Link="Application/ClientController.cs" />
+    <Compile Include="../../CloudInlet/Application/ClientController.Imports.cs" Link="Application/ClientController.Imports.cs" />
+    <Compile Include="../../CloudInlet/Application/ClientController.CloudImports.cs" Link="Application/ClientController.CloudImports.cs" />
+    <Compile Include="../../CloudInlet/Application/ClientController.CloudAccounts.cs" Link="Application/ClientController.CloudAccounts.cs" />
+    <Compile Include="../../CloudInlet/Application/ClientController.CloudTransfers.cs" Link="Application/ClientController.CloudTransfers.cs" />
+    <Compile Include="../../CloudInlet/Application/ImportJournal.cs" Link="Application/ImportJournal.cs" />
+    <Compile Include="../../CloudInlet/Application/CloudImportJournal.cs" Link="Application/CloudImportJournal.cs" />
+    <Compile Include="../../CloudInlet/Application/ClientStorage.cs" Link="Application/ClientStorage.cs" />
+    <Compile Include="../../CloudInlet/Application/DisconnectMode.cs" Link="Application/DisconnectMode.cs" />
+    <Compile Include="../../CloudInlet/Application/ClientController.Disconnect.cs" Link="Application/ClientController.Disconnect.cs" />
+    <Compile Include="../../CloudInlet/Windows/SystemIntegration.cs" Link="Native/SystemIntegration.cs" />
+    <Compile Include="../../CloudInlet/Windows/UpdateInstallation.cs" Link="Windows/UpdateInstallation.cs" />
+    <Compile Include="../../CloudInlet/Windows/KnownFolderBackup.cs" Link="Native/KnownFolderBackup.cs" />
+    <Compile Include="../../CloudInlet/Windows/KnownFolderPolicy.cs" Link="Native/KnownFolderPolicy.cs" />
+    <Compile Include="../../CloudInlet/Windows/FolderAppearance.cs" Link="Native/FolderAppearance.cs" />
+  </ItemGroup>
+</Project>

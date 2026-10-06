@@ -1,13 +1,13 @@
 param(
     [Parameter(Mandatory)][string]$AssetDirectory,
     [Parameter(Mandatory)][string]$ExpectedRevision,
-    [string]$Repository = 'TahsinFaiyaz30/CloudBay',
+    [string]$Repository = 'TahsinFaiyaz30/CloudInlet',
     [string]$RepositoryRoot = (Join-Path $PSScriptRoot '..')
 )
 $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath($RepositoryRoot)
 $assetsRoot = [IO.Path]::GetFullPath($AssetDirectory)
-if ($Repository -cne 'TahsinFaiyaz30/CloudBay') { throw 'Unexpected release repository.' }
+if ($Repository -cne 'TahsinFaiyaz30/CloudInlet') { throw 'Unexpected release repository.' }
 if (!$env:GH_TOKEN -and !$env:GITHUB_TOKEN) { throw 'Set GH_TOKEN with contents:write before publishing a release.' }
 $source = & (Join-Path $PSScriptRoot 'get-release-version.ps1') -RepositoryRoot $root
 if ($ExpectedRevision -cne $source.sourceRevision) { throw 'The release commit does not match the checked-out source.' }
@@ -26,8 +26,8 @@ foreach ($flavor in @('Debug', 'Release')) {
     if ($gate.Count -ne 1 -or $gate[0].buildSucceeded -ne $true -or $gate[0].testsPassed -lt 1 -or $gate[0].testsFailed -ne 0 -or $gate[0].testsSkipped -ne 0) { throw "The $flavor build and test gates have not passed." }
 }
 & (Join-Path $PSScriptRoot 'generate-update-manifest.ps1') -Version $source.version -AssetDirectory $assetsRoot -Repository $Repository | Out-Null
-$files = @(Get-ChildItem -LiteralPath $assetsRoot -File | Where-Object { $_.Name -like "CloudBay-$($source.version)-*" -or $_.Name -in @('updates-v1.json', 'SHA256SUMS.txt', 'release-validation.json') } | Sort-Object Name)
-if ($files.Count -lt 9) { throw 'The complete release payload is not ready.' }
+$files = @(Get-ChildItem -LiteralPath $assetsRoot -File | Where-Object { $_.Name -like "CloudInlet-$($source.version)-*" -or $_.Name -like "CloudBay-$($source.version)-*" -or $_.Name -in @('updates-v1.json', 'updates-v2.json', 'SHA256SUMS.txt', 'release-validation.json') } | Sort-Object Name)
+if ($files.Count -lt 16) { throw 'The complete canonical and compatibility release payload is not ready.' }
 foreach ($file in $files) { if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked release payloads are not allowed.' } }
 
 function Invoke-Gh([string[]]$Arguments) {
@@ -42,7 +42,7 @@ if ($tagExists) {
     $tagRevision = (& git -C $root rev-list -n 1 $tag).Trim()
     if ($LASTEXITCODE -ne 0 -or $tagRevision -cne $ExpectedRevision) { throw 'An immutable release tag already points to a different commit.' }
 } else {
-    & git -C $root -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' tag -a $tag $ExpectedRevision -m "CloudBay $($source.version)" -m 'Verified Debug and Release Windows installers and update manifest.'
+    & git -C $root -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' tag -a $tag $ExpectedRevision -m "CloudInlet $($source.version)" -m 'Verified Debug and Release Windows installers and update manifest.'
     if ($LASTEXITCODE -ne 0) { throw 'Could not create the annotated release tag.' }
     & git -C $root push origin "refs/tags/$tag"
     if ($LASTEXITCODE -ne 0) { throw 'Could not push the annotated release tag.' }
@@ -58,14 +58,14 @@ else {
     if ($matching.Count -eq 1) { $release = $matching[0] }
     else {
     $notes = @"
-CloudBay $($source.version) ships native Windows backup and Files On-Demand for Backblaze B2.
+CloudInlet $($source.version) renames CloudBay while preserving existing accounts, backup settings, Files On-Demand roots, transfer recovery, and installation choices. Direct OneDrive and Backblaze B2 transfers remain available.
 
-Choose the same build flavor (Release or Debug) and installer type (EXE or MSI) already installed. Portable ZIP builds are also included. Installers preserve backup settings, account credentials, and folder mappings across updates. The application validates installer length and SHA-256 before applying a matching update.
+Choose the CloudInlet asset with the same build flavor (Release or Debug) and installer type (EXE or MSI) already installed. Portable ZIP builds are also included. CloudBay-named assets are byte-identical compatibility aliases for older updaters. The application validates installer length and SHA-256 before applying a matching update.
 
 Signing status is recorded in release-validation.json. Unsigned installers can show a Windows security prompt. Microsoft Store packages, when configured, are submitted separately through Partner Center.
 "@
     $request = Join-Path $assetsRoot ('.release-create-' + [Guid]::NewGuid().ToString('N') + '.json')
-    @{ tag_name = $tag; target_commitish = $ExpectedRevision; name = "CloudBay $($source.version)"; body = $notes; draft = $true; prerelease = $false; generate_release_notes = $true } | ConvertTo-Json | Set-Content -LiteralPath $request -Encoding utf8NoBOM
+    @{ tag_name = $tag; target_commitish = $ExpectedRevision; name = "CloudInlet $($source.version)"; body = $notes; draft = $true; prerelease = $false; generate_release_notes = $true } | ConvertTo-Json | Set-Content -LiteralPath $request -Encoding utf8NoBOM
     try {
         # Creation returns the authoritative release ID. A newly created draft
         # may not appear immediately in tag/list lookups on the hosted runner.

@@ -2,7 +2,7 @@ param([switch]$Watch)
 $ErrorActionPreference = 'Stop'
 $repository = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $liveRoot = [IO.Path]::GetFullPath((Join-Path $repository 'artifacts\live'))
-$buildRoot = [IO.Path]::GetFullPath((Join-Path $repository 'CloudBay\bin'))
+$buildRoot = [IO.Path]::GetFullPath((Join-Path $repository 'CloudInlet\bin'))
 $markerPath = Join-Path $liveRoot 'build-ready.json'
 $appFolder = [IO.Path]::GetFullPath((Join-Path $liveRoot 'App'))
 $previousFolder = [IO.Path]::GetFullPath((Join-Path $liveRoot 'Previous'))
@@ -106,8 +106,8 @@ function Stop-FailedPreview([Diagnostics.Process]$Preview, [string]$Executable) 
 function Refresh-LiveApp {
     $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
     $source = [IO.Path]::GetFullPath([string]$marker.sourcePath)
-    if (!$source.StartsWith($buildRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Live preview requires a successful local CloudBay build.' }
-    if (!(Test-Path -LiteralPath (Join-Path $source 'CloudBay.exe'))) { throw 'The successful build has no executable.' }
+    if (!$source.StartsWith($buildRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Live preview requires a successful local CloudInlet build.' }
+    if (!(Test-Path -LiteralPath (Join-Path $source 'CloudInlet.exe'))) { throw 'The successful build has no executable.' }
     $sourceAncestor = $source
     while ($sourceAncestor) {
         if ((Get-Item -LiteralPath $sourceAncestor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'The build path is linked.' }
@@ -131,18 +131,18 @@ function Refresh-LiveApp {
         Remove-Item -LiteralPath $checkedPrevious -Recurse -Force
     }
 
-    $executable = Join-Path $appFolder 'CloudBay.exe'
+    $executable = Join-Path $appFolder 'CloudInlet.exe'
     $checkedApp = Assert-LivePath $appFolder
     if (Test-Path -LiteralPath $executable) {
         if (Get-ChildItem -LiteralPath $checkedApp -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) {
             throw 'The current development output contains a linked item and was retained.'
         }
-        $running = @(Get-Process CloudBay -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $executable })
+        $running = @(Get-Process CloudInlet -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $executable })
         if ($running.Count) {
             $shutdown = Start-Process -FilePath $executable -ArgumentList '--ui-live', '--shutdown' -WindowStyle Hidden -PassThru
             if (!$shutdown.WaitForExit(10000)) { throw 'The development shutdown request did not finish.' }
             foreach ($process in $running) {
-                if (!$process.WaitForExit(30000)) { throw 'CloudBay is still preparing its files. The current preview was retained.' }
+                if (!$process.WaitForExit(30000)) { throw 'CloudInlet is still preparing its files. The current preview was retained.' }
             }
         }
         Move-Item -LiteralPath $checkedApp -Destination $checkedPrevious
@@ -152,19 +152,19 @@ function Refresh-LiveApp {
     try {
         Move-Item -LiteralPath $checkedStaging -Destination $checkedApp
         $launchedUtc = [DateTimeOffset]::UtcNow
-        $preview = Start-Process -FilePath (Join-Path $appFolder 'CloudBay.exe') -ArgumentList '--ui-live' -WorkingDirectory $repository -PassThru
+        $preview = Start-Process -FilePath (Join-Path $appFolder 'CloudInlet.exe') -ArgumentList '--ui-live' -WorkingDirectory $repository -PassThru
         Wait-PreviewReady $preview $launchedUtc
     }
     catch {
         $refreshError = $_
-        if ($null -ne $preview) { Stop-FailedPreview $preview (Join-Path $appFolder 'CloudBay.exe') }
+        if ($null -ne $preview) { Stop-FailedPreview $preview (Join-Path $appFolder 'CloudInlet.exe') }
         if (Test-Path -LiteralPath $checkedPrevious) {
             if (Test-Path -LiteralPath $checkedApp) {
                 $failedFolder = Assert-LivePath (Join-Path $liveRoot ('.failed-' + [Guid]::NewGuid().ToString('N')))
                 Move-Item -LiteralPath $checkedApp -Destination $failedFolder
             }
             Move-Item -LiteralPath $checkedPrevious -Destination $checkedApp
-            Start-Process -FilePath (Join-Path $appFolder 'CloudBay.exe') -ArgumentList '--ui-live' -WorkingDirectory $repository | Out-Null
+            Start-Process -FilePath (Join-Path $appFolder 'CloudInlet.exe') -ArgumentList '--ui-live' -WorkingDirectory $repository | Out-Null
         }
         throw $refreshError
     }

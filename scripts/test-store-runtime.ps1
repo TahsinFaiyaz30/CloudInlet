@@ -13,7 +13,7 @@ foreach ($candidate in @($packagePath, $outputRoot)) {
 if (!(Test-Path -LiteralPath $packagePath -PathType Leaf) -or [IO.Path]::GetExtension($packagePath) -cne '.msix') { throw 'Provide the local validation MSIX package.' }
 $developerMode = Get-ItemProperty -LiteralPath 'HKLM:/SOFTWARE/Microsoft/Windows/CurrentVersion/AppModelUnlock' -ErrorAction SilentlyContinue
 if ($developerMode.AllowDevelopmentWithoutDevLicense -ne 1) { throw 'Existing Windows Developer Mode is required for unsigned development registration. This test does not change Developer Mode or certificate trust.' }
-if (Get-AppxPackage -Name 'CloudBay.LocalValidation') { throw 'A local CloudBay validation package is already registered. This test will not replace an existing package.' }
+if (Get-AppxPackage -Name 'CloudInlet.LocalValidation') { throw 'A local CloudInlet validation package is already registered. This test will not replace an existing package.' }
 $workspace = Join-Path $outputRoot ([Guid]::NewGuid().ToString('N'))
 $payload = Join-Path $workspace 'Payload'
 New-Item -ItemType Directory -Path $payload -Force | Out-Null
@@ -22,14 +22,14 @@ if (Get-ChildItem -LiteralPath $payload -Recurse -Force | Where-Object { $_.Attr
 [xml]$manifest = Get-Content -LiteralPath (Join-Path $payload 'AppxManifest.xml') -Raw
 $identity = $manifest.DocumentElement.SelectSingleNode("*[local-name()='Identity']")
 $applications = @($manifest.DocumentElement.SelectNodes("*[local-name()='Applications']/*[local-name()='Application']"))
-if (!$identity -or $identity.GetAttribute('Name') -cne 'CloudBay.LocalValidation' -or $identity.GetAttribute('Publisher') -cne 'CN=CloudBay Local Validation' -or $applications.Count -ne 1 -or $applications[0].GetAttribute('Id') -cne 'CloudBay' -or $applications[0].GetAttribute('Executable') -cne 'CloudBay.exe') { throw 'Only the separate CloudBay.LocalValidation identity may be registered by this test.' }
+if (!$identity -or $identity.GetAttribute('Name') -cne 'CloudInlet.LocalValidation' -or $identity.GetAttribute('Publisher') -cne 'CN=CloudInlet Local Validation' -or $applications.Count -ne 1 -or $applications[0].GetAttribute('Id') -cne 'CloudInlet' -or $applications[0].GetAttribute('Executable') -cne 'CloudInlet.exe') { throw 'Only the separate CloudInlet.LocalValidation identity may be registered by this test.' }
 $expectedVersion = ([Version]$identity.GetAttribute('Version')).ToString(3)
-if ([Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $payload 'CloudBay.exe')).ProductVersion.Split('+')[0] -cne $expectedVersion) { throw 'The Store test payload version does not match its manifest.' }
-if (!('CloudBay.StoreRuntimeTests.Activation' -as [type])) {
+if ([Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $payload 'CloudInlet.exe')).ProductVersion.Split('+')[0] -cne $expectedVersion) { throw 'The Store test payload version does not match its manifest.' }
+if (!('CloudInlet.StoreRuntimeTests.Activation' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
-namespace CloudBay.StoreRuntimeTests {
+namespace CloudInlet.StoreRuntimeTests {
     [ComImport, Guid("2e941141-7f97-4756-ba1d-9decde894a3d"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     interface IApplicationActivationManager {
         [PreserveSig] int ActivateApplication([MarshalAs(UnmanagedType.LPWStr)] string id,
@@ -75,19 +75,19 @@ function Get-ClientStateSnapshot {
 $before = Get-ClientStateSnapshot
 try {
     Add-AppxPackage -Register (Join-Path $payload 'AppxManifest.xml') -ErrorAction Stop
-    $registered = Get-AppxPackage -Name 'CloudBay.LocalValidation'
-    if (!$registered -or $registered.Publisher -cne 'CN=CloudBay Local Validation' -or !$registered.InstallLocation.Equals($payload, [StringComparison]::OrdinalIgnoreCase)) { throw 'The newly registered test package does not match its isolated payload.' }
-    $aumid = $registered.PackageFamilyName + '!CloudBay'
+    $registered = Get-AppxPackage -Name 'CloudInlet.LocalValidation'
+    if (!$registered -or $registered.Publisher -cne 'CN=CloudInlet Local Validation' -or !$registered.InstallLocation.Equals($payload, [StringComparison]::OrdinalIgnoreCase)) { throw 'The newly registered test package does not match its isolated payload.' }
+    $aumid = $registered.PackageFamilyName + '!CloudInlet'
     $resultDirectory = Join-Path $workspace 'Result'
     New-Item -ItemType Directory -Path $resultDirectory | Out-Null
     $arguments = '--ui-smoke --store-runtime-smoke "--validation-output=' + $resultDirectory + '"'
-    $processId = [CloudBay.StoreRuntimeTests.Activation]::Launch($aumid, $arguments)
+    $processId = [CloudInlet.StoreRuntimeTests.Activation]::Launch($aumid, $arguments)
     $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
     if ($process) {
         $null = $process.Handle # Retain the process handle so exit checks cannot follow a reused PID.
         if (!$process.HasExited) {
             $activatedPath = $process.Path
-            if ($activatedPath -and !$activatedPath.Equals((Join-Path $payload 'CloudBay.exe'), [StringComparison]::OrdinalIgnoreCase)) { throw 'The Store validation activation returned an unexpected executable.' }
+            if ($activatedPath -and !$activatedPath.Equals((Join-Path $payload 'CloudInlet.exe'), [StringComparison]::OrdinalIgnoreCase)) { throw 'The Store validation activation returned an unexpected executable.' }
         }
     }
     $deadline = [DateTime]::UtcNow.AddSeconds(60)
@@ -105,22 +105,22 @@ try {
     }
     $result = Get-Content -LiteralPath $completion -Raw | ConvertFrom-Json
     if ($result.notificationRegistration -ne $true) { throw 'The packaged notification registration was not confirmed.' }
-    if ($result.version -cne $expectedVersion -or $result.packageName -cne 'CloudBay.LocalValidation' -or $result.packageFamilyName -cne $registered.PackageFamilyName -or $result.installerKind -cne 'Store' -or $result.startupTaskId -cne 'CloudBayStartup') { throw 'The packaged runtime identity or startup-task probe returned unexpected results.' }
+    if ($result.version -cne $expectedVersion -or $result.packageName -cne 'CloudInlet.LocalValidation' -or $result.packageFamilyName -cne $registered.PackageFamilyName -or $result.installerKind -cne 'Store' -or $result.startupTaskId -cne 'CloudBayStartup') { throw 'The packaged runtime identity or startup-task probe returned unexpected results.' }
     if ($process -and !$process.WaitForExit(10000)) { throw 'The isolated Store runtime process did not finish gracefully.' }
     if ($process -and $process.ExitCode -ne 0) { throw "The isolated Store runtime process returned exit code $($process.ExitCode)." }
     Write-Output "Store runtime validation passed: $completion"
 } finally {
     if ($processId) {
-        [ordered]@{ processId=$processId; packageName='CloudBay.LocalValidation'; processObserved=[bool]$process; exitCode=$(if ($process -and $process.HasExited) { $process.ExitCode } else { $null }); deadlineSeconds=60 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $workspace 'activation-validation.json') -Encoding utf8NoBOM
+        [ordered]@{ processId=$processId; packageName='CloudInlet.LocalValidation'; processObserved=[bool]$process; exitCode=$(if ($process -and $process.HasExited) { $process.ExitCode } else { $null }); deadlineSeconds=60 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $workspace 'activation-validation.json') -Encoding utf8NoBOM
     }
     # Remove only this newly registered development identity at its exact expected payload path.
-    $current = Get-AppxPackage -Name 'CloudBay.LocalValidation'
-    if ($current -and $current.Publisher -ceq 'CN=CloudBay Local Validation' -and $current.InstallLocation.Equals($payload, [StringComparison]::OrdinalIgnoreCase)) {
+    $current = Get-AppxPackage -Name 'CloudInlet.LocalValidation'
+    if ($current -and $current.Publisher -ceq 'CN=CloudInlet Local Validation' -and $current.InstallLocation.Equals($payload, [StringComparison]::OrdinalIgnoreCase)) {
         Remove-AppxPackage -Package $current.PackageFullName -ErrorAction Stop
     }
-    if (Get-AppxPackage -Name 'CloudBay.LocalValidation') { throw 'The isolated Store test package is still registered. Inspect its registration before retrying.' }
+    if (Get-AppxPackage -Name 'CloudInlet.LocalValidation') { throw 'The isolated Store test package is still registered. Inspect its registration before retrying.' }
     $after = Get-ClientStateSnapshot
     if ($before -cne $after) { throw 'Account settings, credential bytes, or Windows folder mappings changed during Store validation. Investigate before accepting the test.' }
-    [ordered]@{ packageName='CloudBay.LocalValidation'; registrationRemoved=$true; certificateTrustChanged=$false; developerModeChanged=$false; clientStatePreserved=$true } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $workspace 'cleanup-validation.json') -Encoding utf8NoBOM
+    [ordered]@{ packageName='CloudInlet.LocalValidation'; registrationRemoved=$true; certificateTrustChanged=$false; developerModeChanged=$false; clientStatePreserved=$true } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $workspace 'cleanup-validation.json') -Encoding utf8NoBOM
     if ($process) { $process.Dispose() }
 }

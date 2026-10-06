@@ -2,9 +2,9 @@ param(
     [Parameter(Mandatory)][string]$AppFolder,
     [Parameter(Mandatory)][string]$Version,
     [Parameter(Mandatory)][string]$OutputDirectory,
-    [string]$PackageIdentityName = $env:CLOUDBAY_STORE_IDENTITY_NAME,
-    [string]$Publisher = $env:CLOUDBAY_STORE_PUBLISHER,
-    [string]$PublisherDisplayName = $env:CLOUDBAY_STORE_PUBLISHER_DISPLAY_NAME,
+    [string]$PackageIdentityName = $(if ($env:CLOUDINLET_STORE_IDENTITY_NAME) { $env:CLOUDINLET_STORE_IDENTITY_NAME } else { $env:CLOUDBAY_STORE_IDENTITY_NAME }),
+    [string]$Publisher = $(if ($env:CLOUDINLET_STORE_PUBLISHER) { $env:CLOUDINLET_STORE_PUBLISHER } else { $env:CLOUDBAY_STORE_PUBLISHER }),
+    [string]$PublisherDisplayName = $(if ($env:CLOUDINLET_STORE_PUBLISHER_DISPLAY_NAME) { $env:CLOUDINLET_STORE_PUBLISHER_DISPLAY_NAME } else { $env:CLOUDBAY_STORE_PUBLISHER_DISPLAY_NAME }),
     [string]$SourceRevision,
     [string]$MakeAppxPath,
     [string]$MakePriPath,
@@ -17,24 +17,24 @@ $versionValue = [Version]$Version
 if ($versionValue.Major -gt 255 -or $versionValue.Minor -gt 255 -or $versionValue.Build -gt 65535) { throw 'Version exceeds the common MSI/MSIX version limits.' }
 if ($LocalValidationIdentity) {
     if ($PackageIdentityName -or $Publisher -or $PublisherDisplayName) { throw 'Local validation identity cannot be combined with production Store identity values.' }
-    $PackageIdentityName = 'CloudBay.LocalValidation'
-    $Publisher = 'CN=CloudBay Local Validation'
-    $PublisherDisplayName = 'CloudBay Local Validation'
+    $PackageIdentityName = 'CloudInlet.LocalValidation'
+    $Publisher = 'CN=CloudInlet Local Validation'
+    $PublisherDisplayName = 'CloudInlet Local Validation'
 } elseif (!$PackageIdentityName -or !$Publisher -or !$PublisherDisplayName) {
-    throw 'Configure CLOUDBAY_STORE_IDENTITY_NAME, CLOUDBAY_STORE_PUBLISHER, and CLOUDBAY_STORE_PUBLISHER_DISPLAY_NAME from Partner Center. -LocalValidationIdentity produces a separate test package only.'
+    throw 'Configure CLOUDINLET_STORE_IDENTITY_NAME, CLOUDINLET_STORE_PUBLISHER, and CLOUDINLET_STORE_PUBLISHER_DISPLAY_NAME from Partner Center. -LocalValidationIdentity produces a separate test package only.'
 }
 if ($PackageIdentityName -notmatch '^[A-Za-z0-9][A-Za-z0-9.-]{2,49}$' -or $Publisher -notmatch '^CN=' -or $Publisher.Contains([char]0) -or $PublisherDisplayName.Length -gt 256) { throw 'Invalid Partner Center package identity.' }
 if (!$SourceRevision) { $SourceRevision = (& git -C $repository rev-parse HEAD).Trim() }
 if ($SourceRevision -notmatch '^[a-fA-F0-9]{40}$') { throw 'Invalid source revision.' }
 $app = [IO.Path]::GetFullPath($AppFolder)
 $output = [IO.Path]::GetFullPath($OutputDirectory)
-if (!(Test-Path -LiteralPath (Join-Path $app 'CloudBay.exe') -PathType Leaf)) { throw 'Published CloudBay.exe is missing.' }
-$applicationVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $app 'CloudBay.exe')).ProductVersion.Split('+')[0]
+if (!(Test-Path -LiteralPath (Join-Path $app 'CloudInlet.exe') -PathType Leaf)) { throw 'Published CloudInlet.exe is missing.' }
+$applicationVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $app 'CloudInlet.exe')).ProductVersion.Split('+')[0]
 if ($applicationVersion -cne $Version) { throw 'The published application version does not match the Store package version.' }
-$corePath = Join-Path $app 'CloudBay.Core.dll'
-if (!(Test-Path -LiteralPath $corePath -PathType Leaf)) { throw 'The Store payload is missing CloudBay.Core.dll.' }
+$corePath = Join-Path $app 'CloudInlet.Core.dll'
+if (!(Test-Path -LiteralPath $corePath -PathType Leaf)) { throw 'The Store payload is missing CloudInlet.Core.dll.' }
 $coreAssembly = [Reflection.Assembly]::Load([IO.File]::ReadAllBytes($corePath))
-$buildInfo = $coreAssembly.GetType('CloudBay.Core.BuildInfo', $true)
+$buildInfo = $coreAssembly.GetType('CloudInlet.Core.BuildInfo', $true)
 if ($coreAssembly.GetName().Version.ToString(3) -cne $Version -or $buildInfo.GetField('Flavor').GetRawConstantValue() -cne 'Release') { throw 'Microsoft Store packaging requires the compiled matching Release build, regardless of distribution metadata.' }
 $distributionPath = Join-Path $app 'distribution.json'
 if (Test-Path -LiteralPath $distributionPath) {
@@ -57,7 +57,7 @@ if (!$MakeAppxPath) {
 if (!$MakeAppxPath -or !(Test-Path -LiteralPath $MakeAppxPath -PathType Leaf)) { throw 'Install a Windows 10/11 SDK containing x64 MakeAppx.exe.' }
 if (!$MakePriPath) { $MakePriPath = Join-Path ([IO.Path]::GetDirectoryName($MakeAppxPath)) 'makepri.exe' }
 if (!(Test-Path -LiteralPath $MakePriPath -PathType Leaf)) { throw 'Install a Windows 10/11 SDK containing x64 MakePri.exe alongside MakeAppx.exe.' }
-if (!(Test-Path -LiteralPath (Join-Path $app 'CloudBay.pri') -PathType Leaf)) { throw 'The published application is missing its compiled CloudBay.pri resource index.' }
+if (!(Test-Path -LiteralPath (Join-Path $app 'CloudInlet.pri') -PathType Leaf)) { throw 'The published application is missing its compiled CloudInlet.pri resource index.' }
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 $staging = Join-Path $output ('.store-' + [Guid]::NewGuid().ToString('N'))
 $payload = Join-Path $staging 'Payload'
@@ -69,7 +69,7 @@ try {
     $assetRoot = Join-Path $payload 'StoreAssets'
     New-Item -ItemType Directory -Path $assetRoot | Out-Null
     Add-Type -AssemblyName System.Drawing.Common
-    $sourceIcon = [Drawing.Icon]::new((Join-Path $payload 'Assets/CloudBay.ico'), 256, 256)
+    $sourceIcon = [Drawing.Icon]::new((Join-Path $payload 'Assets/CloudInlet.ico'), 256, 256)
     $bitmap = $sourceIcon.ToBitmap()
     try {
         foreach ($size in @(44, 50, 150)) {
@@ -98,22 +98,22 @@ try {
  IgnorableNamespaces="uap desktop desktop6 com rescap">
  <Identity Name="$identityXml" Publisher="$publisherXml" Version="$Version.0" ProcessorArchitecture="x64" />
  <Properties>
-  <DisplayName>CloudBay</DisplayName><PublisherDisplayName>$displayXml</PublisherDisplayName><Logo>StoreAssets\Logo50.png</Logo>
+  <DisplayName>CloudInlet</DisplayName><PublisherDisplayName>$displayXml</PublisherDisplayName><Logo>StoreAssets\Logo50.png</Logo>
   <desktop6:RegistryWriteVirtualization>disabled</desktop6:RegistryWriteVirtualization>
   <desktop6:FileSystemWriteVirtualization>disabled</desktop6:FileSystemWriteVirtualization>
  </Properties>
  <Resources><Resource Language="en-US" /></Resources>
  <Dependencies><TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" /></Dependencies>
- <Applications><Application Id="CloudBay" Executable="CloudBay.exe" EntryPoint="Windows.FullTrustApplication">
-  <uap:VisualElements DisplayName="CloudBay" Description="Native Windows backup and Files On-Demand for Backblaze B2." BackgroundColor="transparent" Square150x150Logo="StoreAssets\Logo150.png" Square44x44Logo="StoreAssets\Logo44.png" />
-  <Extensions><desktop:Extension Category="windows.startupTask" Executable="CloudBay.exe" EntryPoint="Windows.FullTrustApplication">
-   <desktop:StartupTask TaskId="CloudBayStartup" Enabled="false" DisplayName="CloudBay" />
+ <Applications><Application Id="CloudInlet" Executable="CloudInlet.exe" EntryPoint="Windows.FullTrustApplication">
+  <uap:VisualElements DisplayName="CloudInlet" Description="Native Windows backup and Files On-Demand for Backblaze B2." BackgroundColor="transparent" Square150x150Logo="StoreAssets\Logo150.png" Square44x44Logo="StoreAssets\Logo44.png" />
+  <Extensions><desktop:Extension Category="windows.startupTask" Executable="CloudInlet.exe" EntryPoint="Windows.FullTrustApplication">
+   <desktop:StartupTask TaskId="CloudBayStartup" Enabled="false" DisplayName="CloudInlet" />
   </desktop:Extension>
   <desktop:Extension Category="windows.toastNotificationActivation">
    <desktop:ToastNotificationActivation ToastActivatorCLSID="$notificationActivatorId" />
   </desktop:Extension>
   <com:Extension Category="windows.comServer"><com:ComServer>
-   <com:ExeServer Executable="CloudBay.exe" DisplayName="CloudBay" Arguments="----AppNotificationActivated:">
+   <com:ExeServer Executable="CloudInlet.exe" DisplayName="CloudInlet" Arguments="----AppNotificationActivated:">
     <com:Class Id="$notificationActivatorId" />
    </com:ExeServer>
   </com:ComServer></com:Extension>
@@ -128,7 +128,7 @@ try {
     # its already-merged WinUI framework resources from every adjacent DLL PRI.
     $priRoot = Join-Path $staging 'PriInputs'
     New-Item -ItemType Directory -Path $priRoot | Out-Null
-    Copy-Item -LiteralPath (Join-Path $payload 'CloudBay.pri') -Destination $priRoot
+    Copy-Item -LiteralPath (Join-Path $payload 'CloudInlet.pri') -Destination $priRoot
     Copy-Item -LiteralPath $assetRoot -Destination $priRoot -Recurse
     $priConfig = Join-Path $staging 'priconfig.xml'
     $priLog = Join-Path $output 'makepri.log'
@@ -146,7 +146,7 @@ try {
     $primaryMaps = @($resourceIndex.SelectNodes('/PriInfo/ResourceMap[@primary="true"]'))
     if ($primaryMaps.Count -ne 1 -or $primaryMaps[0].GetAttribute('name') -cne $PackageIdentityName -or !$primaryMaps[0].SelectSingleNode('ResourceMapSubtree[@name="Files"]/NamedResource[@name="App.xbf"]')) { throw 'The packaged primary resource map does not match its manifest identity or lacks compiled application XAML.' }
     $suffix = if ($LocalValidationIdentity) { 'local-validation' } else { 'store' }
-    $baseName = "CloudBay-$Version-win-x64-release-$suffix"
+    $baseName = "CloudInlet-$Version-win-x64-release-$suffix"
     $msix = Join-Path $output "$baseName.msix"
     if (Test-Path -LiteralPath $msix) { throw 'Store output already exists; use a fresh output directory.' }
     $buildLog = Join-Path $output 'makeappx.log'

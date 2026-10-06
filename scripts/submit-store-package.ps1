@@ -1,16 +1,17 @@
 param(
     [Parameter(Mandatory)][string]$PackagePath,
-    [string]$ApplicationId = $env:CLOUDBAY_STORE_APPLICATION_ID,
-    [string]$TenantId = $env:CLOUDBAY_STORE_TENANT_ID,
-    [string]$ClientId = $env:CLOUDBAY_STORE_CLIENT_ID,
-    [string]$PackageIdentityName = $env:CLOUDBAY_STORE_IDENTITY_NAME,
-    [string]$Publisher = $env:CLOUDBAY_STORE_PUBLISHER,
+    [string]$ApplicationId = $(if ($env:CLOUDINLET_STORE_APPLICATION_ID) { $env:CLOUDINLET_STORE_APPLICATION_ID } else { $env:CLOUDBAY_STORE_APPLICATION_ID }),
+    [string]$TenantId = $(if ($env:CLOUDINLET_STORE_TENANT_ID) { $env:CLOUDINLET_STORE_TENANT_ID } else { $env:CLOUDBAY_STORE_TENANT_ID }),
+    [string]$ClientId = $(if ($env:CLOUDINLET_STORE_CLIENT_ID) { $env:CLOUDINLET_STORE_CLIENT_ID } else { $env:CLOUDBAY_STORE_CLIENT_ID }),
+    [string]$PackageIdentityName = $(if ($env:CLOUDINLET_STORE_IDENTITY_NAME) { $env:CLOUDINLET_STORE_IDENTITY_NAME } else { $env:CLOUDBAY_STORE_IDENTITY_NAME }),
+    [string]$Publisher = $(if ($env:CLOUDINLET_STORE_PUBLISHER) { $env:CLOUDINLET_STORE_PUBLISHER } else { $env:CLOUDBAY_STORE_PUBLISHER }),
     [ValidateSet('Manual', 'Immediate')][string]$PublishMode = 'Manual',
     [switch]$CommitSubmission,
     [Net.Http.HttpMessageHandler]$HttpHandler
 )
 $ErrorActionPreference = 'Stop'
-if ($TenantId -notmatch '^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$' -or $ClientId -notmatch '^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$' -or $ApplicationId -notmatch '^[A-Za-z0-9]{8,32}$' -or !$env:CLOUDBAY_STORE_CLIENT_SECRET -or !$PackageIdentityName -or !$Publisher) { throw 'Configure the reserved Partner Center package identity/publisher, application ID, Entra tenant/client IDs, and CLOUDBAY_STORE_CLIENT_SECRET. Keep the secret in an environment secret, never a command argument.' }
+$storeClientSecret = if ($env:CLOUDINLET_STORE_CLIENT_SECRET) { $env:CLOUDINLET_STORE_CLIENT_SECRET } else { $env:CLOUDBAY_STORE_CLIENT_SECRET }
+if ($TenantId -notmatch '^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$' -or $ClientId -notmatch '^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$' -or $ApplicationId -notmatch '^[A-Za-z0-9]{8,32}$' -or !$storeClientSecret -or !$PackageIdentityName -or !$Publisher) { throw 'Configure the reserved Partner Center package identity/publisher, application ID, Entra tenant/client IDs, and CLOUDINLET_STORE_CLIENT_SECRET. Keep the secret in an environment secret, never a command argument.' }
 $package = [IO.Path]::GetFullPath($PackagePath)
 if (!(Test-Path -LiteralPath $package -PathType Leaf) -or [IO.Path]::GetExtension($package) -cne '.msix' -or (Get-Item -LiteralPath $package).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Provide a regular production .msix package.' }
 if ([IO.Path]::GetFileName($package).Contains('local-validation')) { throw 'Local validation identities cannot be submitted to Microsoft Store.' }
@@ -26,7 +27,7 @@ try {
     try {
         $manifest = [Xml.XmlDocument]::new(); $manifest.XmlResolver = $null; $manifest.Load($reader)
         $identity = $manifest.DocumentElement.SelectSingleNode("*[local-name()='Identity']")
-        if (!$identity -or $identity.GetAttribute('Name') -cne $PackageIdentityName -or $identity.GetAttribute('Publisher') -cne $Publisher -or $identity.GetAttribute('Name') -ceq 'CloudBay.LocalValidation' -or $identity.GetAttribute('ProcessorArchitecture') -cne 'x64') { throw 'Provide the production Store package matching the reserved Partner Center identity and publisher.' }
+        if (!$identity -or $identity.GetAttribute('Name') -cne $PackageIdentityName -or $identity.GetAttribute('Publisher') -cne $Publisher -or $identity.GetAttribute('Name') -ceq 'CloudInlet.LocalValidation' -or $identity.GetAttribute('ProcessorArchitecture') -cne 'x64') { throw 'Provide the production Store package matching the reserved Partner Center identity and publisher.' }
     } finally { $reader.Dispose(); $manifestStream.Dispose() }
 } finally { $archiveInspection.Dispose() }
 $apiBase = 'https://manage.devcenter.microsoft.com/v1.0/my/applications/' + $ApplicationId
@@ -63,7 +64,7 @@ function Invoke-StoreApi([string]$Method, [string]$Url, $Body = $null) {
 }
 try {
     $form = [Collections.Generic.Dictionary[string, string]]::new()
-    $form.Add('grant_type', 'client_credentials'); $form.Add('client_id', $ClientId); $form.Add('client_secret', $env:CLOUDBAY_STORE_CLIENT_SECRET); $form.Add('resource', 'https://manage.devcenter.microsoft.com')
+    $form.Add('grant_type', 'client_credentials'); $form.Add('client_id', $ClientId); $form.Add('client_secret', $storeClientSecret); $form.Add('resource', 'https://manage.devcenter.microsoft.com')
     $content = [Net.Http.FormUrlEncodedContent]::new($form)
     try {
         $response = $client.PostAsync("https://login.microsoftonline.com/$TenantId/oauth2/token", $content).GetAwaiter().GetResult()

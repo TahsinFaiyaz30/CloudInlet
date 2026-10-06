@@ -31,7 +31,7 @@ if ($Commit) {
 if ($Commit) {
     & git -C $root add -- version.json
     if ($LASTEXITCODE -ne 0) { throw 'Could not stage version.json.' }
-    & git -C $root commit -m "Prepare CloudBay $Version release" -m "Advance the central version from $value to $Version. CI validates the release before publishing its immutable tag and matching Debug and Release installer assets."
+    & git -C $root commit -m "Prepare CloudInlet $Version release" -m "Advance the central version from $value to $Version. CI validates the release before publishing its immutable tag and matching Debug and Release installer assets."
     if ($LASTEXITCODE -ne 0) { throw 'Could not commit the version bump.' }
     if ($Push) { & git -C $root push origin main; if ($LASTEXITCODE -ne 0) { throw 'Could not push the version bump.' } }
 }

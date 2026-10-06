@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: cloudbay-release
+  group: cloudinlet-release
   cancel-in-progress: false
 
 jobs:
@@ -96,15 +96,15 @@ jobs:
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
           RELEASE_REVISION: ${{ needs.prepare.outputs.revision }}
           RELEASE_CONFIGURATION: ${{ matrix.configuration }}
-          CLOUDBAY_SIGNING_PFX_BASE64: ${{ secrets.CLOUDBAY_SIGNING_PFX_BASE64 }}
-          CLOUDBAY_SIGNING_PFX_PASSWORD: ${{ secrets.CLOUDBAY_SIGNING_PFX_PASSWORD }}
+          CLOUDINLET_SIGNING_PFX_BASE64: ${{ secrets.CLOUDINLET_SIGNING_PFX_BASE64 }}
+          CLOUDINLET_SIGNING_PFX_PASSWORD: ${{ secrets.CLOUDINLET_SIGNING_PFX_PASSWORD || secrets.CLOUDBAY_SIGNING_PFX_PASSWORD }}
         run: |
           .\scripts\build-release-artifacts.ps1 -Version $env:RELEASE_VERSION -SourceRevision $env:RELEASE_REVISION -Configuration $env:RELEASE_CONFIGURATION -OutputDirectory artifacts/packages -HostedTests
       - name: Retain tests and installer build evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: CloudBay-release-evidence-${{ matrix.configuration }}
+          name: CloudInlet-release-evidence-${{ matrix.configuration }}
           path: |
             artifacts/release-build/${{ matrix.configuration }}/Tests/*.trx
             artifacts/packages/*validation.json
@@ -112,14 +112,14 @@ jobs:
       - name: Retain release payload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: CloudBay-payload-${{ matrix.configuration }}
+          name: CloudInlet-payload-${{ matrix.configuration }}
           path: artifacts/packages/*
           if-no-files-found: error
       - name: Retain Release app for Store packaging
         if: matrix.configuration == 'Release'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: CloudBay-store-source
+          name: CloudInlet-store-source
           path: artifacts/release-build/Release/App/*
           if-no-files-found: error
 
@@ -127,9 +127,9 @@ jobs:
     needs: [prepare, installers]
     if: >-
       needs.prepare.outputs.build == 'true' &&
-      vars.CLOUDBAY_STORE_IDENTITY_NAME != '' &&
-      vars.CLOUDBAY_STORE_PUBLISHER != '' &&
-      vars.CLOUDBAY_STORE_PUBLISHER_DISPLAY_NAME != ''
+      (vars.CLOUDINLET_STORE_IDENTITY_NAME || vars.CLOUDBAY_STORE_IDENTITY_NAME) != '' &&
+      (vars.CLOUDINLET_STORE_PUBLISHER || vars.CLOUDBAY_STORE_PUBLISHER) != '' &&
+      (vars.CLOUDINLET_STORE_PUBLISHER_DISPLAY_NAME || vars.CLOUDBAY_STORE_PUBLISHER_DISPLAY_NAME) != ''
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -137,20 +137,20 @@ jobs:
           ref: ${{ needs.prepare.outputs.revision }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: CloudBay-store-source
+          name: CloudInlet-store-source
           path: artifacts/store-source
       - name: Build Partner Center MSIX and MSIXUPLOAD
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
           RELEASE_REVISION: ${{ needs.prepare.outputs.revision }}
-          CLOUDBAY_STORE_IDENTITY_NAME: ${{ vars.CLOUDBAY_STORE_IDENTITY_NAME }}
-          CLOUDBAY_STORE_PUBLISHER: ${{ vars.CLOUDBAY_STORE_PUBLISHER }}
-          CLOUDBAY_STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.CLOUDBAY_STORE_PUBLISHER_DISPLAY_NAME }}
+          CLOUDINLET_STORE_IDENTITY_NAME: ${{ vars.CLOUDINLET_STORE_IDENTITY_NAME || vars.CLOUDBAY_STORE_IDENTITY_NAME }}
+          CLOUDINLET_STORE_PUBLISHER: ${{ vars.CLOUDINLET_STORE_PUBLISHER || vars.CLOUDBAY_STORE_PUBLISHER }}
+          CLOUDINLET_STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.CLOUDINLET_STORE_PUBLISHER_DISPLAY_NAME || vars.CLOUDBAY_STORE_PUBLISHER_DISPLAY_NAME }}
         run: .\scripts\build-store-package.ps1 -AppFolder artifacts/store-source -Version $env:RELEASE_VERSION -SourceRevision $env:RELEASE_REVISION -OutputDirectory artifacts/store-packages
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: CloudBay-payload-Store
+          name: CloudInlet-payload-Store
           path: artifacts/store-packages/*
           if-no-files-found: error
 
@@ -171,7 +171,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: CloudBay-payload-*
+          pattern: CloudInlet-payload-*
           merge-multiple: true
           path: artifacts/release-assets
       - name: Create complete release validation record

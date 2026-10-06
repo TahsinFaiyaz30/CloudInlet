@@ -21,7 +21,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: cloudbay-microsoft-store
+  group: cloudinlet-microsoft-store
   cancel-in-progress: false
 
 jobs:
@@ -48,10 +48,10 @@ jobs:
           git checkout --detach $env:RELEASE_TAG
           if ($LASTEXITCODE -ne 0) { throw 'Could not select the released source.' }
           $version = .\scripts\get-release-version.ps1
-          $name = "CloudBay-$($version.version)-win-x64-release-portable.zip"
-          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern $name --pattern updates-v1.json --dir artifacts/store-download
+          $name = "CloudInlet-$($version.version)-win-x64-release-portable.zip"
+          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern $name --pattern updates-v2.json --dir artifacts/store-download
           if ($LASTEXITCODE -ne 0) { throw 'Could not download the released app.' }
-          $manifest = Get-Content artifacts/store-download/updates-v1.json -Raw | ConvertFrom-Json
+          $manifest = Get-Content artifacts/store-download/updates-v2.json -Raw | ConvertFrom-Json
           $asset = @($manifest.assets | Where-Object { $_.fileName -ceq $name -and $_.buildFlavor -ceq 'Release' -and $_.installerKind -ceq 'Portable' })
           $path = Join-Path artifacts/store-download $name
           if ($manifest.repository -cne $env:GITHUB_REPOSITORY -or $manifest.tag -cne $env:RELEASE_TAG -or $manifest.version -cne $version.version -or $asset.Count -ne 1 -or (Get-Item $path).Length -ne $asset[0].size -or (Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $asset[0].sha256) { throw 'Released app hash or identity validation failed.' }
@@ -63,13 +63,13 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.source.outputs.version }}
           RELEASE_REVISION: ${{ steps.source.outputs.revision }}
-          CLOUDBAY_STORE_IDENTITY_NAME: ${{ vars.CLOUDBAY_STORE_IDENTITY_NAME }}
-          CLOUDBAY_STORE_PUBLISHER: ${{ vars.CLOUDBAY_STORE_PUBLISHER }}
-          CLOUDBAY_STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.CLOUDBAY_STORE_PUBLISHER_DISPLAY_NAME }}
+          CLOUDINLET_STORE_IDENTITY_NAME: ${{ vars.CLOUDINLET_STORE_IDENTITY_NAME || vars.CLOUDBAY_STORE_IDENTITY_NAME }}
+          CLOUDINLET_STORE_PUBLISHER: ${{ vars.CLOUDINLET_STORE_PUBLISHER || vars.CLOUDBAY_STORE_PUBLISHER }}
+          CLOUDINLET_STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.CLOUDINLET_STORE_PUBLISHER_DISPLAY_NAME || vars.CLOUDBAY_STORE_PUBLISHER_DISPLAY_NAME }}
         run: .\scripts\build-store-package.ps1 -AppFolder artifacts/store-source -Version $env:RELEASE_VERSION -SourceRevision $env:RELEASE_REVISION -OutputDirectory artifacts/store-packages
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: CloudBay-Microsoft-Store
+          name: CloudInlet-Microsoft-Store
           path: artifacts/store-packages/*
           if-no-files-found: error
 
@@ -82,17 +82,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: CloudBay-Microsoft-Store
+          name: CloudInlet-Microsoft-Store
           path: artifacts/store-packages
       - name: Submit the package to Partner Center
         shell: pwsh
         env:
-          CLOUDBAY_STORE_APPLICATION_ID: ${{ vars.CLOUDBAY_STORE_APPLICATION_ID }}
-          CLOUDBAY_STORE_IDENTITY_NAME: ${{ vars.CLOUDBAY_STORE_IDENTITY_NAME }}
-          CLOUDBAY_STORE_PUBLISHER: ${{ vars.CLOUDBAY_STORE_PUBLISHER }}
-          CLOUDBAY_STORE_TENANT_ID: ${{ secrets.CLOUDBAY_STORE_TENANT_ID }}
-          CLOUDBAY_STORE_CLIENT_ID: ${{ secrets.CLOUDBAY_STORE_CLIENT_ID }}
-          CLOUDBAY_STORE_CLIENT_SECRET: ${{ secrets.CLOUDBAY_STORE_CLIENT_SECRET }}
+          CLOUDINLET_STORE_APPLICATION_ID: ${{ vars.CLOUDINLET_STORE_APPLICATION_ID || vars.CLOUDBAY_STORE_APPLICATION_ID }}
+          CLOUDINLET_STORE_IDENTITY_NAME: ${{ vars.CLOUDINLET_STORE_IDENTITY_NAME || vars.CLOUDBAY_STORE_IDENTITY_NAME }}
+          CLOUDINLET_STORE_PUBLISHER: ${{ vars.CLOUDINLET_STORE_PUBLISHER || vars.CLOUDBAY_STORE_PUBLISHER }}
+          CLOUDINLET_STORE_TENANT_ID: ${{ secrets.CLOUDINLET_STORE_TENANT_ID || secrets.CLOUDBAY_STORE_TENANT_ID }}
+          CLOUDINLET_STORE_CLIENT_ID: ${{ secrets.CLOUDINLET_STORE_CLIENT_ID || secrets.CLOUDBAY_STORE_CLIENT_ID }}
+          CLOUDINLET_STORE_CLIENT_SECRET: ${{ secrets.CLOUDINLET_STORE_CLIENT_SECRET || secrets.CLOUDBAY_STORE_CLIENT_SECRET }}
           STORE_PUBLISH_MODE: ${{ inputs.publishMode }}
         run: |
           $packages = @(Get-ChildItem -LiteralPath artifacts/store-packages -Filter '*.msix' -File)

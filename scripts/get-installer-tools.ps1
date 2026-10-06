@@ -38,10 +38,10 @@ if (!(Test-Path -LiteralPath $InnoCompiler)) {
 $probe = Join-Path $toolRoot ('version-probe-' + [Guid]::NewGuid().ToString('N') + '.iss')
 @'
 #if Ver != 0x06070300
-  #error CloudBay requires Inno Setup 6.7.3.
+  #error CloudInlet requires Inno Setup 6.7.3.
 #endif
 [Setup]
-AppName=CloudBay compiler version check
+AppName=CloudInlet compiler version check
 AppVersion=1.0.0
 CreateAppDir=no
 Output=no

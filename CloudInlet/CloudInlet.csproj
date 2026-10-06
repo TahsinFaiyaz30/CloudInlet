@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <RootNamespace>CloudInlet</RootNamespace>
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <PublishTrimmed>false</PublishTrimmed>
+    <ApplicationIcon>Assets\CloudInlet.ico</ApplicationIcon>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <Description>Native Windows backup and Files On-Demand for Backblaze B2.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\CloudInlet.Core\CloudInlet.Core.csproj" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260921001" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="CommunityToolkit.WinUI.Controls.SettingsControls" Version="8.2.251219" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Assets\CloudInlet.ico;Assets\CloudInlet-32.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+  <!-- The optional local watcher refreshes only from successfully built output.
+       Shipping builds have no watcher flag and do not start or restart an app. -->
+  <Target Name="PublishLiveRefreshMarker" AfterTargets="Build"
+          Condition="'$(CloudInletLiveRefresh)' == 'true' Or Exists('$(MSBuildProjectDirectory)\..\artifacts\live\watch.enabled')">
+    <PropertyGroup>
+      <CloudInletLiveDirectory>$(MSBuildProjectDirectory)\..\artifacts\live</CloudInletLiveDirectory>
+      <CloudInletLiveSource>$([System.String]::Copy('$(TargetDir)').Replace('\', '\\'))</CloudInletLiveSource>
+      <CloudInletLiveBuiltUtc>$([System.DateTime]::UtcNow.ToString('O'))</CloudInletLiveBuiltUtc>
+    </PropertyGroup>
+    <MakeDir Directories="$(CloudInletLiveDirectory)" />
+    <WriteLinesToFile File="$(CloudInletLiveDirectory)\build-ready.new.json" Overwrite="true" Encoding="UTF-8"
+                      Lines="{&quot;sourcePath&quot;:&quot;$(CloudInletLiveSource)&quot;,&quot;builtUtc&quot;:&quot;$(CloudInletLiveBuiltUtc)&quot;}" />
+    <Move SourceFiles="$(CloudInletLiveDirectory)\build-ready.new.json" DestinationFiles="$(CloudInletLiveDirectory)\build-ready.json" />
+  </Target>
+</Project>

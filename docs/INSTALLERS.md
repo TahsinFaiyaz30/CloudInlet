@@ -1,6 +1,6 @@
 # Windows installers and updates
 
-CloudBay ships per-user x64 installers for Windows 11. Each version has separate
+CloudInlet ships per-user x64 installers for Windows 11. Each version has separate
 Release and Debug EXE, MSI, and portable ZIP assets. `version.json` is the version
 source; installers accept stable `major.minor.patch` versions within MSI limits
 (major/minor up to 255, patch up to 65535).
@@ -13,8 +13,8 @@ extensions are pinned. No installer downloads the application at installation ti
 
 | Distribution | Default application directory | Startup value | Client settings |
 | --- | --- | --- | --- |
-| Release | `%LOCALAPPDATA%\Programs\CloudBay` | `CloudBay` | `%LOCALAPPDATA%\CloudBay\Client` |
-| Debug | `%LOCALAPPDATA%\Programs\CloudBay Debug` | `CloudBayDebug` | `%LOCALAPPDATA%\CloudBay\Debug\Client` |
+| Release | `%LOCALAPPDATA%\Programs\CloudInlet` | `CloudInlet` | `%LOCALAPPDATA%\CloudBay\Client` |
+| Debug | `%LOCALAPPDATA%\Programs\CloudInlet Debug` | `CloudInletDebug` | `%LOCALAPPDATA%\CloudBay\Debug\Client` |
 
 Debug has its own activation pipe, backup root, settings and credentials. EXE
 and MSI are alternative installers for a flavor. An installer refuses to replace
@@ -30,7 +30,7 @@ payload. Then run:
 
 ```powershell
 ./scripts/build-installer-helper.ps1 -AppFolder ./artifacts/release-build/Release/App
-# Sign application binaries, including CloudBay.SetupHelper.exe, here if configured.
+# Sign application binaries, including CloudInlet.SetupHelper.exe, here if configured.
 ./scripts/build-installers.ps1 `
   -AppFolder ./artifacts/release-build/Release/App `
   -Version 1.0.0 -Configuration Release `
@@ -51,7 +51,7 @@ installation. Automatic updates select a package matching that identity.
 
 ## Silent updates
 
-The updater copies `CloudBay.SetupHelper.exe` into its private update cache before
+The updater copies `CloudInlet.SetupHelper.exe` into its private update cache before
 starting it. The helper has no cloud credentials or network access. It validates
 the installed descriptor, registration, requesting process identity, update-cache
 ownership, package name, SHA-256 and size. It acknowledges readiness before the
@@ -81,7 +81,7 @@ identity, signing and submission configuration.
 ## Installer safety
 
 Installation rejects network paths, linked directory ancestors, the Windows
-directory and the private CloudBay settings directory. Silent EXE/MSI update
+directory and the private CloudInlet settings directory. Silent EXE/MSI update
 commands cannot be used as fresh installation commands. The installer asks the
 matching current-user activation pipe to quit, validates its process image, and
 waits for exit. It does not use a command interpreter, PowerShell custom actions,

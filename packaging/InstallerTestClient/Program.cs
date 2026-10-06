@@ -19,6 +19,7 @@ internal static class Program
         else if (arguments.Length == 2 && arguments[0] == "--serve")
         {
             var sid = WindowsIdentity.GetCurrent().User?.Value;
+            // Both apphost names share the original channel during an upgrade.
             using (var pipe = new NamedPipeServerStream("CloudBay.Client." + sid + ".Debug", PipeDirection.In))
             {
                 File.WriteAllText(arguments[1], "ready");

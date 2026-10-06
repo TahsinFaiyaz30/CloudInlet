@@ -1,6 +1,6 @@
 using System;
 using System.IO;
-using CloudBay.Packaging;
+using CloudInlet.Packaging;
 
 internal static class Program
 {

@@ -1,15 +1,15 @@
 <Project>
   <PropertyGroup>
-    <CloudBayVersionFile>$(MSBuildThisFileDirectory)version.json</CloudBayVersionFile>
-    <_CloudBayVersionDocument Condition="Exists('$(CloudBayVersionFile)')">$([System.IO.File]::ReadAllText('$(CloudBayVersionFile)'))</_CloudBayVersionDocument>
-    <_CloudBayVersionPattern>\A\s*\{\s*&quot;version&quot;\s*:\s*&quot;((?:0|[1-9][0-9]{0,4})\.(?:0|[1-9][0-9]{0,4})\.(?:0|[1-9][0-9]{0,4}))&quot;\s*\}\s*\z</_CloudBayVersionPattern>
-    <_CloudBayVersionDocumentValid>$([System.Text.RegularExpressions.Regex]::IsMatch('$(_CloudBayVersionDocument)', '$(_CloudBayVersionPattern)'))</_CloudBayVersionDocumentValid>
-    <CloudBayBaseVersion Condition="'$(_CloudBayVersionDocumentValid)' == 'True'">$([System.Text.RegularExpressions.Regex]::Match('$(_CloudBayVersionDocument)', '$(_CloudBayVersionPattern)').Groups[1].Value)</CloudBayBaseVersion>
-    <Version Condition="'$(Version)' == ''">$(CloudBayBaseVersion)</Version>
+    <CloudInletVersionFile>$(MSBuildThisFileDirectory)version.json</CloudInletVersionFile>
+    <_CloudInletVersionDocument Condition="Exists('$(CloudInletVersionFile)')">$([System.IO.File]::ReadAllText('$(CloudInletVersionFile)'))</_CloudInletVersionDocument>
+    <_CloudInletVersionPattern>\A\s*\{\s*&quot;version&quot;\s*:\s*&quot;((?:0|[1-9][0-9]{0,4})\.(?:0|[1-9][0-9]{0,4})\.(?:0|[1-9][0-9]{0,4}))&quot;\s*\}\s*\z</_CloudInletVersionPattern>
+    <_CloudInletVersionDocumentValid>$([System.Text.RegularExpressions.Regex]::IsMatch('$(_CloudInletVersionDocument)', '$(_CloudInletVersionPattern)'))</_CloudInletVersionDocumentValid>
+    <CloudInletBaseVersion Condition="'$(_CloudInletVersionDocumentValid)' == 'True'">$([System.Text.RegularExpressions.Regex]::Match('$(_CloudInletVersionDocument)', '$(_CloudInletVersionPattern)').Groups[1].Value)</CloudInletBaseVersion>
+    <Version Condition="'$(Version)' == ''">$(CloudInletBaseVersion)</Version>
     <Configuration Condition="'$(Configuration)' == ''">Debug</Configuration>
-    <CloudBayBuildFlavor Condition="'$(CloudBayBuildFlavor)' == ''">$(Configuration)</CloudBayBuildFlavor>
-    <DefineConstants Condition="'$(CloudBayBuildFlavor)' == 'Debug'">$(DefineConstants);CLOUDBAY_DEBUG</DefineConstants>
-    <Company>CloudBay</Company>
-    <Product>CloudBay</Product>
+    <CloudInletBuildFlavor Condition="'$(CloudInletBuildFlavor)' == ''">$(Configuration)</CloudInletBuildFlavor>
+    <DefineConstants Condition="'$(CloudInletBuildFlavor)' == 'Debug'">$(DefineConstants);CLOUDINLET_DEBUG</DefineConstants>
+    <Company>CloudInlet</Company>
+    <Product>CloudInlet</Product>
   </PropertyGroup>
 </Project>
