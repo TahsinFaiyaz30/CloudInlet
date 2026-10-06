@@ -105,6 +105,8 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
         }
         else existing = await _client.GetByPathAsync(Location.ContainerId, Location.FolderId, path, cancellationToken);
         if (existing is null) return null;
+        if (Data(checkpoint, "reservationState") == "creating")
+            throw new TransferConflictException("The empty OneDrive reservation may have completed without an acknowledgment. Its saved intent and source are retained; review this destination before retrying.");
         if (!source.Entry.IsFolder && Data(checkpoint, "beforeVersion") == existing.ETag) return null;
         var expectedHash = Data(checkpoint, "uploadedSha1") ?? source.Entry.Sha1;
         if (!source.Entry.IsFolder && !ValidSha1(expectedHash)) expectedHash = await HashSourceAsync(source, cancellationToken);
@@ -147,14 +149,15 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
             if (request.ConflictPolicy == TransferConflictPolicy.Fail) throw new TransferConflictException("The destination OneDrive file already exists.");
             if (request.ConflictPolicy == TransferConflictPolicy.Rename)
             {
-                name = Rename(name, request.OperationId);
-                path = Join(parentPath, name);
+                path = TransferConflictNames.RenamePath(path, request.OperationId);
+                name = path[(path.LastIndexOf('/') + 1)..];
                 before = await _client.GetByPathAsync(Location.ContainerId, parentId, name, cancellationToken);
                 if (before is not null) throw new TransferConflictException("The deterministic renamed destination already exists and cannot be attributed to this transfer.");
             }
         }
         if (before?.IsFolder == true) throw new TransferConflictException("A OneDrive destination folder has the selected file name.");
-        if (checkpoint is not null && before is not null && before.ETag != Data(checkpoint, "beforeVersion"))
+        if (checkpoint is not null && before is not null && (before.ETag != Data(checkpoint, "beforeVersion") ||
+            Data(checkpoint, "beforeId") is { } reviewedId && before.Id != reviewedId))
             throw new TransferConflictException("The destination changed after this upload began. Review the conflict before retrying.");
         if (checkpoint is not null && before is null && Data(checkpoint, "beforeVersion") is not null)
             throw new TransferConflictException("The reviewed OneDrive replacement was removed after this upload began. Review the conflict before retrying.");
@@ -209,10 +212,29 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
         }
         if (session is null)
         {
+            if (before is null)
+            {
+                // A personal OneDrive session exposes a zero-byte destination
+                // before its payload is complete. Create our own empty target
+                // and persist its acknowledged identity/version so this visible
+                // item can never be confused with a concurrent user's file.
+                data["reservationState"] = "creating";
+                await saveCheckpoint(new("onedrive", "", 0, new Dictionary<string, string>(data)), cancellationToken);
+                var reserved = await _client.PutSmallAsync(Location.ContainerId, parentId, name,
+                    ReadOnlyMemory<byte>.Empty, "fail", null, cancellationToken);
+                if (reserved.IsFolder || reserved.Size != 0 || string.IsNullOrEmpty(reserved.Id) || string.IsNullOrEmpty(reserved.ETag))
+                    throw new InvalidDataException("Microsoft did not acknowledge the empty destination's exact identity and version. Its source and saved reservation intent are retained for review.");
+                data["beforeId"] = reserved.Id;
+                data["beforeVersion"] = reserved.ETag;
+                data["reservationState"] = "owned";
+                await saveCheckpoint(new("onedrive", "", 0, new Dictionary<string, string>(data)), cancellationToken);
+                before = reserved;
+            }
             session = await _client.CreateUploadSessionAsync(Location.ContainerId, parentId, name,
                 // Replace an explicitly reviewed existing version only. If the target was
-                // absent, a file appearing during this session is a new conflict.
-                before is not null && request.ConflictPolicy == TransferConflictPolicy.Replace ? "replace" : "fail", before?.ETag, cancellationToken);
+                // absent, only our acknowledged empty reservation may be replaced.
+                before is not null && (request.ConflictPolicy == TransferConflictPolicy.Replace || data.GetValueOrDefault("reservationState") == "owned")
+                    ? "replace" : "fail", before?.ETag, cancellationToken);
             data["expires"] = session.ExpiresUtc.ToString("O");
             await saveCheckpoint(new("onedrive", session.UploadUrl, 0, new Dictionary<string, string>(data)), cancellationToken);
         }
@@ -243,7 +265,8 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
                     data["uploadedSha1"] = uploadedHash!;
                     var currentTarget = await _client.GetByPathAsync(Location.ContainerId, parentId, name, cancellationToken);
                     if (currentTarget?.ETag != data.GetValueOrDefault("beforeVersion") ||
-                        data.GetValueOrDefault("beforeId") is { } beforeId && currentTarget?.Id != beforeId)
+                        data.GetValueOrDefault("beforeId") is { } beforeId && currentTarget?.Id != beforeId ||
+                        data.GetValueOrDefault("reservationState") == "owned" && currentTarget is not { Size: 0, IsFolder: false })
                         throw new TransferConflictException("The OneDrive destination changed during this upload. Its unfinished session and source are retained for review.");
                     // The digest is durable before the final commit, including a lost final response.
                     await saveCheckpoint(new("onedrive", session.UploadUrl, offset, new Dictionary<string, string>(data)), cancellationToken);
@@ -384,12 +407,26 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
         if (checkpoint.Provider != "onedrive" || Data(checkpoint, "drive") != Location.ContainerId || Data(checkpoint, "folder") != Location.FolderId ||
             Data(checkpoint, "operation") != request.OperationId || Data(checkpoint, "sourceId") != source.Entry.Id ||
             Data(checkpoint, "sourceVersion") != source.Entry.Version || Data(checkpoint, "sourceSize") != source.Entry.Size.ToString(System.Globalization.CultureInfo.InvariantCulture) ||
-            string.IsNullOrEmpty(Data(checkpoint, "target")) || Data(checkpoint, "target") != request.RelativePath.Replace('\\', '/'))
+            string.IsNullOrEmpty(Data(checkpoint, "target")) || !IsCheckpointTarget(request, Data(checkpoint, "target")!))
             throw new InvalidDataException("The saved OneDrive upload session does not match its reviewed source and destination.");
         if (checkpoint.AcknowledgedBytes < 0 || checkpoint.AcknowledgedBytes > source.Entry.Size ||
-            (Data(checkpoint, "itemId") is not null && string.IsNullOrEmpty(Data(checkpoint, "itemVersion"))))
+            (Data(checkpoint, "itemId") is not null && string.IsNullOrEmpty(Data(checkpoint, "itemVersion"))) ||
+            Data(checkpoint, "reservationState") is { } reservation &&
+                (source.Entry.IsFolder || source.Entry.Size <= SmallFileBytes || reservation is not ("creating" or "owned") ||
+                    reservation == "owned" && (string.IsNullOrEmpty(Data(checkpoint, "beforeId")) || string.IsNullOrEmpty(Data(checkpoint, "beforeVersion")))))
             throw new InvalidDataException("The saved OneDrive acknowledgment is incomplete or outside its source length.");
         ValidateRelativePath(Data(checkpoint, "target")!);
+    }
+    private static bool IsCheckpointTarget(TransferUploadRequest request, string target)
+    {
+        var original = request.RelativePath.Replace('\\', '/');
+        if (target == original) return true;
+        if (request.ConflictPolicy != TransferConflictPolicy.Rename) return false;
+        if (target == TransferConflictNames.RenamePath(original, request.OperationId)) return true;
+        // Admit only the exact deterministic name generated by the prior Graph
+        // adapter, retaining its receipts and unfinished checkpoints on upgrade.
+        var slash = original.LastIndexOf('/');
+        return target == (slash < 0 ? "" : original[..(slash + 1)]) + LegacyRename(original[(slash + 1)..], request.OperationId);
     }
     private static string? Data(TransferCheckpoint checkpoint, string name) => checkpoint.Data?.GetValueOrDefault(name);
     private static TransferReceipt Receipt(OneDriveItem item, string path, string operation, string? uploadedHash = null) =>
@@ -424,7 +461,7 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
             throw new InvalidDataException("The OneDrive destination path must stay inside the selected folder.");
         foreach (var name in path.Split(['/', '\\'])) ValidateName(name);
     }
-    private static string Rename(string name, string operation)
+    private static string LegacyRename(string name, string operation)
     {
         var suffix = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(operation)))[..10].ToLowerInvariant();
         var extension = Path.GetExtension(name);

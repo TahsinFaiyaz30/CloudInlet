@@ -368,6 +368,85 @@ public sealed class OneDriveTransferTests
         Assert.AreEqual(3, provider.UploadOffsets.Count);
         Assert.AreEqual(1, source.Reads.Count, "Each fragment must not trigger a new source authorization, metadata fetch and download connection.");
         Assert.AreEqual(bytes.LongLength, source.Reads.Single().Length);
+        Assert.AreEqual(1, provider.ReservationsCreated);
+        Assert.AreEqual("replace", provider.SessionConflictBehavior);
+        Assert.AreEqual("reservation-etag", provider.SessionIfMatch);
+    }
+
+    [TestMethod]
+    public async Task LargePersonalUploadResumesItsAcknowledgedEmptyReservationWithoutCreatingAnotherTarget()
+    {
+        using var provider = new UploadProvider();
+        var bytes = new byte[OneDriveTransferEndpoint.FragmentBytes + 3];
+        var source = new MemorySource(bytes);
+        var request = new TransferUploadRequest("operation", "file.bin", TransferConflictPolicy.Fail);
+        TransferCheckpoint? saved = null;
+        await Assert.ThrowsExceptionAsync<OperationCanceledException>(() => new OneDriveTransferEndpoint(Client(provider.Http), Location)
+            .UploadAsync(request, source, null, (checkpoint, ct) =>
+            {
+                saved = checkpoint;
+                if (checkpoint.AcknowledgedBytes > 0) throw new OperationCanceledException();
+                return Task.CompletedTask;
+            }));
+        Assert.AreEqual("owned", saved!.Data!["reservationState"]);
+        Assert.AreEqual("destination", saved.Data["beforeId"]);
+        Assert.AreEqual("reservation-etag", saved.Data["beforeVersion"]);
+        var endpoint = new OneDriveTransferEndpoint(Client(provider.Http), Location);
+        Assert.IsNull(await endpoint.ReconcileAsync(request, source, saved));
+        var resumedSource = new MemorySource(bytes);
+        var receipt = await endpoint.UploadAsync(request, resumedSource, saved, (checkpoint, ct) => { saved = checkpoint; return Task.CompletedTask; });
+        await endpoint.VerifyAsync(receipt, resumedSource);
+        Assert.AreEqual(1, provider.ReservationsCreated);
+        Assert.AreEqual(1, provider.SessionsCreated);
+        CollectionAssert.AreEqual(new[] { 0L, (long)OneDriveTransferEndpoint.FragmentBytes }, provider.UploadOffsets.ToArray());
+        Assert.AreEqual((long)OneDriveTransferEndpoint.FragmentBytes, resumedSource.Reads[0].Offset);
+    }
+
+    [TestMethod]
+    public async Task LostEmptyReservationAcknowledgmentRetainsUncertaintyWithoutDuplicateOrPayloadUpload()
+    {
+        using var provider = new UploadProvider { LoseReservationResponse = true };
+        var source = new MemorySource(new byte[OneDriveTransferEndpoint.FragmentBytes + 1]);
+        var request = new TransferUploadRequest("operation", "file.bin", TransferConflictPolicy.Fail);
+        TransferCheckpoint? saved = null;
+        await Assert.ThrowsExceptionAsync<HttpRequestException>(() => new OneDriveTransferEndpoint(Client(provider.Http), Location)
+            .UploadAsync(request, source, null, (checkpoint, ct) => { saved = checkpoint; return Task.CompletedTask; }));
+        Assert.AreEqual("creating", saved!.Data!["reservationState"]);
+        var recovered = new OneDriveTransferEndpoint(Client(provider.Http), Location);
+        await Assert.ThrowsExceptionAsync<TransferConflictException>(() => recovered.ReconcileAsync(request, source, saved));
+        await Assert.ThrowsExceptionAsync<TransferConflictException>(() => recovered.UploadAsync(request, source, saved,
+            (checkpoint, ct) => Task.CompletedTask));
+        Assert.AreEqual(1, provider.ReservationsCreated);
+        Assert.AreEqual(0, provider.SessionsCreated);
+        Assert.AreEqual(0, provider.UploadOffsets.Count);
+        Assert.AreEqual(0, source.Reads.Count);
+        Assert.AreEqual(0, provider.Deletes);
+    }
+
+    [DataTestMethod]
+    [DataRow("changed-reservation-version", null)]
+    [DataRow(null, "unrelated-item-at-same-path")]
+    public async Task ChangedEmptyReservationIsNotAdoptedOrOverwrittenOnResume(string? changedVersion, string? changedId)
+    {
+        using var provider = new UploadProvider();
+        var source = new MemorySource(new byte[OneDriveTransferEndpoint.FragmentBytes + 1]);
+        var request = new TransferUploadRequest("operation", "file.bin", TransferConflictPolicy.Fail);
+        TransferCheckpoint? saved = null;
+        await Assert.ThrowsExceptionAsync<OperationCanceledException>(() => new OneDriveTransferEndpoint(Client(provider.Http), Location)
+            .UploadAsync(request, source, null, (checkpoint, ct) =>
+            {
+                saved = checkpoint;
+                if (checkpoint.AcknowledgedBytes > 0) throw new OperationCanceledException();
+                return Task.CompletedTask;
+            }));
+        provider.OverrideETag = changedVersion;
+        provider.PathLookupId = changedId;
+        await Assert.ThrowsExceptionAsync<TransferConflictException>(() => new OneDriveTransferEndpoint(Client(provider.Http), Location)
+            .UploadAsync(request, source, saved, (checkpoint, ct) => Task.CompletedTask));
+        Assert.AreEqual(1, provider.ReservationsCreated);
+        Assert.AreEqual(1, provider.SessionsCreated);
+        Assert.AreEqual(1, provider.UploadOffsets.Count);
+        Assert.AreEqual(0, provider.Deletes);
     }
 
     [TestMethod]
@@ -442,7 +521,7 @@ public sealed class OneDriveTransferTests
     }
 
     [TestMethod]
-    public async Task ReplaceOfAbsentLargeTargetUsesFailAndRetainsSessionWhenALateNameConflictAppears()
+    public async Task ReplaceOfAbsentLargeTargetBindsOwnedReservationAndRetainsSessionOnLateConflict()
     {
         using var provider = new UploadProvider { LateConflict = true };
         var endpoint = new OneDriveTransferEndpoint(Client(provider.Http), Location);
@@ -451,11 +530,98 @@ public sealed class OneDriveTransferTests
         await Assert.ThrowsExceptionAsync<TransferConflictException>(() => endpoint.UploadAsync(
             new("operation", "file.bin", TransferConflictPolicy.Replace), source, null,
             (checkpoint, ct) => { saved = checkpoint; return Task.CompletedTask; }));
-        Assert.AreEqual("fail", provider.SessionConflictBehavior);
+        Assert.AreEqual("replace", provider.SessionConflictBehavior);
+        Assert.AreEqual("reservation-etag", provider.SessionIfMatch);
+        Assert.AreEqual(1, provider.ReservationsCreated);
         Assert.AreEqual(1, provider.UploadOffsets.Count, "The final fragment must not overwrite a newly appeared destination.");
         Assert.AreEqual(OneDriveTransferEndpoint.FragmentBytes, saved!.AcknowledgedBytes);
         Assert.IsFalse(string.IsNullOrEmpty(saved.SessionId));
         Assert.AreEqual(0, provider.Deletes);
+    }
+
+    [DataTestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task RenameKeepsAbsentNamesAndRecoversOnlyItsExactReviewedTarget(bool destinationExists)
+    {
+        var operation = new string('a', 64);
+        var expectedName = destinationExists ? "file (CloudBay aaaaaaaaaaaa).bin" : "file.bin";
+        var bytes = "new contents"u8.ToArray();
+        var originalBytes = "original contents"u8.ToArray();
+        var files = new Dictionary<string, (string Id, string Version, byte[] Bytes)>();
+        if (destinationExists) files["file.bin"] = ("original", "original-version", originalBytes);
+        var payloadRequests = 0;
+        var metadataRequests = 0;
+        HttpResponseMessage Metadata(string name, (string Id, string Version, byte[] Bytes) file) => Json(Item(file.Id, name, file.Bytes.Length,
+            file.Version, false, Convert.ToHexString(SHA1.HashData(file.Bytes)).ToLowerInvariant()));
+        using var http = new HttpClient(new DelegateHandler(async (request, ct) =>
+        {
+            var path = Uri.UnescapeDataString(request.RequestUri!.AbsolutePath);
+            const string prefix = "/v1.0/drives/drive/items/root:/";
+            if (path.StartsWith(prefix))
+            {
+                var name = path[prefix.Length..path.IndexOf(":", prefix.Length, StringComparison.Ordinal)];
+                if (request.Method == HttpMethod.Put)
+                {
+                    payloadRequests++;
+                    Assert.AreEqual(expectedName, name);
+                    Assert.IsFalse(files.ContainsKey(name), "Keep both must never overwrite the original or an unrelated deterministic name.");
+                    files[name] = ("uploaded", "uploaded-version", await request.Content!.ReadAsByteArrayAsync(ct));
+                    return Metadata(name, files[name]);
+                }
+                metadataRequests++;
+                return files.TryGetValue(name, out var file) ? Metadata(name, file)
+                    : Json(new { error = new { code = "itemNotFound" } }, HttpStatusCode.NotFound);
+            }
+            metadataRequests++;
+            Assert.AreEqual("/v1.0/drives/drive/items/uploaded", path);
+            return Metadata(expectedName, files[expectedName]);
+        }));
+        var source = new MemorySource(bytes);
+        var request = new TransferUploadRequest(operation, "file.bin", TransferConflictPolicy.Rename);
+        TransferCheckpoint? saved = null;
+        var endpoint = new OneDriveTransferEndpoint(Client(http), Location);
+        var receipt = await endpoint.UploadAsync(request, source, null, (checkpoint, ct) => { saved = checkpoint; return Task.CompletedTask; });
+        Assert.AreEqual(expectedName, receipt.RelativePath);
+        Assert.AreEqual(expectedName, saved!.Data!["target"]);
+        var recovered = await new OneDriveTransferEndpoint(Client(http), Location).ReconcileAsync(request, source, saved);
+        Assert.AreEqual(receipt, recovered);
+        Assert.AreEqual(1, payloadRequests);
+        if (destinationExists) CollectionAssert.AreEqual(originalBytes, files["file.bin"].Bytes);
+        var beforeInvalid = metadataRequests;
+        var invalidData = new Dictionary<string, string>(saved.Data) { ["target"] = "unreviewed.bin" };
+        await Assert.ThrowsExceptionAsync<InvalidDataException>(() => endpoint.ReconcileAsync(request, source,
+            new(saved.Provider, saved.SessionId, saved.AcknowledgedBytes, invalidData)));
+        Assert.AreEqual(beforeInvalid, metadataRequests, "Reject a changed target before contacting the provider.");
+        Assert.AreEqual(1, payloadRequests);
+    }
+
+    [TestMethod]
+    public async Task LegacyGraphRenameReceiptStillRecoversAtItsExactDeterministicPath()
+    {
+        const string operation = "operation";
+        var source = new MemorySource("legacy contents"u8.ToArray());
+        var suffix = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(operation)))[..10].ToLowerInvariant();
+        var target = "file (CloudBay " + suffix + ").bin";
+        var requests = 0;
+        using var http = new HttpClient(new DelegateHandler((request, ct) =>
+        {
+            requests++;
+            Assert.AreEqual(HttpMethod.Get, request.Method);
+            return Task.FromResult(Json(Item("legacy-item", target, source.Entry.Size, "legacy-version", false, source.Entry.Sha1)));
+        }));
+        var checkpoint = new TransferCheckpoint("onedrive", "", source.Entry.Size, new Dictionary<string, string>
+        {
+            ["target"] = target, ["operation"] = operation, ["drive"] = "drive", ["folder"] = "root",
+            ["sourceId"] = source.Entry.Id, ["sourceVersion"] = source.Entry.Version,
+            ["sourceSize"] = source.Entry.Size.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["itemId"] = "legacy-item", ["itemVersion"] = "legacy-version", ["uploadedSha1"] = source.Entry.Sha1!
+        });
+        var receipt = await new OneDriveTransferEndpoint(Client(http), Location).ReconcileAsync(
+            new(operation, "file.bin", TransferConflictPolicy.Rename), source, checkpoint);
+        Assert.AreEqual(target, receipt!.RelativePath);
+        Assert.AreEqual("legacy-item", receipt.Id);
+        Assert.AreEqual(4, requests);
     }
 
     [TestMethod]
@@ -592,15 +758,19 @@ public sealed class OneDriveTransferTests
         public int Deletes { get; private set; }
         public int Downloads { get; private set; }
         public bool LoseFinalResponse { get; init; }
+        public bool LoseReservationResponse { get; init; }
         public bool OmitMetadataHash { get; init; }
         public string? OverrideHash { get; set; }
         public string? OverrideETag { get; set; }
         public string? PathLookupId { get; set; }
         public bool LateConflict { get; init; }
         public string? SessionConflictBehavior { get; private set; }
+        public string? SessionIfMatch { get; private set; }
+        public int ReservationsCreated { get; private set; }
         private MemoryStream _bytes = new();
         private bool _session;
         private bool _completed;
+        private bool _reserved;
         private string _sessionUrl = "";
         public UploadProvider() { Http = new(new DelegateHandler(SendAsync)); }
         public void ExpireSession() { _session = false; _bytes.SetLength(0); }
@@ -642,9 +812,16 @@ public sealed class OneDriveTransferTests
             {
                 Assert.IsTrue(url.Query.Contains("conflictBehavior=fail"));
                 Assert.IsTrue(request.Headers.GetValues("If-None-Match").Contains("*"));
-                UploadOffsets.Add(0);
                 _bytes.SetLength(0);
                 await request.Content!.CopyToAsync(_bytes, ct);
+                if (_bytes.Length == 0)
+                {
+                    ReservationsCreated++;
+                    _reserved = true;
+                    if (LoseReservationResponse) throw new HttpRequestException("Connection was lost after empty reservation creation.");
+                    return Reservation();
+                }
+                UploadOffsets.Add(0);
                 _completed = true;
                 if (LoseFinalResponse) throw new HttpRequestException("Connection was lost after commit.");
                 return Destination();
@@ -653,6 +830,12 @@ public sealed class OneDriveTransferTests
             {
                 using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
                 SessionConflictBehavior = body.RootElement.GetProperty("item").GetProperty("@microsoft.graph.conflictBehavior").GetString();
+                SessionIfMatch = request.Headers.TryGetValues("If-Match", out var match) ? match.Single() : null;
+                if (_reserved)
+                {
+                    Assert.AreEqual("replace", SessionConflictBehavior);
+                    Assert.AreEqual("reservation-etag", SessionIfMatch);
+                }
                 SessionsCreated++;
                 _session = true;
                 _bytes.SetLength(0);
@@ -662,7 +845,9 @@ public sealed class OneDriveTransferTests
             if (request.Method == HttpMethod.Delete) { Deletes++; return new(HttpStatusCode.NoContent); }
             if (LateConflict && !_completed && _bytes.Length > 0)
                 return Json(Item("unrelated", "file.bin", 7, "later-file", false));
-            return _completed ? Destination(url.AbsolutePath.Contains(":/") ? PathLookupId : null) : Json(new { error = new { code = "itemNotFound" } }, HttpStatusCode.NotFound);
+            return _completed ? Destination(url.AbsolutePath.Contains(":/") ? PathLookupId : null) : _reserved
+                ? Reservation(url.AbsolutePath.Contains(":/") ? PathLookupId : null)
+                : Json(new { error = new { code = "itemNotFound" } }, HttpStatusCode.NotFound);
         }
         private HttpResponseMessage Session(HttpStatusCode status = HttpStatusCode.OK) => Json(new
         {
@@ -672,6 +857,8 @@ public sealed class OneDriveTransferTests
         private HttpResponseMessage Destination(string? overrideId = null) => Json(Item(overrideId ?? "destination", "file.bin", _bytes.Length, OverrideETag ?? "destination-etag", false,
             OmitMetadataHash ? null : OverrideHash ?? Convert.ToHexString(SHA1.HashData(_bytes.ToArray())).ToLowerInvariant(),
             "https://download.example.test/destination"));
+        private HttpResponseMessage Reservation(string? overrideId = null) => Json(Item(overrideId ?? "destination", "file.bin", 0,
+            OverrideETag ?? "reservation-etag", false, Convert.ToHexString(SHA1.HashData(Array.Empty<byte>())).ToLowerInvariant()));
         public void Dispose() { Http.Dispose(); _bytes.Dispose(); }
     }
 }
