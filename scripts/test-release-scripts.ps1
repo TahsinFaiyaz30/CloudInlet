@@ -128,7 +128,7 @@ try {
     $evidence = @{ version = '1.0.0'; sourceRevision = $revision; configurations = @(@{configuration='Debug';buildSucceeded=$true;testsPassed=1;testsFailed=0;testsSkipped=0}, @{configuration='Release';buildSucceeded=$true;testsPassed=1;testsFailed=0;testsSkipped=0}) }
     $evidence | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $assets 'release-validation.json') -Encoding utf8NoBOM
     $env:GH_TOKEN = 'isolated-test-no-network'
-    $global:CloudInletReleaseTestState = @{ exists=$false; draft=$true; assets=[Collections.Generic.List[object]]::new(); uploads=0; publications=0; lookups=0; byId=0; creations=0; starterDeletes=0; blockFreshList=$true; interruptAfter=2; expectedRevision=$revision }
+    $global:CloudInletReleaseTestState = @{ exists=$false; draft=$true; assets=[Collections.Generic.List[object]]::new(); uploads=0; publications=0; lookups=0; byId=0; creations=0; starterDeletes=0; blockFreshList=$true; interruptAfter=2; expectedRevision=$revision; expectedAssetCount=9 }
     function global:gh {
         $arguments = @($args)
         $state = $global:CloudInletReleaseTestState
@@ -138,7 +138,7 @@ try {
             if (!$state.exists -or $state.draft) { $global:LASTEXITCODE = 1; return }
             @{ id=42;tag_name='v1.0.0';draft=$state.draft;assets=@($state.assets) } | ConvertTo-Json -Depth 6 -Compress
         } elseif ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudInlet/releases/42' -and $arguments -contains 'PATCH') {
-            Assert-True ($state.assets.Count -eq 9 -and $arguments -contains 'draft=false' -and $arguments -contains 'make_latest=true') 'Publication by release ID occurs only after all six canonical packages, schema 2, checksums and validation have been uploaded.'
+            Assert-True ($state.assets.Count -eq $state.expectedAssetCount -and $arguments -contains 'draft=false' -and $arguments -contains 'make_latest=true') 'Publication by release ID occurs only after the complete expected canonical inventory, including the optional Store group, has been uploaded.'
             $state.draft = $false; $state.publications++
             @{ id=42;tag_name='v1.0.0';draft=$false;published_at='2026-10-05T00:00:00Z';assets=@($state.assets) } | ConvertTo-Json -Depth 6 -Compress
         } elseif ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudInlet/releases/42') {
@@ -186,6 +186,74 @@ try {
     Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } 'Different remote bytes are rejected rather than clobbered.'
     Assert-True ($global:CloudInletReleaseTestState.uploads -eq 9) 'Immutable mismatch performs no asset replacement.'
     Assert-True ($global:CloudInletReleaseTestState.starterDeletes -eq 1) 'Different uploaded bytes are never deleted during recovery.'
+
+    # Exercise the same optional group emitted by the Store workflow and merged into
+    # the publisher's asset folder. This separate mock release preserves the original
+    # desktop-only publication, retry and immutability coverage above.
+    $storeBase = 'CloudInlet-1.0.0-win-x64-release-store'
+    $storeNames = @("$storeBase.msix", "$storeBase.msixupload", "$storeBase-package-info.json")
+    $storeMetadata = @{
+        version='1.0.0'; sourceRevision=$revision; localValidationIdentity=$false
+        packageIdentityName='Production.Identity'; resourceIndexName='Production.Identity'; publisher='CN=Production'; signed=$false
+        msix="$storeBase.msix"; msixupload="$storeBase.msixupload"
+    }
+    [IO.File]::WriteAllText((Join-Path $assets $storeNames[0]), 'isolated production Store package')
+    [IO.File]::WriteAllText((Join-Path $assets $storeNames[1]), 'isolated production Store upload')
+    $storeMetadataPath = Join-Path $assets $storeNames[2]
+    $storeMetadata | ConvertTo-Json | Set-Content -LiteralPath $storeMetadataPath -Encoding utf8NoBOM
+    & (Join-Path $PSScriptRoot 'generate-update-manifest.ps1') -Version '1.0.0' -AssetDirectory $assets | Out-Null
+    $manifest = Get-Content -LiteralPath (Join-Path $assets 'updates-v2.json') -Raw | ConvertFrom-Json
+    Assert-True ($manifest.assets.Count -eq 6 -and !($manifest.assets.fileName -match 'store|msix')) 'Optional Store packages never become desktop updater choices.'
+    $checksumInventory = @(Get-Content -LiteralPath (Join-Path $assets 'SHA256SUMS.txt'))
+    Assert-True ($checksumInventory.Count -eq 10) 'Checksums cover the six desktop packages, complete three-file Store group and schema 2.'
+    foreach ($name in $storeNames) {
+        $hashLine = (Get-FileHash -LiteralPath (Join-Path $assets $name) -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $name
+        Assert-True ($checksumInventory -ccontains $hashLine) 'Each optional Store asset has its exact length-independent SHA-256 checksum.'
+    }
+    $global:CloudInletReleaseTestState = @{ exists=$false; draft=$true; assets=[Collections.Generic.List[object]]::new(); uploads=0; publications=0; lookups=0; byId=0; creations=0; starterDeletes=0; blockFreshList=$true; interruptAfter=0; expectedRevision=$revision; expectedAssetCount=12 }
+    foreach ($name in $storeNames) {
+        $path = Join-Path $assets $name
+        $bytes = [IO.File]::ReadAllBytes($path)
+        Remove-Item -LiteralPath $path
+        try {
+            Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } "Missing optional Store group member $name blocks publication." 'Store release assets must include'
+        } finally { [IO.File]::WriteAllBytes($path, $bytes) }
+    }
+    foreach ($mismatch in @(
+        @{field='version'; value='1.0.1'},
+        @{field='sourceRevision'; value=('0' * 40)},
+        @{field='localValidationIdentity'; value=$true},
+        @{field='msix'; value='other-package.msix'},
+        @{field='msixupload'; value='other-package.msixupload'}
+    )) {
+        $changedMetadata = $storeMetadata.Clone()
+        $changedMetadata[$mismatch.field] = $mismatch.value
+        $changedMetadata | ConvertTo-Json | Set-Content -LiteralPath $storeMetadataPath -Encoding utf8NoBOM
+        try {
+            Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } "Mismatched Store metadata $($mismatch.field) blocks publication." 'Store package metadata'
+        } finally { $storeMetadata | ConvertTo-Json | Set-Content -LiteralPath $storeMetadataPath -Encoding utf8NoBOM }
+    }
+    $unknown = Join-Path $assets 'CloudInlet-1.0.0-win-x64-release-unexpected.zip'
+    [IO.File]::WriteAllText($unknown, 'unexpected canonical-looking payload')
+    try {
+        Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } 'Unexpected canonical-looking payloads cannot hide among optional Store assets.' 'unexpected asset inventory'
+    } finally { Remove-Item -LiteralPath $unknown }
+    $storePackagePath = Join-Path $assets $storeNames[0]
+    $storePackageBytes = [IO.File]::ReadAllBytes($storePackagePath)
+    [IO.File]::WriteAllBytes($storePackagePath, [byte[]]::new(0))
+    try {
+        Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } 'Empty optional Store payloads block publication.' 'Invalid release payload'
+    } finally { [IO.File]::WriteAllBytes($storePackagePath, $storePackageBytes) }
+    Assert-True ($global:CloudInletReleaseTestState.creations -eq 0 -and $global:CloudInletReleaseTestState.uploads -eq 0 -and $global:CloudInletReleaseTestState.publications -eq 0) 'Invalid Store inventories are rejected before any GitHub release mutation.'
+    $url = & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision
+    Assert-True ($url -ceq 'https://github.com/TahsinFaiyaz30/CloudInlet/releases/tag/v1.0.0' -and $global:CloudInletReleaseTestState.uploads -eq 12 -and $global:CloudInletReleaseTestState.publications -eq 1) 'A complete optional Store group publishes exactly twelve immutable release assets.'
+    Assert-True (@($global:CloudInletReleaseTestState.assets | Where-Object { $_.name -cin $storeNames }).Count -eq 3) 'The published release includes exactly the production MSIX, MSIXUPLOAD and package-info assets.'
+    & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision | Out-Null
+    Assert-True ($global:CloudInletReleaseTestState.uploads -eq 12 -and $global:CloudInletReleaseTestState.publications -eq 1) 'Repeating an identical Store-enabled release does not replace or re-upload bytes.'
+    $publishedStore = @($global:CloudInletReleaseTestState.assets | Where-Object { $_.name -ceq "$storeBase.msixupload" })[0]
+    $publishedStore.digest = 'sha256:' + ('0' * 64)
+    Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } 'Published Store package bytes are immutable too.' 'existing release asset differs'
+    Assert-True ($global:CloudInletReleaseTestState.uploads -eq 12 -and $global:CloudInletReleaseTestState.starterDeletes -eq 0 -and $global:CloudInletReleaseTestState.publications -eq 1) 'A Store digest mismatch performs no upload, deletion or publication.'
     Invoke-TestGit -Arguments @('-C', $fixture, 'commit', '--quiet', '--allow-empty', '-m', 'Simulate newer main while release is building')
     Invoke-TestGit -Arguments @('-C', $fixture, 'push', '--quiet', 'origin', 'main')
     Invoke-TestGit -Arguments @('-C', $fixture, 'checkout', '--quiet', '--detach', $revision)

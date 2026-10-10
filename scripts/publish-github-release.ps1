@@ -27,8 +27,28 @@ foreach ($flavor in @('Debug', 'Release')) {
 }
 & (Join-Path $PSScriptRoot 'generate-update-manifest.ps1') -Version $source.version -AssetDirectory $assetsRoot -Repository $Repository | Out-Null
 $files = @(Get-ChildItem -LiteralPath $assetsRoot -File | Where-Object { $_.Name -like "CloudInlet-$($source.version)-*" -or $_.Name -in @('updates-v2.json', 'SHA256SUMS.txt', 'release-validation.json') } | Sort-Object Name)
-if ($files.Count -ne 9) { throw 'The release must contain exactly six canonical packages, schema 2, checksums and validation.' }
-foreach ($file in $files) { if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked release payloads are not allowed.' } }
+$manifest = Get-Content -LiteralPath (Join-Path $assetsRoot 'updates-v2.json') -Raw | ConvertFrom-Json
+$expectedNames = @($manifest.assets.fileName) + @('updates-v2.json', 'SHA256SUMS.txt', 'release-validation.json')
+$storeBase = "CloudInlet-$($source.version)-win-x64-release-store"
+$storeNames = @("$storeBase.msix", "$storeBase.msixupload", "$storeBase-package-info.json")
+$storeFiles = @($files | Where-Object { $_.Name -cin $storeNames })
+if ($storeFiles.Count -gt 0) {
+    if ($storeFiles.Count -ne $storeNames.Count) { throw 'Store release assets must include the complete MSIX, MSIXUPLOAD and package-info group.' }
+    $expectedNames += $storeNames
+}
+if ($files.Count -ne $expectedNames.Count -or @($files | Where-Object { $_.Name -cnotin $expectedNames }).Count) {
+    throw 'The release contains an unexpected asset inventory. Require six canonical packages, schema 2, checksums, validation and optionally the complete Store group.'
+}
+foreach ($file in $files) {
+    if (($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $file.Length -le 0) { throw "Invalid release payload: $($file.Name). Require regular nonempty files." }
+}
+if ($storeFiles.Count) {
+    $store = Get-Content -LiteralPath (Join-Path $assetsRoot "$storeBase-package-info.json") -Raw | ConvertFrom-Json
+    if ($store.version -cne $source.version -or $store.sourceRevision -cne $ExpectedRevision -or
+        $store.localValidationIdentity -cne $false -or $store.msix -cne "$storeBase.msix" -or $store.msixupload -cne "$storeBase.msixupload") {
+        throw 'Store package metadata must describe the production packages from this exact version and source revision.'
+    }
+}
 
 function Invoke-Gh([string[]]$Arguments) {
     $output = & gh @Arguments
