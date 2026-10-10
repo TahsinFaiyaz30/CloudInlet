@@ -34,7 +34,8 @@ public static class FolderImport
         var current = Preview(reviewed.SourcePath, reviewed.DestinationPath, ct);
         if (!current.Fingerprint.Equals(reviewed.Fingerprint, StringComparison.Ordinal))
             throw new IOException("The source changed since you reviewed it. Review the import again; no new copies were started.");
-        return await VerifiedTreeCopy.CopyVerifiedAsync(current.SourcePath, current.DestinationPath, ct, progress);
+        return await VerifiedTreeCopy.CopyVerifiedAsync(current.SourcePath, current.DestinationPath, ct, progress,
+            reviewedFingerprint: reviewed.Fingerprint);
     }
 
     private static bool IsWithin(string parent, string child) => child.Equals(parent, StringComparison.OrdinalIgnoreCase) ||

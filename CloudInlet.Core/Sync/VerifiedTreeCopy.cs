@@ -22,7 +22,8 @@ public static partial class VerifiedTreeCopy
     { await CopyVerifiedAsync(source, destination, ct, progress); }
 
     /// <summary>Returns the actual source snapshot whose bytes passed final copy verification.</summary>
-    public static async Task<string> CopyVerifiedAsync(string source, string destination, CancellationToken ct = default, IProgress<string>? progress = null)
+    public static async Task<string> CopyVerifiedAsync(string source, string destination, CancellationToken ct = default, IProgress<string>? progress = null,
+        string? reviewedFingerprint = null)
     {
         source = Path.TrimEndingDirectorySeparator(Path.GetFullPath(source));
         destination = Path.TrimEndingDirectorySeparator(Path.GetFullPath(destination));
@@ -33,6 +34,8 @@ public static partial class VerifiedTreeCopy
         ValidateDirectoryPath(source);
         ValidateDirectoryPath(destination);
         var snapshot = Snapshot(source, ct);
+        if (reviewedFingerprint is not null && !reviewedFingerprint.Equals(FingerprintSnapshot(snapshot), StringComparison.Ordinal))
+            throw SourceChanged();
         var copiedHashes = new Dictionary<string, FileHashes>(StringComparer.OrdinalIgnoreCase);
         var directoryHashes = new Dictionary<string, IReadOnlyDictionary<string, byte[]>>(StringComparer.OrdinalIgnoreCase);
         // Inspect all affected destination paths before the first write. In particular, an existing
@@ -59,9 +62,15 @@ public static partial class VerifiedTreeCopy
             CreateDirectory(Path.GetDirectoryName(target)!);
             ValidateFilePath(path);
             ValidateFilePath(target);
-            using var sourceGuard = OpenMetadataGuard(path);
-            await using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, true);
-            if (!Fingerprint.Read(path).SameContentMetadata(fingerprint)) throw SourceChanged();
+            using var sourceGuard = OpenMetadataGuard(path, excludeWriters: true);
+            using var streamGuards = new NamedStreamGuards(path, fingerprint.Streams);
+            // Check before data access can hydrate a placeholder and change its cache metadata.
+            if (!Fingerprint.Read(path, ct, sourceGuard, streamsGuarded: true).SameSnapshot(fingerprint)) throw SourceChanged();
+            // The guard owns DELETE access for an online-only placeholder. Sharing it
+            // with our read handle cannot permit external deletion: the guard itself
+            // never shares delete access.
+            await using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 128 * 1024, true);
+            if (!Fingerprint.Read(path, ct, sourceGuard, streamsGuarded: true).SameContentMetadata(fingerprint)) throw SourceChanged();
             var sourceHash = await SHA256.HashDataAsync(input, ct);
             input.Position = 0;
             var temporary = Path.Combine(Path.GetDirectoryName(target)!, ".cloudbay-copy-" + Guid.NewGuid().ToString("N") + ".tmp");
@@ -84,12 +93,12 @@ public static partial class VerifiedTreeCopy
                 {
                     bool identical;
                     using var targetGuard = OpenMetadataGuard(target);
-                    await using (var existing = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, true))
+                    await using (var existing = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 128 * 1024, true))
                         identical = await MatchesHashesAsync(target, existing, copiedHashes[relative], fingerprint.Streams, ct);
                     if (identical)
                     {
                         PreserveAttributes(target, fingerprint.Attributes);
-                        sourceGuard.Dispose(); await input.DisposeAsync(); targetGuard.Dispose();
+                        streamGuards.Dispose(); sourceGuard.Dispose(); await input.DisposeAsync(); targetGuard.Dispose();
                         progress?.Report(relative);
                         continue;
                     }
@@ -119,7 +128,9 @@ public static partial class VerifiedTreeCopy
         {
             var path = Path.Combine(source, relative);
             var target = Path.Combine(destination, relative);
-            using var sourceGuard = OpenMetadataGuard(path);
+            using var sourceGuard = OpenMetadataGuard(path, excludeWriters: true);
+            using var streamGuards = new NamedStreamGuards(path, metadata.Streams);
+            if (metadata.Streams.Count != 0 && !DirectoryFingerprint.Read(path, ct, sourceGuard, streamsGuarded: true).SameSnapshot(metadata)) throw SourceChanged();
             using var targetGuard = OpenMetadataGuard(target);
             directoryHashes.Add(relative, await CopyNamedStreamsAsync(path, target, metadata.Streams, ct, preserveExisting: true));
         }
@@ -138,19 +149,19 @@ public static partial class VerifiedTreeCopy
             // only these candidates, so that identical hydrated bytes remain importable
             // while a same-size edit with a restored modification time cannot pass.
             var path = Path.Combine(source, relative);
-            using var guard = OpenMetadataGuard(path);
-            await using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, true);
+            using var guard = OpenMetadataGuard(path, excludeWriters: true);
+            await using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 128 * 1024, true);
             if (!await MatchesHashesAsync(path, input, copiedHashes[relative], initial.Streams, ct) ||
-                !Fingerprint.Read(path).SameSnapshot(current)) throw SourceChanged();
+                !Fingerprint.Read(path, ct, guard).SameSnapshot(current)) throw SourceChanged();
         }
         foreach (var (relative, initial) in snapshot.DirectoryMetadata)
         {
             if (!final.DirectoryMetadata.TryGetValue(relative, out var current) || !initial.SameContentMetadata(current)) throw SourceChanged();
-            if (initial.ChangeTime == current.ChangeTime || initial.Streams.Count == 0) continue;
+            if (initial.SameSnapshot(current) || initial.Streams.Count == 0) continue;
             var path = Path.Combine(source, relative);
-            using var guard = OpenMetadataGuard(path);
+            using var guard = OpenMetadataGuard(path, excludeWriters: true);
             if (!await MatchesNamedHashesAsync(path, directoryHashes[relative], initial.Streams, ct) ||
-                !DirectoryFingerprint.Read(path).SameSnapshot(current)) throw SourceChanged();
+                !DirectoryFingerprint.Read(path, ct, guard).SameSnapshot(current)) throw SourceChanged();
         }
         foreach (var (relative, attributes) in snapshot.DirectoryAttributes)
             PreserveAttributes(Path.Combine(destination, relative), attributes);
@@ -171,7 +182,8 @@ public static partial class VerifiedTreeCopy
         return FingerprintSnapshot(Snapshot(path, ct));
     }
 
-    /// <summary>Inspects source metadata without reading or hydrating file contents.</summary>
+    /// <summary>Inspects source versions without hydrating online-only files. Where no change journal is available,
+    /// already available contents are hashed instead of trusting timestamps.</summary>
     public static TreeCopyInspection Inspect(string source, CancellationToken ct = default)
     {
         source = Path.TrimEndingDirectorySeparator(Path.GetFullPath(source));
@@ -256,7 +268,7 @@ public static partial class VerifiedTreeCopy
         // The caller holds a no-delete metadata guard on the base file/directory; the
         // named stream cannot be redirected through a substituted file or symbolic link.
         return new FileStream(WindowsFilePaths.ToExtendedPath(path) + stream.Name, mode, access,
-            access == FileAccess.Read ? FileShare.Read : FileShare.None, 64 * 1024, true);
+            access == FileAccess.Read ? FileShare.Read | FileShare.Delete : FileShare.None, 64 * 1024, true);
     }
 
     private static IReadOnlyList<NamedStream> ReadNamedStreams(string path)
@@ -296,16 +308,29 @@ public static partial class VerifiedTreeCopy
             throw new IOException("A file contains an unsafe metadata stream name. Original files were retained.");
     }
 
-    private static SafeFileHandle OpenMetadataGuard(string path)
+    private static SafeFileHandle OpenMetadataGuard(string path, bool excludeWriters = false, bool namedStream = false)
     {
         ValidateFilePath(path);
         if (!OperatingSystem.IsWindows()) return new SafeFileHandle(IntPtr.Zero, ownsHandle: false);
-        // Open the object itself without data access or recall. No delete sharing pins it
-        // while its unnamed/named streams are opened and copied through this pathname.
-        var handle = CreateFileW(WindowsFilePaths.ToExtendedPath(path), 0x80, 3, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
+        // Attribute-only handles do not enforce Windows sharing restrictions. Read-data
+        // access pins ordinary files, but opening that access hydrates cloud placeholders.
+        // DELETE access pins an online-only object without recalling or deleting it.
+        var attributes = (uint)File.GetAttributes(path);
+        var onlineOnly = !namedStream && (attributes & (uint)FileAttributes.Directory) == 0 &&
+            (attributes & ((uint)FileAttributes.Offline | 0x00400000 | 0x00040000)) != 0;
+        // ADS contents are resident even when the unnamed stream is online-only. They
+        // share DELETE with the already-held base guard, which still pins the file.
+        var handle = CreateFileW(WindowsFilePaths.ToExtendedPath(path), onlineOnly ? 0x10080u : 0x81u,
+            (excludeWriters ? 1u : 3u) | (namedStream ? 4u : 0u), IntPtr.Zero, 3, 0x02300000, IntPtr.Zero);
         try
         {
-            if (handle.IsInvalid) throw LinkInspectionError(Marshal.GetLastWin32Error());
+            if (handle.IsInvalid)
+            {
+                var error = Marshal.GetLastWin32Error();
+                if (onlineOnly && error == 5)
+                    throw new IOException("Windows cannot lock this online-only file for a safe review. Download the source folder first, then try again. Original files were retained.", new Win32Exception(error));
+                throw LinkInspectionError(error);
+            }
             if (!GetFileInformationByHandleEx(handle, 9, out AttributeTag information, 8)) throw LinkInspectionError(Marshal.GetLastWin32Error());
             if (information.Tag is 0xA0000003 or 0xA000000C) throw new IOException("Backup cannot follow a linked source or destination.");
             ValidateCopyAttributes((FileAttributes)information.Attributes);
@@ -314,10 +339,11 @@ public static partial class VerifiedTreeCopy
         catch { handle.Dispose(); throw; }
     }
 
-    private static NativeMetadata ReadNativeMetadata(string path)
+    private static NativeMetadata ReadNativeMetadata(string path, SafeFileHandle? heldHandle = null)
     {
         if (!OperatingSystem.IsWindows()) return new(0, 0, 0, 0, (uint)File.GetAttributes(path));
-        using var handle = OpenMetadataGuard(path);
+        using var ownedHandle = heldHandle is null ? OpenMetadataGuard(path) : null;
+        var handle = heldHandle ?? ownedHandle!;
         if (!GetFileInformationByHandleEx(handle, 0, out BasicInformation basic, (uint)Marshal.SizeOf<BasicInformation>()))
             throw LinkInspectionError(Marshal.GetLastWin32Error());
         if (!GetFileInformationByHandleEx(handle, 18, out FileIdentification identity, (uint)Marshal.SizeOf<FileIdentification>()))
@@ -353,7 +379,7 @@ public static partial class VerifiedTreeCopy
             ct.ThrowIfCancellationRequested();
             ValidateDirectoryPath(current);
             var directoryRelative = Path.GetRelativePath(source, current) == "." ? "" : Path.GetRelativePath(source, current);
-            var metadata = DirectoryFingerprint.Read(current);
+            var metadata = DirectoryFingerprint.Read(current, ct);
             directoryAttributes[directoryRelative] = metadata.Attributes;
             directoryMetadata.Add(directoryRelative, metadata);
             foreach (var directory in Directory.EnumerateDirectories(current))
@@ -375,7 +401,7 @@ public static partial class VerifiedTreeCopy
             foreach (var file in Directory.EnumerateFiles(current))
             {
                 ValidateFilePath(file);
-                files.Add(Path.GetRelativePath(source, file), Fingerprint.Read(file));
+                files.Add(Path.GetRelativePath(source, file), Fingerprint.Read(file, ct));
             }
         }
         return new(files, directories, directoryAttributes, compatibilityJunctions, directoryMetadata);
@@ -529,30 +555,113 @@ public static partial class VerifiedTreeCopy
     {
         public bool SameIdentity(NativeMetadata other) => Volume == other.Volume && Low == other.Low && High == other.High;
     }
+    private sealed record ContentVersion(long? Usn, string? Hash);
+
+    private sealed class NamedStreamGuards : IDisposable
+    {
+        private readonly List<SafeFileHandle> handles = new();
+        public NamedStreamGuards(string path, IReadOnlyList<NamedStream> streams)
+        {
+            try
+            {
+                foreach (var stream in streams) handles.Add(OpenMetadataGuard(path + stream.Name, excludeWriters: true, namedStream: true));
+            }
+            catch { Dispose(); throw; }
+        }
+        public void Dispose() { foreach (var handle in handles) handle.Dispose(); }
+    }
+
+    private static ContentVersion ReadContentVersion(string path, SafeFileHandle handle, NativeMetadata native,
+        IReadOnlyList<NamedStream> streams, bool directory, CancellationToken ct, bool streamsGuarded)
+    {
+        // Timestamps can be restored or coalesced. A closed writer advances the journal
+        // even for a same-size save, without reading/hydrating the file. The caller pins
+        // the base object against writers; named streams need their own sharing guards.
+        var guards = new List<SafeFileHandle>();
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                foreach (var stream in streamsGuarded ? Array.Empty<NamedStream>() : streams)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    guards.Add(OpenMetadataGuard(path + stream.Name, excludeWriters: true, namedStream: true));
+                }
+                if (!streams.SequenceEqual(ReadNamedStreams(path))) throw SourceChanged();
+                var record = new byte[4096];
+                if (DeviceIoControl(handle, 0x000900EB, IntPtr.Zero, 0, record, (uint)record.Length, out var length, IntPtr.Zero))
+                {
+                    var major = length >= 8 ? BitConverter.ToUInt16(record, 4) : 0;
+                    var offset = major == 2 ? 24 : major == 3 ? 40 : -1;
+                    if (offset >= 0 && length >= offset + 8 && BitConverter.ToInt64(record, offset) is var usn && usn > 0)
+                        return new(usn, null);
+                }
+                else
+                {
+                    var error = Marshal.GetLastWin32Error();
+                    // Unsupported filesystem/provider, no journal, or journal access denied:
+                    // hash available data below. Never enable/change the volume's journal.
+                    if (error is not (1 or 5 or 50 or 87 or 1178 or 1179))
+                        throw new IOException("Windows could not verify the source file version.", new Win32Exception(error));
+                }
+            }
+            if ((!directory || streams.Count != 0) && RequiresHydration(native))
+                throw new IOException("This provider cannot expose a reliable version for an online-only file. Download this folder first, then review the import again. Original files were retained.");
+            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            var buffer = new byte[128 * 1024];
+            void Append(Stream input)
+            {
+                int read;
+                while ((read = input.Read(buffer)) != 0) { ct.ThrowIfCancellationRequested(); hash.AppendData(buffer, 0, read); }
+            }
+            if (!directory)
+            {
+                using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, buffer.Length, FileOptions.SequentialScan);
+                Append(input);
+            }
+            foreach (var stream in streams)
+            {
+                using var input = OpenNamedStream(path, stream, FileMode.Open, FileAccess.Read);
+                if (input.Length != stream.Size) throw SourceChanged();
+                Append(input);
+            }
+            return new(null, Convert.ToHexString(hash.GetHashAndReset()));
+        }
+        finally { foreach (var guard in guards) guard.Dispose(); }
+    }
+
+    private static bool RequiresHydration(NativeMetadata native) =>
+        (native.AllAttributes & ((uint)FileAttributes.Offline | 0x00400000 | 0x00040000)) != 0;
+
     private sealed record Fingerprint(long Size, DateTime ModifiedUtc, FileAttributes Attributes,
-        NativeMetadata Native, IReadOnlyList<NamedStream> Streams, bool RequiresHydration)
+        NativeMetadata Native, IReadOnlyList<NamedStream> Streams, bool RequiresHydration, ContentVersion Version)
     {
         public bool SameContentMetadata(Fingerprint other) => Size == other.Size && ModifiedUtc == other.ModifiedUtc &&
             Attributes == other.Attributes && Native.SameIdentity(other.Native) && Streams.SequenceEqual(other.Streams);
-        public bool SameSnapshot(Fingerprint other) => SameContentMetadata(other) && Native.ChangeTime == other.Native.ChangeTime;
-        public static Fingerprint Read(string path)
+        public bool SameSnapshot(Fingerprint other) => SameContentMetadata(other) && Native.ChangeTime == other.Native.ChangeTime && Version == other.Version;
+        public static Fingerprint Read(string path, CancellationToken ct = default, SafeFileHandle? heldHandle = null, bool streamsGuarded = false)
         {
-            using var guard = OpenMetadataGuard(path);
-            var file = new FileInfo(path); var native = ReadNativeMetadata(path);
-            return new(file.Length, file.LastWriteTimeUtc, AppearanceAttributes(path), native, ReadNamedStreams(path),
-                (native.AllAttributes & ((uint)FileAttributes.Offline | 0x00400000 | 0x00040000)) != 0);
+            using var ownedHandle = heldHandle is null ? OpenMetadataGuard(path, excludeWriters: true) : null;
+            var guard = heldHandle ?? ownedHandle!;
+            var file = new FileInfo(path); var native = ReadNativeMetadata(path, guard);
+            var streams = ReadNamedStreams(path);
+            return new(file.Length, file.LastWriteTimeUtc, AppearanceAttributes(path), native, streams,
+                VerifiedTreeCopy.RequiresHydration(native), ReadContentVersion(path, guard, native, streams, false, ct, streamsGuarded));
         }
     }
-    private sealed record DirectoryFingerprint(FileAttributes Attributes, NativeMetadata Native, IReadOnlyList<NamedStream> Streams)
+    private sealed record DirectoryFingerprint(FileAttributes Attributes, NativeMetadata Native, IReadOnlyList<NamedStream> Streams, ContentVersion Version)
     {
         public long ChangeTime => Native.ChangeTime;
         public bool SameContentMetadata(DirectoryFingerprint other) => Attributes == other.Attributes &&
             Native.SameIdentity(other.Native) && Streams.SequenceEqual(other.Streams);
-        public bool SameSnapshot(DirectoryFingerprint other) => SameContentMetadata(other) && ChangeTime == other.ChangeTime;
-        public static DirectoryFingerprint Read(string path)
+        public bool SameSnapshot(DirectoryFingerprint other) => SameContentMetadata(other) && ChangeTime == other.ChangeTime && Version == other.Version;
+        public static DirectoryFingerprint Read(string path, CancellationToken ct = default, SafeFileHandle? heldHandle = null, bool streamsGuarded = false)
         {
-            using var guard = OpenMetadataGuard(path);
-            return new(AppearanceAttributes(path), ReadNativeMetadata(path), ReadNamedStreams(path));
+            using var ownedHandle = heldHandle is null ? OpenMetadataGuard(path, excludeWriters: true) : null;
+            var guard = heldHandle ?? ownedHandle!;
+            var native = ReadNativeMetadata(path, guard);
+            var streams = ReadNamedStreams(path);
+            return new(AppearanceAttributes(path), native, streams, ReadContentVersion(path, guard, native, streams, true, ct, streamsGuarded));
         }
     }
 }

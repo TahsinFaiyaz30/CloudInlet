@@ -154,6 +154,106 @@ public sealed class NativeFolderAppearanceTests
         });
     }
 
+    [TestMethod]
+    [Timeout(90_000)]
+    public async Task ImportPreviewReadsStablePlaceholderVersionsWithoutRequestingHydration()
+    {
+        var fetches = 0;
+        await NativeIsolatedAsync(async (service, root, versions, token) =>
+        {
+            var source = Path.Combine(root, "source"); var destination = Path.Combine(root, "destination");
+            var path = Path.Combine(source, "online-only.txt");
+            var bytes = Encoding.UTF8.GetBytes("Preview must leave these bytes in the provider.");
+            versions["preview-online"] = bytes;
+            await service.CreateOrUpdateAsync(path, new CloudObject("preview-online", "source/online-only.txt", bytes.Length,
+                Convert.ToHexString(SHA1.HashData(bytes)), DateTimeOffset.UtcNow), true, token);
+            Assert.IsFalse(service.IsHydrated(path));
+            var before = Volatile.Read(ref fetches);
+
+            var plan = FolderImport.Preview(source, destination, token);
+            var repeated = FolderImport.Preview(source, destination, token);
+
+            Assert.AreEqual(1L, plan.FileCount);
+            Assert.AreEqual((long)bytes.Length, plan.TotalBytes);
+            Assert.IsTrue(plan.HasOnlineOnlyFiles);
+            Assert.AreEqual(plan.Fingerprint, repeated.Fingerprint, "Reading versions alone must produce a stable review.");
+            Assert.IsFalse(service.IsHydrated(path), "Version guards must not hydrate an online-only source.");
+            Assert.AreEqual(before, Volatile.Read(ref fetches), "Preview must not even request a provider fetch.");
+            Assert.IsFalse(Directory.Exists(destination));
+        }, () => Interlocked.Increment(ref fetches));
+    }
+
+    [TestMethod]
+    [Timeout(90_000)]
+    public async Task ImportPreservesAnExistingOnlineOnlyDestinationAsAReadableConflict()
+    {
+        await NativeIsolatedAsync(async (service, root, versions, token) =>
+        {
+            var source = Path.Combine(root, "source"); var destination = Path.Combine(root, "destination");
+            Directory.CreateDirectory(source);
+            var sourceFile = Path.Combine(source, "report.txt");
+            var destinationFile = Path.Combine(destination, "report.txt");
+            const string originalSource = "the new source contents";
+            var originalDestination = Encoding.UTF8.GetBytes("the existing destination contents must survive");
+            await File.WriteAllTextAsync(sourceFile, originalSource, token);
+            versions["existing-destination"] = originalDestination;
+            await service.CreateOrUpdateAsync(destinationFile, new CloudObject("existing-destination", "destination/report.txt",
+                originalDestination.Length, Convert.ToHexString(SHA1.HashData(originalDestination)), DateTimeOffset.UtcNow), true, token);
+            Assert.IsFalse(service.IsHydrated(destinationFile));
+
+            var plan = FolderImport.Preview(source, destination, token);
+            Assert.IsFalse(service.IsHydrated(destinationFile), "Reviewing the source must not recall a colliding destination.");
+            var verified = await FolderImport.ExecuteAsync(plan, token);
+
+            VerifiedTreeCopy.EnsureUnchanged(source, verified, token);
+            Assert.AreEqual(originalSource, await File.ReadAllTextAsync(sourceFile, token));
+            Assert.AreEqual(originalSource, await File.ReadAllTextAsync(destinationFile, token));
+            var conflicts = Directory.GetFiles(destination, "*conflict*");
+            Assert.AreEqual(1, conflicts.Length);
+            CollectionAssert.AreEqual(originalDestination, await File.ReadAllBytesAsync(conflicts[0], token),
+                "The previous online-only destination must retain its complete contents under the conflict name.");
+        });
+    }
+
+    [TestMethod]
+    [Timeout(90_000)]
+    public async Task ImportReviewsAnOnlineOnlyFileWithNamedStreamsWithoutRecallingItAndCopiesBothContents()
+    {
+        var fetches = 0;
+        await NativeIsolatedAsync(async (service, root, versions, token) =>
+        {
+            var source = Path.Combine(root, "source"); var destination = Path.Combine(root, "destination");
+            var path = Path.Combine(source, "online-only.txt");
+            var bytes = Encoding.UTF8.GetBytes("The main file starts online only.");
+            const string namedContents = "retained named metadata";
+            var sha1 = Convert.ToHexString(SHA1.HashData(bytes));
+            versions["preview-named-stream"] = bytes;
+            await service.CreateOrUpdateAsync(path, new CloudObject("preview-named-stream", "source/online-only.txt",
+                bytes.Length, sha1, DateTimeOffset.UtcNow), true, token);
+            await File.WriteAllTextAsync(path + ":tags:$DATA", namedContents, token);
+            // Creating metadata can alter cache or in-sync state. Establish and verify
+            // a genuinely online-only fixture before assessing the preview guard.
+            await service.MarkInSyncAsync(path, new CloudObject("preview-named-stream", "source/online-only.txt",
+                bytes.Length, sha1, new DateTimeOffset(File.GetLastWriteTimeUtc(path))), token);
+            await service.FreeSpaceAsync(path, token);
+            Assert.IsFalse(service.IsHydrated(path), "The fixture must be online-only after the named stream exists.");
+            var beforePreview = Volatile.Read(ref fetches);
+
+            var plan = FolderImport.Preview(source, destination, token);
+
+            Assert.IsTrue(plan.HasOnlineOnlyFiles);
+            Assert.AreEqual(1L, plan.FileCount);
+            Assert.AreEqual((long)bytes.Length + Encoding.UTF8.GetByteCount(namedContents), plan.TotalBytes);
+            Assert.IsFalse(service.IsHydrated(path), "Reviewing named streams must not recall the unnamed contents.");
+            Assert.AreEqual(beforePreview, Volatile.Read(ref fetches));
+            var verified = await FolderImport.ExecuteAsync(plan, token);
+            VerifiedTreeCopy.EnsureUnchanged(source, verified, token);
+            CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(Path.Combine(destination, "online-only.txt"), token));
+            Assert.AreEqual(namedContents, await File.ReadAllTextAsync(Path.Combine(destination, "online-only.txt") + ":tags:$DATA", token));
+            Assert.AreEqual(namedContents, await File.ReadAllTextAsync(path + ":tags:$DATA", token));
+        }, () => Interlocked.Increment(ref fetches));
+    }
+
     [DataTestMethod]
     [DataRow(true, false)]
     [DataRow(false, true)]
@@ -304,7 +404,8 @@ public sealed class NativeFolderAppearanceTests
             "; retained user customization\r\n[.ShellClassInfo]\r\nIconResource=" + resource + ",3\r\nInfoTip=Personal folder\r\n[Other]\r\nKeep=Yes\r\n")).ToArray();
     }
 
-    private static async Task NativeIsolatedAsync(Func<WindowsPlaceholderService, string, Dictionary<string, byte[]>, CancellationToken, Task> test)
+    private static async Task NativeIsolatedAsync(Func<WindowsPlaceholderService, string, Dictionary<string, byte[]>, CancellationToken, Task> test,
+        Action? onFetch = null)
     {
         var parent = Path.GetFullPath(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
         var root = Path.Combine(parent, "CloudInlet-NativeAppearance-" + Guid.NewGuid().ToString("N"));
@@ -314,7 +415,10 @@ public sealed class NativeFolderAppearanceTests
         try
         {
             await service.ConnectAsync(root, "native-appearance-" + Path.GetFileName(root), async (cloud, offset, length, destination, token) =>
-                await destination.WriteAsync(versions[cloud.FileId].AsMemory(checked((int)offset), checked((int)length)), token), timeout.Token);
+            {
+                onFetch?.Invoke();
+                await destination.WriteAsync(versions[cloud.FileId].AsMemory(checked((int)offset), checked((int)length)), token);
+            }, timeout.Token);
             using (var handle = CloudFilesNative.CreateFileW(root, 0x80, 7, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero))
             {
                 if (handle.IsInvalid) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());

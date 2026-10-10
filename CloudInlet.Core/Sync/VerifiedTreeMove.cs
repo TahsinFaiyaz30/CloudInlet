@@ -78,7 +78,7 @@ public static partial class VerifiedTreeCopy
                 before.ModifiedUtc != expected.ModifiedUtc || before.Appearance != expected.Attributes)
                 throw SourceChanged();
             using var input = new FileStream(removal, FileAccess.Read, 128 * 1024, isAsync: false);
-            using var target = new FileStream(destination, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, true);
+            using var target = new FileStream(destination, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 128 * 1024, true);
             if (input.Length != expected.Size || target.Length != expected.Size) throw SourceChanged();
             var originalHash = await SHA256.HashDataAsync(input, ct);
             var copiedHash = await SHA256.HashDataAsync(target, ct);

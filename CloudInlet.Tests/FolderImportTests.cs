@@ -1,5 +1,10 @@
 using CloudInlet.Application;
 using CloudInlet.Core.Sync;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
+using Microsoft.Win32.SafeHandles;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace CloudInlet.Tests;
@@ -38,10 +43,10 @@ public sealed class FolderImportTests
             Directory.CreateDirectory(source);
             var file = Path.Combine(source, "report.txt");
             await File.WriteAllTextAsync(file, "original");
+            var timestamps = ReadTimestamps(file);
             var plan = FolderImport.Preview(source, destination);
-            var modified = File.GetLastWriteTimeUtc(file);
             await File.WriteAllTextAsync(file, "new edit");
-            File.SetLastWriteTimeUtc(file, modified);
+            RestoreTimestamps(file, timestamps);
             await Assert.ThrowsExceptionAsync<IOException>(() => FolderImport.ExecuteAsync(plan));
             Assert.IsFalse(Directory.Exists(destination), "A stale review must fail before destination writes.");
             Assert.AreEqual("new edit", await File.ReadAllTextAsync(file));
@@ -59,17 +64,154 @@ public sealed class FolderImportTests
             Directory.CreateDirectory(source);
             var file = Path.Combine(source, "report.txt");
             await File.WriteAllTextAsync(file, "alpha");
-            var modified = File.GetLastWriteTimeUtc(file);
             var verified = await FolderImport.ExecuteAsync(FolderImport.Preview(source, destination));
             VerifiedTreeCopy.EnsureUnchanged(source, verified);
+            var timestamps = ReadTimestamps(file);
             // This is the gap after copy returns, before the mapping guard runs.
             await File.WriteAllTextAsync(file, "bravo");
-            File.SetLastWriteTimeUtc(file, modified);
+            RestoreTimestamps(file, timestamps);
             Assert.ThrowsException<IOException>(() => VerifiedTreeCopy.EnsureUnchanged(source, verified));
             Assert.AreEqual("bravo", await File.ReadAllTextAsync(file));
             Assert.AreEqual("alpha", await File.ReadAllTextAsync(Path.Combine(destination, "report.txt")));
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [TestMethod]
+    public void SourceWithAnOpenWriterCannotBeReviewedAsAnUnchangingSnapshot()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "CloudInlet-ImportTests-" + Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(root, "Source"); var destination = Path.Combine(root, "Destination");
+        try
+        {
+            Directory.CreateDirectory(source);
+            var file = Path.Combine(source, "report.txt");
+            File.WriteAllText(file, "original");
+            using (var writer = new FileStream(file, FileMode.Open, FileAccess.ReadWrite,
+                FileShare.ReadWrite | FileShare.Delete))
+            {
+                writer.Write("new edit"u8);
+                writer.Flush(true);
+                Assert.ThrowsException<IOException>(() => FolderImport.Preview(source, destination),
+                    "Repeated writes under one open handle can share a USN; a review must reject an active writer.");
+            }
+            Assert.IsFalse(Directory.Exists(destination));
+            Assert.AreEqual("new edit", File.ReadAllText(file));
+            Assert.AreEqual(1L, FolderImport.Preview(source, destination).FileCount,
+                "Closing the writer should permit a fresh review.");
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [DataTestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public void SourceWithAnOpenNamedStreamWriterCannotBeReviewedAsAnUnchangingSnapshot(bool directoryStream)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "CloudInlet-ImportTests-" + Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(root, "Source"); var destination = Path.Combine(root, "Destination");
+        try
+        {
+            Directory.CreateDirectory(source);
+            var file = directoryStream ? source : Path.Combine(source, "report.txt");
+            if (!directoryStream) File.WriteAllText(file, "base contents");
+            var stream = file + ":review";
+            File.WriteAllText(stream, "original");
+            using (var writer = new FileStream(stream, FileMode.Open, FileAccess.ReadWrite,
+                FileShare.ReadWrite | FileShare.Delete))
+            {
+                writer.Write("new edit"u8);
+                writer.Flush(true);
+                Assert.ThrowsException<IOException>(() => FolderImport.Preview(source, destination),
+                    "A base-file guard alone does not exclude named-stream writers.");
+            }
+            Assert.IsFalse(Directory.Exists(destination));
+            Assert.AreEqual("new edit", File.ReadAllText(stream));
+            Assert.IsNotNull(FolderImport.Preview(source, destination),
+                "Closing the named-stream writer should permit a fresh review.");
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [TestMethod]
+    public async Task CopyUsesItsActualInitialSnapshotToRejectAChangedReviewedSourceBeforeWriting()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "CloudInlet-ImportTests-" + Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(root, "Source"); var destination = Path.Combine(root, "Destination");
+        try
+        {
+            Directory.CreateDirectory(source);
+            var file = Path.Combine(source, "report.txt");
+            await File.WriteAllTextAsync(file, "original");
+            var timestamps = ReadTimestamps(file);
+            var plan = FolderImport.Preview(source, destination);
+            await File.WriteAllTextAsync(file, "new edit");
+            RestoreTimestamps(file, timestamps);
+            // Exercise the copy's own snapshot guard, independent of FolderImport's
+            // earlier preview, so an intervening edit cannot establish a new baseline.
+            await Assert.ThrowsExceptionAsync<IOException>(() => VerifiedTreeCopy.CopyVerifiedAsync(source, destination,
+                reviewedFingerprint: plan.Fingerprint));
+            Assert.IsFalse(Directory.Exists(destination), "A stale snapshot must fail before any destination write.");
+            Assert.AreEqual("new edit", await File.ReadAllTextAsync(file));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [TestMethod]
+    public async Task ReviewedImportDoesNotRequireWriteOrDeleteAccessToAvailableSourceContents()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "CloudInlet-ImportTests-" + Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(root, "Source"); var destination = Path.Combine(root, "Destination");
+        var file = Path.Combine(source, "report.txt");
+        byte[]? originalFileSecurity = null;
+        byte[]? originalDirectorySecurity = null;
+        try
+        {
+            Directory.CreateDirectory(source);
+            await File.WriteAllTextAsync(file, "read-only source content");
+            var identity = WindowsIdentity.GetCurrent().User!;
+            var sourceInfo = new DirectoryInfo(source);
+            var fileInfo = new FileInfo(file);
+            originalFileSecurity = fileInfo.GetAccessControl(AccessControlSections.Access).GetSecurityDescriptorBinaryForm();
+            originalDirectorySecurity = sourceInfo.GetAccessControl(AccessControlSections.Access).GetSecurityDescriptorBinaryForm();
+            var sourceSecurity = sourceInfo.GetAccessControl(AccessControlSections.Access);
+            sourceSecurity.AddAccessRule(new FileSystemAccessRule(identity,
+                FileSystemRights.DeleteSubdirectoriesAndFiles, AccessControlType.Deny));
+            sourceInfo.SetAccessControl(sourceSecurity);
+            var fileSecurity = fileInfo.GetAccessControl(AccessControlSections.Access);
+            fileSecurity.AddAccessRule(new FileSystemAccessRule(identity,
+                FileSystemRights.WriteData | FileSystemRights.AppendData | FileSystemRights.Delete, AccessControlType.Deny));
+            fileInfo.SetAccessControl(fileSecurity);
+            var denied = Assert.ThrowsException<Win32Exception>(() =>
+            {
+                using var handle = OpenTimestampHandle(file, 0x10000); // DELETE must really be denied by this fixture.
+            });
+            Assert.AreEqual(5, denied.NativeErrorCode);
+
+            var plan = FolderImport.Preview(source, destination);
+            var verified = await FolderImport.ExecuteAsync(plan);
+            VerifiedTreeCopy.EnsureUnchanged(source, verified);
+            Assert.AreEqual("read-only source content", await File.ReadAllTextAsync(file));
+            Assert.AreEqual("read-only source content", await File.ReadAllTextAsync(Path.Combine(destination, "report.txt")));
+        }
+        finally
+        {
+            // Persist writes only sections marked as modified. Reusing an untouched
+            // GetAccessControl result silently leaves the deny rules in place.
+            if (originalFileSecurity is not null && File.Exists(file))
+            {
+                var restored = new FileSecurity();
+                restored.SetSecurityDescriptorBinaryForm(originalFileSecurity, AccessControlSections.Access);
+                new FileInfo(file).SetAccessControl(restored);
+            }
+            if (originalDirectorySecurity is not null && Directory.Exists(source))
+            {
+                var restored = new DirectorySecurity();
+                restored.SetSecurityDescriptorBinaryForm(originalDirectorySecurity, AccessControlSections.Access);
+                new DirectoryInfo(source).SetAccessControl(restored);
+            }
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
     }
 
     [TestMethod]
@@ -223,4 +365,49 @@ public sealed class FolderImportTests
         }
         finally { Directory.Delete(root, true); }
     }
+
+    // Force the same-size/coarse-timestamp collision deterministically. Restoring only
+    // LastWriteTime depends on the filesystem clock advancing between rapid writes.
+    private static BasicInformation ReadTimestamps(string path)
+    {
+        using var handle = OpenTimestampHandle(path, 0x80); // FILE_READ_ATTRIBUTES
+        if (!GetFileInformationByHandleEx(handle, 0, out BasicInformation information,
+            (uint)Marshal.SizeOf<BasicInformation>()))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        return information;
+    }
+
+    private static void RestoreTimestamps(string path, BasicInformation reviewed)
+    {
+        using (var handle = OpenTimestampHandle(path, 0x100)) // FILE_WRITE_ATTRIBUTES
+        {
+            var timestamps = new BasicInformation { Modified = reviewed.Modified, Changed = reviewed.Changed };
+            if (!SetFileInformationByHandle(handle, 0, ref timestamps, (uint)Marshal.SizeOf<BasicInformation>()))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+        var restored = ReadTimestamps(path);
+        Assert.AreEqual(reviewed.Modified, restored.Modified, "The fixture must restore LastWriteTime exactly.");
+        Assert.AreEqual(reviewed.Changed, restored.Changed, "The fixture must restore ChangeTime exactly.");
+    }
+
+    private static SafeFileHandle OpenTimestampHandle(string path, uint access)
+    {
+        var handle = CreateFileW(path, access, 7, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
+        if (!handle.IsInvalid) return handle;
+        var error = Marshal.GetLastWin32Error();
+        handle.Dispose();
+        throw new Win32Exception(error);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BasicInformation { public long Created, Accessed, Modified, Changed; public uint Attributes; }
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFileW(string path, uint access, uint sharing, IntPtr security,
+        uint disposition, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandleEx(SafeFileHandle handle, int informationClass,
+        out BasicInformation information, uint size);
+    [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetFileInformationByHandle(SafeFileHandle handle, int informationClass,
+        ref BasicInformation information, uint size);
 }
