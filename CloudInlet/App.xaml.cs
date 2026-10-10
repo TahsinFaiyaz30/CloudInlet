@@ -70,6 +70,11 @@ public partial class App : Microsoft.UI.Xaml.Application
         _isUiSmoke = isSmoke;
         _isUiLive = isLive;
         _smokeTheme = smokeTheme;
+        if (commandLine.Contains("--store-parity-probe"))
+        {
+            Environment.ExitCode = await StoreParityValidation.RunAsync(commandLine);
+            Exit(); return;
+        }
         if (commandLine.Contains("--unregister-notifications"))
         {
             Environment.ExitCode = await WindowsNotifications.RemoveRegistrationAsync() ? 0 : 1;
@@ -243,11 +248,11 @@ public partial class App : Microsoft.UI.Xaml.Application
             _trayWindow = new TrayWindow(_controller, () => { MainWindow.ShowSettings(); MainWindow.ShowWindow(); }, () => _ = QuitAsync());
             _startupStage = "Register notification icon";
             var trayActions = new TrayIconActions(MainWindow.ShowWindow, () => _controller.LaunchFolder(),
-                    () => { if (_controller.Snapshot.State == ClientState.Paused) _controller.Resume(); else _controller.Pause(); },
+                    () => { if (_controller.IsTransferPauseActive) _controller.Resume(); else _controller.Pause(); },
                     () => { MainWindow.ShowSettings(); MainWindow.ShowWindow(); }, () => _ = QuitAsync())
                 {
-                    Availability = () => new(_controller.Settings.IsConfigured, _controller.Settings.IsConfigured,
-                        _controller.Snapshot.State == ClientState.Paused),
+                    Availability = () => new(_controller.Settings.IsConfigured, _controller.CanPauseTransfers,
+                        _controller.IsTransferPauseActive),
                     BeforeMenuOpen = () => _trayWindow.AppWindow.Hide(),
                     ShowContextMenu = point => ShowTrayContextMenu(point),
                     Error = error => _ = ShowTrayCommandErrorAsync(error)
@@ -299,6 +304,7 @@ public partial class App : Microsoft.UI.Xaml.Application
             try
             {
                 if (commandLine.Contains("--ui-smoke-updates")) await MainWindow.RunUpdateOnlyUiValidationAsync(output);
+                else if (commandLine.Contains("--ui-smoke-layout")) await MainWindow.RunResponsiveUiValidationAsync(output);
                 else
                 {
                     if (!commandLine.Contains("--ui-smoke-tray")) await MainWindow.RunUiSmokeAsync(output);
@@ -417,6 +423,7 @@ public partial class App : Microsoft.UI.Xaml.Application
                 launch.ArgumentList.Add($"--ui-smoke-theme={theme}");
                 if (trayOnly) launch.ArgumentList.Add("--ui-smoke-tray");
                 if (Environment.GetCommandLineArgs().Contains("--ui-smoke-updates")) launch.ArgumentList.Add("--ui-smoke-updates");
+                if (Environment.GetCommandLineArgs().Contains("--ui-smoke-layout")) launch.ArgumentList.Add("--ui-smoke-layout");
                 var initialPage = Environment.GetCommandLineArgs().FirstOrDefault(arg => arg.StartsWith("--page=", StringComparison.Ordinal));
                 if (initialPage is not null) launch.ArgumentList.Add(initialPage);
                 using var process = Process.Start(launch) ?? throw new InvalidOperationException("Could not launch the isolated UI validation process.");

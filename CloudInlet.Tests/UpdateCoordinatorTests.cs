@@ -13,24 +13,28 @@ namespace CloudInlet.Tests;
 public sealed class UpdateCoordinatorTests
 {
     [TestMethod]
-    public void LegacyCachedCandidatesRetainTheirExactTrustedBridgeDownloadIdentity()
+    public void PostBridgeReleasesAcceptOnlyCanonicalManifestsAndCandidates()
     {
-        var modern = Manifest("1.1.2");
-        var legacy = modern with { SchemaVersion = 1, Repository = UpdateManifestRules.LegacyRepository,
+        var modern = Manifest("1.1.3");
+        var legacy = modern with { SchemaVersion = 1, Repository = "TahsinFaiyaz30/CloudBay",
             Assets = modern.Assets.Select(asset => asset with { FileName = asset.FileName.Replace("CloudInlet-", "CloudBay-", StringComparison.Ordinal) }).ToArray() };
         foreach (var flavor in new[] { UpdateBuildFlavor.Debug, UpdateBuildFlavor.Release })
             foreach (var kind in new[] { UpdateInstallerKind.Exe, UpdateInstallerKind.Msi, UpdateInstallerKind.Portable })
             {
-                var identity = new InstalledUpdateIdentity("1.1.1", flavor, kind);
-                var candidate = UpdateManifestRules.Select(legacy, identity)!;
+                var identity = new InstalledUpdateIdentity("1.1.2", flavor, kind);
+                var candidate = UpdateManifestRules.Select(modern, identity)!;
                 UpdateManifestRules.ValidateCandidate(candidate, identity);
                 StringAssert.StartsWith(UpdateManifestRules.DownloadUri(candidate).AbsoluteUri,
-                    "https://github.com/TahsinFaiyaz30/CloudBay/releases/download/v1.1.2/CloudBay-");
+                    "https://github.com/TahsinFaiyaz30/CloudInlet/releases/download/v1.1.3/CloudInlet-");
                 Assert.AreEqual(kind, candidate.Asset.InstallerKind);
                 Assert.AreEqual(flavor, candidate.Asset.BuildFlavor);
+                var retired = candidate with { Asset = candidate.Asset with { FileName = candidate.Asset.FileName.Replace("CloudInlet-", "CloudBay-", StringComparison.Ordinal) } };
+                Assert.ThrowsException<InvalidDataException>(() => UpdateManifestRules.Select(legacy, identity));
+                Assert.ThrowsException<InvalidDataException>(() => UpdateManifestRules.ValidateCandidate(retired, identity));
+                Assert.ThrowsException<InvalidDataException>(() => UpdateManifestRules.DownloadUri(retired));
             }
         Assert.ThrowsException<InvalidDataException>(() => UpdateManifestRules.Select(legacy with { Repository = UpdateManifestRules.Repository }, new("1.1.1", UpdateBuildFlavor.Release, UpdateInstallerKind.Exe)));
-        Assert.ThrowsException<InvalidDataException>(() => UpdateManifestRules.Select(modern with { Repository = UpdateManifestRules.LegacyRepository }, new("1.1.1", UpdateBuildFlavor.Release, UpdateInstallerKind.Exe)));
+        Assert.ThrowsException<InvalidDataException>(() => UpdateManifestRules.Select(modern with { Repository = legacy.Repository }, new("1.1.1", UpdateBuildFlavor.Release, UpdateInstallerKind.Exe)));
         Assert.ThrowsException<InvalidDataException>(() => UpdateManifestRules.Select(modern with { SchemaVersion = 1 }, new("1.1.1", UpdateBuildFlavor.Release, UpdateInstallerKind.Exe)));
     }
 
@@ -578,6 +582,9 @@ public sealed class UpdateCoordinatorTests
     {
         foreach (var redirect in new[] { "http://github.com/TahsinFaiyaz30/CloudInlet/releases/download/v1.1.0/updates-v2.json",
                      "https://example.com/payload", "https://github.com/attacker/repo/releases/download/v1.1.0/updates-v2.json",
+                     "https://github.com/TahsinFaiyaz30/CloudBay/releases/latest/download/updates-v1.json",
+                     "https://github.com/TahsinFaiyaz30/CloudBay/releases/download/v1.1.2/CloudBay-1.1.2-win-x64-release-setup.exe",
+                     "https://github.com/TahsinFaiyaz30/CloudInlet/releases/download/v1.1.3/CloudBay-1.1.3-win-x64-release-setup.exe",
                      "https://github.com:444/TahsinFaiyaz30/CloudInlet/releases/download/v1.1.0/updates-v2.json" })
         {
             await using var fixture = new Fixture();

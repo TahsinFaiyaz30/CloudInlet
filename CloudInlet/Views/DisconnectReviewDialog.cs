@@ -14,7 +14,8 @@ internal sealed class DisconnectReviewDialog : ContentDialog
     internal DisconnectReviewDialog()
     {
         Title = "Disconnect this B2 account?"; CloseButtonText = "Cancel";
-        DefaultButton = ContentDialogButton.Close; Resources["ContentDialogMaxWidth"] = 680d;
+        DefaultButton = ContentDialogButton.Close;
+        SourceImportDialog.ConfigureLayout(this);
         _body.Children.Add(SourceImportDialog.Text("Choose what happens to the local CloudInlet copy. Your Backblaze B2 files and versions are kept in every option.", true));
         var group = Guid.NewGuid().ToString("N");
         Add(DisconnectMode.DownloadAndDisconnect, "Download files, then disconnect",
@@ -25,20 +26,20 @@ internal sealed class DisconnectReviewDialog : ContentDialog
             "Remove only unchanged local files and online-only placeholders backed by a verified B2 version. Keep unsynced files, changed files, personal folders, and unverified copies. Nothing is downloaded.");
         _body.Children.Add(SourceImportDialog.Text("Active transfers are paused with recoverable checkpoints. Keep CloudInlet running until disconnect completes.", true));
         _choices[DisconnectMode.DisconnectOnly].IsChecked = true;
-        Content = new ScrollViewer { Content = _body, MaxHeight = 600, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+        Content = SourceImportDialog.ScrollContent(_body);
 
         void Add(DisconnectMode mode, string name, string detail)
         {
-            var content = new StackPanel { Spacing = 4 }; content.Children.Add(SourceImportDialog.Text(name)); content.Children.Add(SourceImportDialog.Text(detail, true));
-            var choice = new RadioButton { GroupName = group, Content = content, HorizontalAlignment = HorizontalAlignment.Stretch };
+            var content = new StackPanel { Spacing = 4 }; content.Children.Add(SourceImportDialog.Heading(name)); content.Children.Add(SourceImportDialog.Text(detail, true));
+            var choice = new RadioButton { GroupName = group, Content = content, HorizontalAlignment = HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Stretch, MinHeight = 48 };
             choice.Checked += (_, _) => PrimaryButtonText = mode switch
             {
                 DisconnectMode.DownloadAndDisconnect => "Download and disconnect",
                 DisconnectMode.RemoveLocalCopyAndDisconnect => "Remove copies and disconnect",
                 _ => "Disconnect only"
             };
-            _choices.Add(mode, choice); _body.Children.Add(choice);
+            _choices.Add(mode, choice); _body.Children.Add(SourceImportDialog.Surface(choice));
         }
     }
 }

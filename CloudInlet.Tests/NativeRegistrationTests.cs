@@ -12,6 +12,32 @@ namespace CloudInlet.Tests;
 public sealed class NativeRegistrationTests
 {
     [TestMethod]
+    public async Task NewRegistrationCommitsRecoveryBeforeRegistrationAndExistingRootsDoNotRepeatIt()
+    {
+        var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "CloudInlet-RegistrationJournal-" + Guid.NewGuid().ToString("N"));
+        var account = "registration-journal-" + Guid.NewGuid().ToString("N");
+        await using var service = new WindowsPlaceholderService();
+        var commits = 0;
+        try
+        {
+            await service.ConnectAsync(root, account, (_, _, _, _, _) => Task.CompletedTask, CancellationToken.None, () =>
+            {
+                Assert.IsFalse(StorageProviderSyncRootManager.GetCurrentSyncRoots().Any(item => item.Path.Path.Equals(root, StringComparison.OrdinalIgnoreCase)));
+                commits++;
+            });
+            await service.DisconnectAsync();
+            await service.ConnectAsync(root, account, (_, _, _, _, _) => Task.CompletedTask, CancellationToken.None, () => commits++);
+            Assert.AreEqual(1, commits);
+        }
+        finally
+        {
+            await service.DisconnectAsync();
+            if (service.RegistrationId is { } registration) StorageProviderSyncRootManager.Unregister(registration);
+            DeleteGeneratedRoot(root);
+        }
+    }
+
+    [TestMethod]
     public async Task FailedHiddenFolderRegistrationRollsBackWithoutDeletingExistingLocalData()
     {
         var root = Path.Combine(Path.GetTempPath(), "CloudInlet-RegistrationFailure-" + Guid.NewGuid().ToString("N"));
@@ -201,7 +227,7 @@ public sealed class NativeRegistrationTests
         var temporary = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath()));
         var name = Path.GetFileName(resolved);
         var prefixes = new[] { "CloudInlet-RegistrationFailure-", "CloudInlet-ExistingRegistration-", "CloudInlet-PinHydration-",
-            "CloudInlet-UnregisterFailure-", "CloudInlet-RestartUnregister-" };
+            "CloudInlet-UnregisterFailure-", "CloudInlet-RestartUnregister-", "CloudInlet-RegistrationJournal-" };
         if (!(string.Equals(parent, userProfile, StringComparison.OrdinalIgnoreCase) || string.Equals(parent, temporary, StringComparison.OrdinalIgnoreCase)) ||
             !prefixes.Any(prefix => name.StartsWith(prefix, StringComparison.Ordinal) && Guid.TryParseExact(name[prefix.Length..], "N", out _)))
             throw new IOException("Refusing cleanup outside a uniquely generated native registration test root.");

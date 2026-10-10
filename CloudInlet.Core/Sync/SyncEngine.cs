@@ -161,6 +161,7 @@ public sealed class SyncEngine : IAsyncDisposable
         SetStatus(_snapshot with { State = ClientState.Syncing, Pending = 0, Message = "Checking for changes" });
         var baseline = _manifest.ReadAll();
         var directoryBaseline = _manifest.ReadDirectories();
+        var registrationRecovery = _manifest.ReadRegistrationRecovery();
         var localSnapshot = await Task.Run(() => ScanLocal(settings, ct, "Checking local files"), ct);
         var scanIssues = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         void ReportScanIssues(LocalSnapshot snapshot)
@@ -192,8 +193,10 @@ public sealed class SyncEngine : IAsyncDisposable
         // Missing paths are deletion candidates only inside successfully inspected portions
         // of both snapshots. Unavailable subtrees retain their last verified cloud baseline.
         var deletions = baseline.Keys.Where(p => !PathRules.IsExcluded(p, settings) && !localSnapshot.IsUnavailable(p) &&
+            !(registrationRecovery.Contains("F:" + p) && !local.ContainsKey(p) && remote.ContainsKey(p)) &&
             (!local.ContainsKey(p) || !remote.ContainsKey(p))).Select(p => "F:" + p)
             .Concat(directoryBaseline.Keys.Where(p => !PathRules.IsExcluded(p, settings, isDirectory: true) && !localSnapshot.IsUnavailable(p) &&
+                !(registrationRecovery.Contains("D:" + p) && !localSnapshot.Directories.Contains(p) && remoteDirectories.ContainsKey(p)) &&
                 (!localSnapshot.Directories.Contains(p) || !remoteDirectories.ContainsKey(p))).Select(p => "D:" + p)).ToList();
         var massDelete = deletions.Count >= 10 && deletions.Count > (baseline.Count + directoryBaseline.Count) / 4;
         var review = deletions.ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -224,6 +227,8 @@ public sealed class SyncEngine : IAsyncDisposable
             try
             {
                 var path = PathRules.FullPath(settings.RootPath, relative);
+                if (disk is not null && registrationRecovery.Contains("F:" + relative))
+                    _manifest.CompleteRegistrationRecovery(relative);
                 if (cloud is null)
                 {
                     if (last is null && disk is not null) { uploads.Add(relative); continue; }
@@ -244,7 +249,7 @@ public sealed class SyncEngine : IAsyncDisposable
                 }
                 if (disk is null)
                 {
-                    if (last is not null && cloud.FileId == last.Remote.FileId)
+                    if (last is not null && cloud.FileId == last.Remote.FileId && !registrationRecovery.Contains("F:" + relative))
                     {
                         // B2 hide markers preserve older versions; never permanently delete B2 versions here.
                         await _cloud.HideAsync(settings.BucketId, cloud.Key, ct);
@@ -440,6 +445,7 @@ public sealed class SyncEngine : IAsyncDisposable
     {
         var errors = 0;
         var local = snapshot.Directories;
+        var registrationRecovery = _manifest.ReadRegistrationRecovery();
         // Children first: remote folder removal only removes truly empty directories, never their data.
         var paths = local.Concat(remote.Keys).Concat(baseline.Keys).Distinct(StringComparer.OrdinalIgnoreCase)
             .Where(p => !PathRules.IsExcluded(p, settings, isDirectory: true) && !snapshot.IsUnavailable(p))
@@ -494,7 +500,8 @@ public sealed class SyncEngine : IAsyncDisposable
                     }
                     continue;
                 }
-                if (!existedInSnapshot && last is not null && cloud.FileId == last.Remote.FileId && !Directory.Exists(path))
+                if (!existedInSnapshot && last is not null && cloud.FileId == last.Remote.FileId && !Directory.Exists(path) &&
+                    !registrationRecovery.Contains("D:" + relative))
                 {
                     ReportFolderOperation("Syncing deleted folder", relative);
                     await _cloud.HideAsync(settings.BucketId, cloud.Key, ct);
@@ -508,6 +515,7 @@ public sealed class SyncEngine : IAsyncDisposable
                 // every no-op poll, especially for large directory trees.
                 if (!Directory.Exists(path)) Directory.CreateDirectory(path);
                 if (last?.Remote != cloud) _manifest.PutDirectory(new(relative, cloud));
+                else if (registrationRecovery.Contains("D:" + relative)) _manifest.CompleteRegistrationRecovery(relative, directory: true);
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception error) { errors++; Record(ActivityKind.Error, relative, error.Message); }

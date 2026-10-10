@@ -107,6 +107,19 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
     private static string Version(string path, long size, bool directory = false) => size + ":" + File.GetLastWriteTimeUtc(path).Ticks + ":" +
         File.GetCreationTimeUtc(path).Ticks + (directory ? ":folder" : "");
 
+    private static bool SourceVersionMatches(string path, TransferEntry entry, long size)
+    {
+        if (!entry.IsFolder) return Version(path, size) == entry.Version;
+        // A Move removes individually verified children, which changes their parent's
+        // last-write time even when the directory itself is unchanged. The directory
+        // entry only creates/verifies the destination folder; each child has its own
+        // identity and content checks. Retain the saved creation identity and legacy
+        // version format, so an interrupted Move can still finish its folder receipt.
+        var parts = entry.Version.Split(':');
+        return parts.Length == 4 && parts[0] == "0" && parts[3] == "folder" &&
+            long.TryParse(parts[2], out var created) && File.GetCreationTimeUtc(path).Ticks == created;
+    }
+
     public ITransferSourceFile OpenSource(TransferEntry entry) => new LocalSource(this, entry);
 
     public async Task<TransferReceipt?> ReconcileAsync(TransferUploadRequest request, ITransferSourceFile source,
@@ -504,7 +517,7 @@ public sealed class LocalTransferEndpoint : ITransferEndpoint
             var path = owner.FullPath(Entry.RelativePath);
             if (Entry.IsFolder ? !Directory.Exists(path) : !File.Exists(path)) throw new TransferSourceChangedException("The local source no longer exists.");
             var size = Entry.IsFolder ? 0 : new FileInfo(path).Length;
-            if (Identity(path) != Entry.Id || Version(path, size, Entry.IsFolder) != Entry.Version)
+            if (Identity(path) != Entry.Id || !SourceVersionMatches(path, Entry, size))
                 throw new TransferSourceChangedException("The local source changed since it was discovered.");
             return Task.CompletedTask;
         }

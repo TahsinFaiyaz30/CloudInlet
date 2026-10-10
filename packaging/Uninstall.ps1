@@ -4,11 +4,19 @@ $allowedRoots = @('CloudInlet', 'CloudBay') | ForEach-Object { [IO.Path]::GetFul
 if (!($allowedRoots | Where-Object { $_.Equals($installRoot, [StringComparison]::OrdinalIgnoreCase) })) {
     throw 'Run the installed uninstaller from the Windows Installed apps list.'
 }
+# The canonical registration owns this directory even when 1.1.2 retained its
+# original CloudBay folder name. Do not adopt an unrelated folder by its name.
+$registered = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudInlet' -ErrorAction SilentlyContinue
+if (!$registered -or !$registered.InstallLocation -or
+    ![IO.Path]::GetFullPath([string]$registered.InstallLocation).TrimEnd('\').Equals($installRoot.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'The CloudInlet registration does not own this installation directory. Repair the installation before uninstalling.'
+}
 for ($ancestor = [IO.DirectoryInfo]$installRoot; $null -ne $ancestor; $ancestor = $ancestor.Parent) {
     if ($ancestor.Exists -and ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
         throw 'The installation path contains a directory link. Uninstallation stopped before deleting files.'
     }
 }
+if (Get-ChildItem -LiteralPath $installRoot -Force -Recurse | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) { throw 'The installation contains a linked item. Uninstallation stopped before deleting files.' }
 # Never leave online-only data behind without its provider. Disconnect in the app first.
 $providerPath = 'Software\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager'
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -33,11 +41,11 @@ $registrations = @(
 if ($registrations.Count -gt 0) {
     throw 'Open CloudInlet Settings and disconnect the account first so Windows folder locations and online-only files are handled before uninstallation.'
 }
-$processes = @(Get-Process -Name CloudInlet, CloudBay -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($installRoot + '\', [StringComparison]::OrdinalIgnoreCase) })
+$processes = @(Get-Process -Name CloudInlet -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($installRoot + '\', [StringComparison]::OrdinalIgnoreCase) })
 if ($processes.Count -gt 0) { throw 'Quit CloudInlet from the tray menu, then run uninstallation again.' }
 $programsDirectory = [IO.Path]::GetFullPath([Environment]::GetFolderPath('Programs'))
 $shell = New-Object -ComObject WScript.Shell
-foreach ($name in @('CloudInlet', 'CloudBay')) {
+foreach ($name in @('CloudInlet')) {
     $shortcutDirectory = [IO.Path]::GetFullPath((Join-Path $programsDirectory $name))
     if (!$shortcutDirectory.StartsWith($programsDirectory + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid shortcut directory.' }
     if ((Test-Path -LiteralPath $shortcutDirectory) -and ((Get-Item -LiteralPath $shortcutDirectory).Attributes -band [IO.FileAttributes]::ReparsePoint)) {

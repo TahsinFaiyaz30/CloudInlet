@@ -1,0 +1,130 @@
+<UserControl
+    x:Class="CloudInlet.Views.CloudServicesView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:views="using:CloudInlet.Views">
+    <UserControl.Resources>
+        <Style x:Key="ServiceIconContainerStyle" TargetType="Border">
+            <Setter Property="Width" Value="48" />
+            <Setter Property="Height" Value="48" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}" />
+            <Setter Property="VerticalAlignment" Value="Top" />
+        </Style>
+        <Style x:Key="ServiceBadgeStyle" TargetType="Border">
+            <Setter Property="HorizontalAlignment" Value="Left" />
+        </Style>
+        <Style x:Key="ServiceBadgeTextStyle" TargetType="TextBlock" BasedOn="{StaticResource CaptionTextBlockStyle}">
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+        </Style>
+    </UserControl.Resources>
+    <ScrollViewer x:Name="ServicesScroll" HorizontalContentAlignment="Stretch"
+                  HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled"
+                  VerticalScrollBarVisibility="Auto" SizeChanged="ServicesScroll_SizeChanged">
+        <StackPanel x:Name="ServicesContent" Style="{StaticResource CloudInletPageContentStyle}">
+            <StackPanel Spacing="12">
+                <StackPanel x:Name="AvailableServiceHeading" Spacing="4">
+                    <TextBlock Text="Available now" Style="{StaticResource CloudInletSectionHeadingStyle}"
+                               AutomationProperties.HeadingLevel="Level2" />
+                    <TextBlock Text="Choose a service for backup or cloud transfers."
+                               Style="{StaticResource CloudInletBodySecondaryTextStyle}" />
+                </StackPanel>
+                <Grid x:Name="AvailableServices" ColumnSpacing="12" RowSpacing="12">
+                    <Border Style="{StaticResource CloudInletSurfaceStyle}" Padding="20">
+                        <Grid x:Name="BackblazeCardLayout" RowSpacing="12">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid ColumnSpacing="16">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <Border Style="{StaticResource ServiceIconContainerStyle}">
+                                    <TextBlock Text="B2" FontSize="24" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                                </Border>
+                                <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
+                                    <TextBlock Text="Backblaze B2" Style="{StaticResource CloudInletSectionHeadingStyle}" TextWrapping="Wrap"
+                                               AutomationProperties.HeadingLevel="Level3" />
+                                    <Border Style="{StaticResource ServiceBadgeStyle}">
+                                        <TextBlock x:Name="BackblazeStatus" Text="Available" Style="{StaticResource ServiceBadgeTextStyle}" />
+                                    </Border>
+                                </StackPanel>
+                            </Grid>
+                            <StackPanel Grid.Row="1" Spacing="4">
+                                <TextBlock Text="Folder backup and cloud transfers" Style="{StaticResource BodyStrongTextBlockStyle}" TextWrapping="Wrap" />
+                                <TextBlock Text="Protect your PC's folders in a private bucket."
+                                           Style="{StaticResource CloudInletBodySecondaryTextStyle}" />
+                            </StackPanel>
+                            <StackPanel x:Name="BackblazeCapabilities" Grid.Row="2" Spacing="6" VerticalAlignment="Top">
+                                <TextBlock Text="Folder backup and File Explorer integration" Style="{StaticResource CloudInletBodySecondaryTextStyle}" />
+                                <TextBlock Text="Files On-Demand and version history" Style="{StaticResource CloudInletBodySecondaryTextStyle}" />
+                                <TextBlock Text="Transfers between clouds and this PC" Style="{StaticResource CloudInletBodySecondaryTextStyle}" />
+                            </StackPanel>
+                            <Button x:Name="ConnectBackblazeButton" Grid.Row="3" Content="Connect Backblaze B2"
+                                    MinHeight="36" HorizontalAlignment="Left"
+                                    Click="ConnectBackblaze_Click" AutomationProperties.Name="Connect Backblaze B2" />
+                        </Grid>
+                    </Border>
+                    <Border Style="{StaticResource CloudInletSurfaceStyle}" Padding="20">
+                        <Grid x:Name="OneDriveCardLayout" RowSpacing="12">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid ColumnSpacing="16">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <Border Style="{StaticResource ServiceIconContainerStyle}">
+                                    <IconSourceElement IconSource="{views:FluentIcon Kind=cloud, Size=28}"  Width="28" Height="28" Tag="cloud" />
+                                </Border>
+                                <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
+                                    <TextBlock Text="Microsoft OneDrive" Style="{StaticResource CloudInletSectionHeadingStyle}" TextWrapping="Wrap"
+                                               AutomationProperties.HeadingLevel="Level3" />
+                                    <Border Style="{StaticResource ServiceBadgeStyle}">
+                                        <TextBlock x:Name="OneDriveStatus" Text="Available" Style="{StaticResource ServiceBadgeTextStyle}" />
+                                    </Border>
+                                </StackPanel>
+                            </Grid>
+                            <StackPanel Grid.Row="1" Spacing="4">
+                                <TextBlock Text="Cloud transfers" Style="{StaticResource BodyStrongTextBlockStyle}" TextWrapping="Wrap" />
+                                <TextBlock Text="Browse and move your OneDrive files."
+                                           Style="{StaticResource CloudInletBodySecondaryTextStyle}" />
+                            </StackPanel>
+                            <StackPanel x:Name="OneDriveCapabilities" Grid.Row="2" Spacing="6" VerticalAlignment="Top">
+                                <TextBlock Text="Browse files and choose transfer locations" Style="{StaticResource CloudInletBodySecondaryTextStyle}" />
+                                <TextBlock Text="Transfers between clouds and this PC" Style="{StaticResource CloudInletBodySecondaryTextStyle}" />
+                                <TextBlock Text="Native folder backup is not available"
+                                           Style="{StaticResource CloudInletBodySecondaryTextStyle}" />
+                            </StackPanel>
+                            <Button x:Name="OpenOneDriveButton" Grid.Row="3" Content="Connect OneDrive"
+                                    MinHeight="36" HorizontalAlignment="Left"
+                                    Click="OpenOneDrive_Click" AutomationProperties.Name="Connect OneDrive for cloud transfers" />
+                        </Grid>
+                    </Border>
+                </Grid>
+            </StackPanel>
+            <StackPanel x:Name="PlannedServicesSection" Spacing="20">
+                <Grid x:Name="PlannedServicesHeader" ColumnSpacing="20" RowSpacing="12">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Coming soon" Style="{StaticResource CloudInletSectionHeadingStyle}"
+                                   AutomationProperties.HeadingLevel="Level2" />
+                        <TextBlock Text="Planned services will be available in future updates."
+                                   Style="{StaticResource CloudInletBodySecondaryTextStyle}" />
+                    </StackPanel>
+                    <AutoSuggestBox x:Name="PlannedServicesSearch" Grid.Column="1" PlaceholderText="Find a planned service" QueryIcon="Find"
+                                    Width="300" MaxWidth="300" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                    AutomationProperties.Name="Find a planned cloud service"
+                                    TextChanged="PlannedServicesSearch_TextChanged" />
+                </Grid>
+                <StackPanel x:Name="PlannedServiceGroups" Spacing="24" />
+                <TextBlock x:Name="NoPlannedServices" Text="No planned services match your search."
+                           Style="{StaticResource CloudInletBodySecondaryTextStyle}" Visibility="Collapsed" />
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

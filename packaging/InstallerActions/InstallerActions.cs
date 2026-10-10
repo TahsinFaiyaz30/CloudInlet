@@ -45,7 +45,12 @@ namespace CloudInlet.Packaging
                 if (session["REMOVE"].Split(',').Contains("ALL", StringComparer.OrdinalIgnoreCase))
                 {
                     using (var installed = UserKey(session, Key(flavor, "Msi")))
-                        if (installed?.GetValue("InstallDirectory") is string directory) session["INSTALLDIR"] = directory;
+                    {
+                        if (installed?.GetValue("InstallDirectory") is string directory)
+                        {
+                            session["INSTALLDIR"] = ValidateDirectory(directory);
+                        }
+                    }
                     return ActionResult.Success;
                 }
                 using (var other = UserKey(session, Key(flavor, "Exe")))
@@ -55,21 +60,22 @@ namespace CloudInlet.Packaging
                 using (var previous = UserKey(session, Key(flavor, "Msi")))
                 {
                     var previousDirectory = previous?.GetValue("InstallDirectory") as string;
+                    session["CB_PREVIOUS_DIRECTORY"] = "";
                     if (session["UPDATE"] == "1" && string.IsNullOrEmpty(previousDirectory))
                         throw new InvalidOperationException("This update requires an existing MSI installation of the same CloudInlet build.");
                     if (string.IsNullOrEmpty(session["INSTALLDIR"]))
                         session["INSTALLDIR"] = string.IsNullOrEmpty(previousDirectory) ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", AppName(flavor)) : previousDirectory;
                     if (!string.IsNullOrEmpty(previousDirectory))
                     {
-                        // On automatic updates, install into the actual remembered location.
-                        if (session["UPDATE"] == "1") session["INSTALLDIR"] = previousDirectory;
+                        previousDirectory = ValidateDirectory(previousDirectory!);
+                        session["CB_PREVIOUS_DIRECTORY"] = previousDirectory;
+                        // An installed MSI owns its location. Repairs retain it, and
+                        // upgrades retain custom names rather than moving user data.
+                        session["INSTALLDIR"] = previousDirectory;
                         using (var run = UserKey(session, @"Software\Microsoft\Windows\CurrentVersion\Run"))
-                            session["CB_CURRENT_STARTUP"] = run?.GetValue(RunName(flavor)) is string || run?.GetValue(LegacyRunName(flavor)) is string ? "1" : "0";
-                        session["CB_CURRENT_DESKTOP"] = File.Exists(DesktopShortcut(flavor)) || File.Exists(LegacyDesktopShortcut(flavor)) ? "1" : "0";
+                            session["CB_CURRENT_STARTUP"] = run?.GetValue(RunName(flavor)) is string ? "1" : "0";
+                        session["CB_CURRENT_DESKTOP"] = File.Exists(DesktopShortcut(flavor)) ? "1" : "0";
                         session["CB_PREVIOUS_INSTALL"] = "1";
-                        using (var approved = UserKey(session, @"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"))
-                            if (approved?.GetValue(RunName(flavor)) == null && approved?.GetValue(LegacyRunName(flavor)) is byte[] approval)
-                                session["CB_LEGACY_STARTUP_APPROVAL"] = Convert.ToBase64String(approval);
                         if (session["UPDATE"] == "1")
                         {
                             session["Preselected"] = "1";
@@ -89,13 +95,14 @@ namespace CloudInlet.Packaging
             {
                 var directory = ValidateDirectory(session["INSTALLDIR"]);
                 var flavor = Flavor(session);
-                if (session["UPDATE"] == "1")
+                var previousDirectory = session["CB_PREVIOUS_DIRECTORY"];
+                var source = string.IsNullOrEmpty(previousDirectory) ? directory : ValidateDirectory(previousDirectory);
+                if (session["UPDATE"] == "1" || (!string.IsNullOrEmpty(previousDirectory) && string.IsNullOrEmpty(session["Installed"])))
                 {
-                    var descriptor = ReadDescriptor(Path.Combine(directory, "distribution.json"));
-                    if (descriptor == null || descriptor.BuildFlavor != flavor || descriptor.InstallerKind != "Msi" || descriptor.InstallScope != "perUser")
-                        throw new InvalidOperationException("The existing installation does not match this update package.");
+                    ValidateInstalledSource(source, flavor);
                 }
-                InstallerClientStop.Stop(flavor, directory);
+                AssertNormalTree(source);
+                InstallerClientStop.Stop(flavor, source);
                 var data = new CustomActionData();
                 data.Add("Directory", directory);
                 data.Add("Version", session["ProductVersion"]);
@@ -103,8 +110,6 @@ namespace CloudInlet.Packaging
                 data.Add("Revision", session["CB_REVISION"]);
                 data.Add("Startup", WillInstall(session, "Startup") ? "1" : "0");
                 data.Add("Desktop", WillInstall(session, "DesktopShortcut") ? "1" : "0");
-                data.Add("UserSID", session["UserSID"]);
-                data.Add("LegacyStartupApproval", session["CB_LEGACY_STARTUP_APPROVAL"]);
                 session["WriteDistribution"] = data.ToString();
                 return ActionResult.Success;
             });
@@ -135,14 +140,6 @@ namespace CloudInlet.Packaging
                     throw new IOException("Installation metadata cannot be a linked file.");
                 using (var output = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None))
                     new DataContractJsonSerializer(typeof(Distribution)).WriteObject(output, descriptor);
-                if (!string.IsNullOrEmpty(data["LegacyStartupApproval"]))
-                {
-                    if (!data["UserSID"].StartsWith("S-1-", StringComparison.Ordinal)) throw new IOException("The installing user could not be identified.");
-                    using (var users = RegistryKey.OpenBaseKey(RegistryHive.Users, RegistryView.Registry64))
-                    using (var approved = users.CreateSubKey(data["UserSID"] + @"\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"))
-                        if (approved.GetValue(RunName(data["Flavor"])) == null)
-                            approved.SetValue(RunName(data["Flavor"]), Convert.FromBase64String(data["LegacyStartupApproval"]), RegistryValueKind.Binary);
-                }
                 return ActionResult.Success;
             });
         }
@@ -175,8 +172,7 @@ namespace CloudInlet.Packaging
         private static string Flavor(Session session) => session["CB_FLAVOR"] == "Debug" ? "Debug" : "Release";
         private static string AppName(string flavor) => flavor == "Debug" ? "CloudInlet Debug" : "CloudInlet";
         private static string RunName(string flavor) => flavor == "Debug" ? "CloudInletDebug" : "CloudInlet";
-        private static string LegacyRunName(string flavor) => flavor == "Debug" ? "CloudBayDebug" : "CloudBay";
-        // Old update workers and cross-installer checks require this identity.
+        // Keep the installed Windows product and cross-installer identity stable.
         private static string Key(string flavor, string kind) => @"Software\CloudBay\Distribution\" + flavor + @"\" + kind;
         private static RegistryKey? UserKey(Session session, string path)
         {
@@ -188,7 +184,33 @@ namespace CloudInlet.Packaging
                 return users.OpenSubKey(sid + "\\" + path);
         }
         private static string DesktopShortcut(string flavor) => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), AppName(flavor) + ".lnk");
-        private static string LegacyDesktopShortcut(string flavor) => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), (flavor == "Debug" ? "CloudBay Debug" : "CloudBay") + ".lnk");
+
+        private static void AssertNormalTree(string directory)
+        {
+            ValidateDirectory(directory);
+            if (!Directory.Exists(directory)) return;
+            foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
+            {
+                var attributes = File.GetAttributes(entry);
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new IOException("The installation contains a linked file or directory. Remove the link before upgrading.");
+                if ((attributes & FileAttributes.Directory) != 0) AssertNormalTree(entry);
+            }
+        }
+
+        private static void ValidateInstalledSource(string directory, string flavor)
+        {
+            var descriptor = ReadDescriptor(Path.Combine(directory, "distribution.json"));
+            if (descriptor == null || descriptor.SchemaVersion != 1 || descriptor.BuildFlavor != flavor ||
+                descriptor.InstallerKind != "Msi" || descriptor.InstallScope != "perUser" || descriptor.Architecture != "x64" ||
+                string.IsNullOrEmpty(descriptor.InstallDirectory) ||
+                !string.Equals(ValidateDirectory(descriptor.InstallDirectory), directory, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The existing installation does not match this MSI. Repair that installation before retrying the upgrade.");
+            var executable = Path.Combine(directory, "CloudInlet.exe");
+            if (!File.Exists(executable) || (File.GetAttributes(executable) & FileAttributes.ReparsePoint) != 0 ||
+                FileVersionInfo.GetVersionInfo(executable).ProductVersion?.Split('+')[0] != descriptor.Version)
+                throw new IOException("Upgrade CloudBay through the published 1.1.2 bridge first, or repair the existing CloudInlet installation before updating.");
+        }
 
         private static string ValidateDirectory(string value)
         {

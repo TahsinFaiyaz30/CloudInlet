@@ -18,17 +18,17 @@ internal sealed class BackupSetupDialog : ContentDialog
     private readonly bool _stopping;
     private readonly string _currentPath;
     private readonly StackPanel _body = new() { Spacing = 16 };
-    private readonly StackPanel _locations = new() { Spacing = 8 };
-    private readonly StackPanel _transfer = new() { Spacing = 8 };
+    private readonly StackPanel _locations = new() { Spacing = 12 };
+    private readonly StackPanel _transfer = new() { Spacing = 16 };
     private readonly TextBlock _locationHeading;
     private readonly InfoBar _error = new() { IsClosable = true, Severity = InfoBarSeverity.Error };
     private readonly TextBlock _effect = SourceImportDialog.Text("", true);
-    private readonly ComboBox _mode = new() { Header = "Existing files", HorizontalAlignment = HorizontalAlignment.Stretch };
-    private readonly CheckBox _freeSpace = new() { Content = "Free downloaded CloudInlet copies; keep files in B2" };
+    private readonly ComboBox _mode = new() { Header = "Existing files", HorizontalAlignment = HorizontalAlignment.Stretch, MinHeight = 36 };
+    private readonly CheckBox _freeSpace = new() { Content = SourceImportDialog.Text("Free downloaded CloudInlet copies; keep files in B2"), MinHeight = 36 };
     private readonly CancellationTokenSource _lifetime = new();
     private readonly List<RadioButton> _locationButtons = [];
     private readonly string _group = Guid.NewGuid().ToString("N");
-    private readonly Button _browse = new() { Content = "Choose another folder…", HorizontalAlignment = HorizontalAlignment.Left };
+    private readonly Button _browse = SourceImportDialog.ActionButton("Choose another folder…");
     private readonly RadioButton _none;
     private readonly RadioButton _bring;
     private readonly RadioButton _cloud;
@@ -60,21 +60,27 @@ internal sealed class BackupSetupDialog : ContentDialog
         Title = stopping ? "Stop backing up " + name : "Set up " + name + " backup";
         PrimaryButtonText = "Review choices"; CloseButtonText = "Cancel";
         DefaultButton = ContentDialogButton.None;
-        Resources["ContentDialogMaxWidth"] = 680d;
+        SourceImportDialog.ConfigureLayout(this);
 
         _body.Children.Add(SourceImportDialog.Text(stopping
             ? "Choose what happens to your files when Windows stops opening this folder in CloudInlet."
             : "Choose the files to bring into CloudInlet, or turn on backup without importing existing files.", true));
         _bring = new RadioButton { GroupName = _group + "action", IsChecked = true,
-            Content = stopping ? "Copy or move files to another location" : "Bring existing files" };
+            Content = SourceImportDialog.Text(stopping ? "Copy or move files to another location" : "Bring existing files"),
+            MinHeight = 36, HorizontalContentAlignment = HorizontalAlignment.Stretch };
         _none = new RadioButton { GroupName = _group + "action",
-            Content = stopping ? "Turn off without restoring files" : "Turn on without importing files" };
+            Content = SourceImportDialog.Text(stopping ? "Turn off without restoring files" : "Turn on without importing files"),
+            MinHeight = 36, HorizontalContentAlignment = HorizontalAlignment.Stretch };
         _cloud = new RadioButton { GroupName = _group + "action",
-            Content = stopping ? "Transfer B2 files directly to OneDrive" : "Bring files directly from OneDrive" };
+            Content = SourceImportDialog.Text(stopping ? "Transfer B2 files directly to OneDrive" : "Bring files directly from OneDrive"),
+            MinHeight = 36, HorizontalContentAlignment = HorizontalAlignment.Stretch };
         _bring.Checked += (_, _) => UpdateEffect(); _none.Checked += (_, _) => UpdateEffect();
         _cloud.Checked += (_, _) => UpdateEffect();
-        _body.Children.Add(_bring); _body.Children.Add(_cloud); _body.Children.Add(_none);
-        _locationHeading = SourceImportDialog.Text(stopping ? "Windows will open " + name + " here" : "Choose a source", false);
+        var choices = new StackPanel { Spacing = 8 };
+        choices.Children.Add(SourceImportDialog.Heading("Your files"));
+        choices.Children.Add(_bring); choices.Children.Add(_cloud); choices.Children.Add(_none);
+        _body.Children.Add(SourceImportDialog.Surface(choices));
+        _locationHeading = SourceImportDialog.Heading(stopping ? "Windows will open " + name + " here" : "Choose a source");
         _body.Children.Add(_locationHeading);
         AddLocation(stopping ? "Previous Windows location" : "Current Windows location", _currentPath, true);
         if (stopping)
@@ -95,9 +101,8 @@ internal sealed class BackupSetupDialog : ContentDialog
             _body.Children.Add(_freeSpace);
             _body.Children.Add(SourceImportDialog.Text("Freeing space keeps online-only files in CloudInlet. Files still waiting to upload remain on this PC.", true));
         }
-        _body.Children.Add(_effect); _body.Children.Add(_error);
-        Content = new ScrollViewer { Content = _body, MaxHeight = 600, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+        _body.Children.Add(SourceImportDialog.Surface(_effect)); _body.Children.Add(_error);
+        Content = SourceImportDialog.ScrollContent(_body);
         Closed += (_, _) => { _closed = true; _lifetime.Cancel(); DisposeWhenIdle(); };
         PrimaryButtonClick += (_, args) => { if (_working || _closed) args.Cancel = true; };
         if (presentationCandidates is not null) RenderCandidates(presentationCandidates);
@@ -111,11 +116,12 @@ internal sealed class BackupSetupDialog : ContentDialog
 
     private RadioButton AddLocation(string label, string path, bool selected = false)
     {
-        var content = new StackPanel { Spacing = 3 };
-        content.Children.Add(SourceImportDialog.Text(label));
+        var content = new StackPanel { Spacing = 4 };
+        content.Children.Add(SourceImportDialog.Heading(label));
         content.Children.Add(SourceImportDialog.Text(path, true));
         var button = new RadioButton { GroupName = _group + "location", Content = content,
-            IsChecked = false, Tag = path, HorizontalAlignment = HorizontalAlignment.Stretch, MinHeight = 56 };
+            IsChecked = false, Tag = path, HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch, MinHeight = 56, Padding = new Thickness(0, 8, 0, 8) };
         AutomationProperties.SetName(button, label + ". " + path);
         button.Checked += (_, _) => { _selectedPath = path; UpdateEffect(); };
         _locationButtons.Add(button); _locations.Children.Add(button);

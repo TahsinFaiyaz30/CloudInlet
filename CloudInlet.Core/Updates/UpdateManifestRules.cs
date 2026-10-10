@@ -7,11 +7,9 @@ namespace CloudInlet.Core.Updates;
 public static class UpdateManifestRules
 {
     public const string Repository = "TahsinFaiyaz30/CloudInlet";
-    // Published CloudBay builds trust this exact repository and asset prefix. Keep
-    // their feed separate so installed clients can receive the rename update.
-    public const string LegacyRepository = "TahsinFaiyaz30/CloudBay";
+    // CloudBay clients upgrade through the immutable 1.1.2 bridge. Subsequent
+    // CloudInlet releases trust only the canonical schema-2 feed and assets.
     public static readonly Uri FeedUri = new($"https://github.com/{Repository}/releases/latest/download/updates-v2.json");
-    public static readonly Uri LegacyFeedUri = new($"https://github.com/{LegacyRepository}/releases/latest/download/updates-v1.json");
     public static JsonSerializerOptions JsonOptions { get; } = new(JsonSerializerDefaults.Web)
     {
         Converters = { new NamedEnumConverter<UpdateBuildFlavor>(), new NamedEnumConverter<UpdateInstallerKind>() },
@@ -21,13 +19,7 @@ public static class UpdateManifestRules
     public static UpdateCandidate? Select(UpdateManifest manifest, InstalledUpdateIdentity identity)
     {
         ValidateIdentity(identity);
-        var assetPrefix = manifest.SchemaVersion switch
-        {
-            2 when manifest.Repository == Repository => "CloudInlet",
-            1 when manifest.Repository == LegacyRepository => "CloudBay",
-            _ => null
-        };
-        if (assetPrefix is null ||
+        if (manifest.SchemaVersion != 2 || manifest.Repository != Repository ||
             !UpdateVersion.TryParse(manifest.Version, out var version) || manifest.Tag != "v" + manifest.Version ||
             manifest.Assets is null || manifest.Assets.Count is < 1 or > 32)
             throw new InvalidDataException("The release update manifest is invalid.");
@@ -35,7 +27,7 @@ public static class UpdateManifestRules
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var asset in manifest.Assets)
         {
-            ValidateAsset(asset, manifest.Version, assetPrefix);
+            ValidateAsset(asset, manifest.Version);
             if (!variants.Add($"{asset.BuildFlavor}|{asset.InstallerKind}|{asset.Architecture}") || !names.Add(asset.FileName))
                 throw new InvalidDataException("The release manifest contains duplicate update variants.");
         }
@@ -58,24 +50,25 @@ public static class UpdateManifestRules
     public static void ValidateCandidate(UpdateCandidate candidate, InstalledUpdateIdentity identity)
     {
         if (candidate?.Asset?.FileName is null) throw new InvalidDataException("The cached update identity is invalid.");
-        var legacy = candidate.Asset.FileName.StartsWith("CloudBay-", StringComparison.Ordinal);
-        var selected = Select(new UpdateManifest(legacy ? 1 : 2, legacy ? LegacyRepository : Repository,
+        var selected = Select(new UpdateManifest(2, Repository,
             candidate.Version, candidate.Tag, [candidate.Asset]), identity);
         if (selected is null) throw new InvalidDataException("The cached update is not newer than this installation.");
     }
 
     public static Uri DownloadUri(UpdateCandidate candidate)
     {
-        var repository = candidate.Asset.FileName.StartsWith("CloudBay-", StringComparison.Ordinal) ? LegacyRepository : Repository;
-        return new Uri($"https://github.com/{repository}/releases/download/{Uri.EscapeDataString(candidate.Tag)}/{Uri.EscapeDataString(candidate.Asset.FileName)}");
+        if (candidate is null || !UpdateVersion.TryParse(candidate.Version, out _) || candidate.Tag != "v" + candidate.Version)
+            throw new InvalidDataException("The release update identity is invalid.");
+        ValidateAsset(candidate.Asset, candidate.Version);
+        return new Uri($"https://github.com/{Repository}/releases/download/{Uri.EscapeDataString(candidate.Tag)}/{Uri.EscapeDataString(candidate.Asset.FileName)}");
     }
 
-    private static void ValidateAsset(UpdateAsset asset, string version, string assetPrefix)
+    private static void ValidateAsset(UpdateAsset asset, string version)
     {
         if (asset is null || !Enum.IsDefined(asset.BuildFlavor) || !Enum.IsDefined(asset.InstallerKind) ||
             asset.Architecture is not ("x64" or "arm64") || asset.Size is <= 0 or > 1_073_741_824L ||
             asset.Sha256 is not { Length: 64 } || !asset.Sha256.All(Uri.IsHexDigit) ||
-            asset.FileName is null || !Regex.IsMatch(asset.FileName, @"^(CloudInlet|CloudBay)-[A-Za-z0-9][A-Za-z0-9._-]{0,180}\.(exe|msi|zip|msix|msixupload)$",
+            asset.FileName is null || !Regex.IsMatch(asset.FileName, @"^CloudInlet-[A-Za-z0-9][A-Za-z0-9._-]{0,180}\.(exe|msi|zip|msix|msixupload)$",
                 RegexOptions.CultureInvariant) || asset.FileName.Contains("..", StringComparison.Ordinal))
             throw new InvalidDataException("A release installer entry is invalid.");
         var suffix = asset.InstallerKind switch
@@ -83,7 +76,7 @@ public static class UpdateManifestRules
             UpdateInstallerKind.Exe => "setup.exe", UpdateInstallerKind.Msi => "setup.msi",
             UpdateInstallerKind.Portable => "portable.zip", _ => ""
         };
-        var expectedName = $"{assetPrefix}-{version}-win-{asset.Architecture}-{asset.BuildFlavor.ToString().ToLowerInvariant()}-{suffix}";
+        var expectedName = $"CloudInlet-{version}-win-{asset.Architecture}-{asset.BuildFlavor.ToString().ToLowerInvariant()}-{suffix}";
         if (suffix.Length == 0 || asset.FileName != expectedName)
             throw new InvalidDataException("The release installer name does not match its version and installed variant.");
     }

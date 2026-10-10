@@ -27,6 +27,8 @@ public sealed class ClientViewModel : INotifyPropertyChanged
     public string LastSyncFullLabel { get; private set; } = "";
     public string BucketLabel { get; private set; } = "Backblaze B2";
     public string PauseLabel { get; private set; } = "Pause syncing";
+    public bool IsTransferPauseActive => Preview is { } preview
+        ? preview.ManualPauseActive || preview.Snapshot.State == ClientState.Paused : _controller.IsTransferPauseActive;
     public bool HasActivity { get; private set; }
     public bool IsConfigured { get; private set; }
     public bool IsProgressVisible { get; private set; }
@@ -43,6 +45,8 @@ public sealed class ClientViewModel : INotifyPropertyChanged
     public bool HasActivityRows { get; private set; }
     public bool HasTransferSummary { get; private set; }
     public string TransferSummary { get; private set; } = "";
+    public string ActivityStatusSummary => HasTransfers && HasTransferSpeed
+        ? $"{TransferSummary} · {TransferSpeedSummary}" : TransferSummary;
     public string AdditionalTransfersSummary { get; private set; } = "";
     public bool HasAdditionalTransfers { get; private set; }
     public string QueueSummary { get; private set; } = "";
@@ -97,7 +101,7 @@ public sealed class ClientViewModel : INotifyPropertyChanged
         LastSyncFullLabel = snapshot.LastSync is { } fullTime ? fullTime.ToLocalTime().ToString("f") : "";
         StorageSummary = HasStorageSummary ? $"{snapshot.FileCount:N0} files · {FormatSize(snapshot.CloudBytes)} in cloud · {FormatSize(snapshot.LocalBytes)} on this PC" : "";
         BucketLabel = IsConfigured ? settings.BucketName : "Backblaze B2";
-        PauseLabel = snapshot.State == ClientState.Paused ? "Resume syncing" : "Pause syncing";
+        PauseLabel = IsTransferPauseActive ? "Resume syncing" : "Pause syncing";
         IsProgressVisible = snapshot.State is ClientState.Syncing or ClientState.Connecting;
         var progress = ProgressPresentation.ForSnapshot(snapshot);
         Progress = progress.Value;
@@ -306,6 +310,7 @@ public sealed class ActivityItem(ActivityEvent activity) : IActivityActionRow
     public string TimeFullText { get; } = activity.Time.ToLocalTime().ToString("f");
     public string SizeText { get; } = activity.Bytes > 0 ? ClientViewModel.FormatSize(activity.Bytes) : "";
     public string Summary => string.Join(" · ", new[] { Title, SizeText, TimeText }.Where(value => value.Length > 0));
+    public string StatusLine => Summary;
     public Microsoft.UI.Xaml.Visibility DetailVisibility { get; } = activity.Kind is ActivityKind.Error or ActivityKind.Conflict ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
     public string Glyph { get; } = activity.Kind switch
     {
@@ -350,6 +355,8 @@ public sealed class TransferItem : INotifyPropertyChanged, IActivityActionRow
         ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
     public string SpeedText => _transfer.Phase is TransferPhase.Uploading or TransferPhase.Downloading &&
         _transfer.BytesPerSecond > 0 ? ClientViewModel.FormatSpeed(_transfer.BytesPerSecond) : "";
+    public string StatusLine => string.Join(" · ", new[] { Summary, SpeedText,
+        ProgressLabelVisibility == Microsoft.UI.Xaml.Visibility.Visible ? ProgressLabel : "" }.Where(value => value.Length > 0));
     public Microsoft.UI.Xaml.Visibility SpeedVisibility => SpeedText.Length > 0 ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
     public double Progress => ProgressPresentation.ForTransfer(_transfer).Value;
     public bool IsIndeterminate => ProgressPresentation.ForTransfer(_transfer).IsIndeterminate;
@@ -387,6 +394,8 @@ public sealed record SyncFolderItem(string Name, string? BackupName, string Root
 public sealed record ClientPreview(AppSettings Settings, SyncSnapshot Snapshot, IReadOnlyList<ActivityEvent> Activity)
 {
     public IReadOnlyDictionary<string, string>? WindowsFolderPaths { get; init; }
+    public int ConnectedOneDriveAccounts { get; init; }
+    public bool ManualPauseActive { get; init; }
 
     public static ClientPreview ForState(ClientState state)
     {

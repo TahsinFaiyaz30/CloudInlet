@@ -29,7 +29,7 @@ public sealed partial class MainWindow
     public void ShowUpdateInitializationError(string message) => DispatcherQueue.TryEnqueue(() =>
     {
         if (_closed) return;
-        UpdateNotice.Message = message; UpdateNotice.Severity = InfoBarSeverity.Warning; UpdateNotice.IsOpen = true;
+        UpdateNotice.Message = message; UpdateNotice.Severity = InfoBarSeverity.Warning; UpdateNotice.Visibility = Visibility.Visible; UpdateNotice.IsOpen = true;
     });
 
     private void Updates_Changed(UpdateSnapshot snapshot)
@@ -41,7 +41,12 @@ public sealed partial class MainWindow
 
     private void RefreshUpdates()
     {
-        if (_updates is null) { CheckUpdateButton.IsEnabled = false; UpdatePreferencesPanel.Visibility = Visibility.Collapsed; return; }
+        if (_updates is null)
+        {
+            CheckUpdateButton.IsEnabled = DeleteUpdateButton.IsEnabled = false;
+            UpdatePreferencesPanel.Visibility = Visibility.Collapsed;
+            return;
+        }
         var state = _updates.Snapshot;
         var store = _updates.Identity.InstallerKind == UpdateInstallerKind.Store;
         var installs = _installation?.CanInstall == true;
@@ -79,6 +84,7 @@ public sealed partial class MainWindow
                 int.TryParse(item.Tag?.ToString(), out var hours) && hours == preferences.CheckIntervalHours);
         }
         finally { _loadingUpdates = false; }
+        UpdateSettingsDetailGrids();
     }
 
     private void RefreshUpdateDownloadProgress(UpdateSnapshot state)
@@ -109,6 +115,7 @@ public sealed partial class MainWindow
             await _updates!.DeleteDownloadsAsync();
             WindowsUpdateInstaller.DeleteInactiveHosts(Path.Combine(BuildInfo.DefaultDataDirectory, "Updates"));
             UpdateNotice.IsOpen = false;
+            UpdateNotice.Visibility = Visibility.Collapsed;
         });
     private async void UpdatePreference_Changed(object sender, RoutedEventArgs args) => await SaveUpdatePreferencesAsync();
     private async void UpdateInterval_Changed(object sender, SelectionChangedEventArgs args) => await SaveUpdatePreferencesAsync();

@@ -73,7 +73,8 @@ public static class SystemIntegration
         try
         {
             var fullPath = Path.GetFullPath(path);
-            // The compatibility apphost remains CloudBay.exe so an old updater can reopen this install.
+            // Recover only an owned historical Windows startup record. Future
+            // packages do not ship the old executable; disabled approval stays intact.
             return (Path.GetFileName(fullPath).Equals("CloudBay.exe", StringComparison.OrdinalIgnoreCase) ||
                 Path.GetFileName(fullPath).Equals("CloudInlet.exe", StringComparison.OrdinalIgnoreCase)) &&
                 string.Equals(Path.GetDirectoryName(fullPath), Path.GetDirectoryName(Path.GetFullPath(executable)), StringComparison.OrdinalIgnoreCase);
@@ -83,7 +84,7 @@ public static class SystemIntegration
 
     private static string StartupExecutable()
     {
-        // A legacy update worker can start the compatibility alias. Register the visible branded apphost.
+        // Always register the canonical apphost, including test-hosted calls.
         var branded = Path.Combine(AppContext.BaseDirectory, "CloudInlet.exe");
         return File.Exists(branded) ? branded : Environment.ProcessPath ?? throw new IOException("Could not find the CloudInlet executable.");
     }

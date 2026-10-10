@@ -50,7 +50,7 @@ try {
     New-Item -ItemType Directory -Path $appFolder -Force | Out-Null
     dotnet build CloudInlet.sln -c Release -v:minimal
     if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
-    dotnet test CloudInlet.Tests\CloudInlet.Tests.csproj -c Release --no-build -v:minimal --logger 'trx;LogFileName=release-package.trx' --results-directory artifacts\validation\tests
+    dotnet test CloudInlet.Tests\CloudInlet.Tests.csproj -c Release --no-build --filter 'TestCategory!=LiveProvider' -v:minimal --logger 'trx;LogFileName=release-package.trx' --results-directory artifacts\validation\tests
     if ($LASTEXITCODE -ne 0) { throw 'Release tests failed.' }
     dotnet publish CloudInlet\CloudInlet.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:PublishTrimmed=false -p:Version=$Version -o $appFolder -v:minimal
     if ($LASTEXITCODE -ne 0) { throw 'Self-contained publish failed.' }

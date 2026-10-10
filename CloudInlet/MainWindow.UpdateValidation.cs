@@ -47,12 +47,13 @@ public sealed partial class MainWindow
             RequestNavigationRoute("settings/about");
             await Task.Delay(180);
             AssertNavigationPresentation("settings/about");
-            foreach (var width in new[] { 800, 1300 })
+            foreach (var width in new[] { 760, 800, 1300 })
             {
-                AppWindow.Resize(new SizeInt32(width, 840)); SettingsPage.ChangeView(null, 0, null, true);
+                AppWindow.Resize(new SizeInt32(width, width == 760 ? 600 : 840)); SettingsPage.ChangeView(null, 0, null, true);
                 await Task.Delay(180); RootGrid.UpdateLayout();
                 if (UpdateStatusText.ActualWidth <= 0 || UpdateStatusText.ActualWidth > SettingsPage.ActualWidth || DownloadUpdateButton.ActualWidth <= 0)
                     throw new InvalidOperationException("The update status and action must fit the settings page.");
+                AssertActionLayoutWhenFits(UpdateActions);
                 await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(output, $"updates-available-{width}{suffix}.png"));
             }
             foreach (var fixture in new[]
@@ -81,10 +82,12 @@ public sealed partial class MainWindow
             if (!AutoCheckUpdateSwitch.IsOn || !AutoDownloadUpdateSwitch.IsOn || !AutoInstallUpdateSwitch.IsOn ||
                 AutoDownloadUpdateSwitch.IsEnabled || UpdateIntervalBox.SelectedItem is not Microsoft.UI.Xaml.Controls.ComboBoxItem { Tag: "6" })
                 throw new InvalidOperationException("Automatic installation must include downloading and show the saved check interval.");
-            foreach (var width in new[] { 800, 1300 })
+            foreach (var width in new[] { 760, 800, 1300 })
             {
-                AppWindow.Resize(new SizeInt32(width, 840)); SettingsPage.ChangeView(null, 0, null, true);
+                AppWindow.Resize(new SizeInt32(width, width == 760 ? 600 : 840)); SettingsPage.ChangeView(null, 0, null, true);
                 await Task.Delay(180);
+                RootGrid.UpdateLayout();
+                AssertActionLayoutWhenFits(UpdateActions);
                 await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(output, $"updates-ready-{width}{suffix}.png"));
                 SettingsPage.ChangeView(null, SettingsPage.ScrollableHeight, null, true);
                 await Task.Delay(180);

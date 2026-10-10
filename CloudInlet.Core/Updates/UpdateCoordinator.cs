@@ -361,10 +361,10 @@ public sealed class UpdateCoordinator : IAsyncDisposable
         Publish(state, message ?? (state switch
         {
             UpdateState.StoreManaged => "Microsoft Store manages updates for this installation.",
-            UpdateState.Ready => $"CloudInlet {_candidate!.Version} is downloaded and ready to install.",
+            UpdateState.Ready => $"CloudInlet {_candidate!.Version} is ready to install.",
             UpdateState.Available when _identity.InstallerKind == UpdateInstallerKind.Portable =>
                 $"CloudInlet {_candidate!.Version} is available. Download the portable package from GitHub Releases.",
-            UpdateState.Available => $"CloudInlet {_candidate!.Version} is available for your installed package type.",
+            UpdateState.Available => $"CloudInlet {_candidate!.Version} is available.",
             UpdateState.UpToDate => "You're up to date.", _ => "Updates have not been checked yet."
         }));
     }

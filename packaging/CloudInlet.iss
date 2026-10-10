@@ -12,16 +12,12 @@
 #endif
 #if BuildFlavor == "Debug"
   #define ProductName "CloudInlet Debug"
-  #define LegacyProductName "CloudBay Debug"
   #define ProductId "{061831F7-6C43-4835-AB26-E4AA777BB4F8}"
   #define StartupName "CloudInletDebug"
-  #define LegacyStartupName "CloudBayDebug"
 #else
   #define ProductName "CloudInlet"
-  #define LegacyProductName "CloudBay"
   #define ProductId "{45F4331D-E3BB-4F94-A3F7-CA225B16A8B5}"
   #define StartupName "CloudInlet"
-  #define LegacyStartupName "CloudBay"
 #endif
 #define RegistryKey "Software\CloudBay\Distribution\" + BuildFlavor + "\Exe"
 #define OtherRegistryKey "Software\CloudBay\Distribution\" + BuildFlavor + "\Msi"
@@ -72,7 +68,7 @@ Name: "{userprograms}\{#ProductName}"; Filename: "{app}\CloudInlet.exe"; Working
 Name: "{userdesktop}\{#ProductName}"; Filename: "{app}\CloudInlet.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Registry]
-; Retain the old identity for already-installed CloudBay update workers.
+; The installed Windows product identity remains stable across CloudInlet updates.
 Root: HKCU; Subkey: "{#RegistryKey}"; ValueType: string; ValueName: "InstallDirectory"; ValueData: "{app}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "{#RegistryKey}"; ValueType: string; ValueName: "Version"; ValueData: "{#AppVersion}"
 Root: HKCU; Subkey: "{#RegistryKey}"; ValueType: string; ValueName: "BuildFlavor"; ValueData: "{#BuildFlavor}"
@@ -84,6 +80,7 @@ Filename: "{app}\CloudInlet.exe"; Description: "Open {#ProductName}"; Flags: now
 [Code]
 const
   CB_FILE_ATTRIBUTE_REPARSE_POINT = $400;
+  CB_FILE_ATTRIBUTE_DIRECTORY = $10;
   CB_INVALID_FILE_ATTRIBUTES = $FFFFFFFF;
   CB_SYNCHRONIZE = $100000;
   CB_WAIT_OBJECT_0 = 0;
@@ -122,8 +119,8 @@ begin
     SuppressibleMsgBox('This update requires an existing EXE installation of the same CloudInlet build.', mbError, MB_OK, IDOK);
     Exit;
   end;
-  PreviousStartup := RegValueExists(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', '{#StartupName}') or RegValueExists(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', '{#LegacyStartupName}');
-  PreviousDesktop := FileExists(ExpandConstant('{userdesktop}\{#ProductName}.lnk')) or FileExists(ExpandConstant('{userdesktop}\{#LegacyProductName}.lnk'));
+  PreviousStartup := RegValueExists(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', '{#StartupName}');
+  PreviousDesktop := FileExists(ExpandConstant('{userdesktop}\{#ProductName}.lnk'));
   Result := True;
 end;
 
@@ -131,7 +128,8 @@ procedure InitializeWizard;
 var Tasks: string;
 begin
   if HasPrevious then begin
-    if IsUpdate then WizardForm.DirEdit.Text := PreviousDirectory;
+    { Published CloudInlet workers verify and reopen this exact directory. }
+    WizardForm.DirEdit.Text := PreviousDirectory;
     if PreviousStartup then Tasks := 'startup' else Tasks := '!startup';
     if PreviousDesktop then Tasks := Tasks + ',desktopicon' else Tasks := Tasks + ',!desktopicon';
     WizardSelectTasks(Tasks);
@@ -142,8 +140,8 @@ function ValidInstallDirectory(Path: string): Boolean;
 var Parent: string; Attributes: LongWord;
 begin
   Result := False;
+  if (Length(Path) < 8) or (Copy(Path, 2, 2) <> ':\') or (Pos('"', Path) > 0) then Exit;
   Path := RemoveBackslashUnlessRoot(ExpandFileName(Path));
-  if (Length(Path) < 8) or (Pos('"', Path) > 0) or (Copy(Path, 1, 2) = '\\') then Exit;
   // Private state and the Windows directory never belong to an installer.
   if Pos(Lowercase(AddBackslash(ExpandConstant('{localappdata}\CloudBay'))), Lowercase(AddBackslash(Path))) = 1 then Exit;
   if Pos(Lowercase(AddBackslash(ExpandConstant('{localappdata}\CloudInlet'))), Lowercase(AddBackslash(Path))) = 1 then Exit;
@@ -151,7 +149,9 @@ begin
   Parent := Path;
   while Parent <> '' do begin
     Attributes := GetFileAttributesW(Parent);
-    if (Attributes <> CB_INVALID_FILE_ATTRIBUTES) and ((Attributes and CB_FILE_ATTRIBUTE_REPARSE_POINT) <> 0) then Exit;
+    if (Attributes <> CB_INVALID_FILE_ATTRIBUTES) and
+       (((Attributes and CB_FILE_ATTRIBUTE_REPARSE_POINT) <> 0) or
+        ((Attributes and CB_FILE_ATTRIBUTE_DIRECTORY) = 0)) then Exit;
     if ExtractFileDir(Parent) = Parent then Break;
     Parent := ExtractFileDir(Parent);
   end;
@@ -173,8 +173,12 @@ begin
     Result := 'Choose a normal local application directory, outside Windows and CloudInlet private backup settings. Linked directories are not supported.';
     Exit;
   end;
-  if IsUpdate and (CompareText(ExpandConstant('{app}'), PreviousDirectory) <> 0) then begin
+  if HasPrevious and (CompareText(RemoveBackslashUnlessRoot(ExpandConstant('{app}')), RemoveBackslashUnlessRoot(PreviousDirectory)) <> 0) then begin
     Result := 'The update installation directory must match the existing installation.';
+    Exit;
+  end;
+  if HasPrevious and not FileExists(AddBackslash(PreviousDirectory) + 'CloudInlet.exe') then begin
+    Result := 'Upgrade CloudBay through its published 1.1.2 bridge first, or repair the existing CloudInlet installation before updating.';
     Exit;
   end;
   ExtractTemporaryFile('CloudInlet.SetupHelper.exe');
@@ -206,19 +210,9 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
-var Descriptor: string; Approval: AnsiString;
+var Descriptor: string;
 begin
   if CurStep = ssPostInstall then begin
-    if HasPrevious then begin
-      { Preserve Task Manager's disabled startup choice before removing the old name. }
-      if not RegValueExists(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run', '{#StartupName}') and
-         RegQueryBinaryValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run', '{#LegacyStartupName}', Approval) then
-        if not RegWriteBinaryValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run', '{#StartupName}', Approval) then
-          RaiseException('The existing Windows startup choice could not be preserved.');
-      RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', '{#LegacyStartupName}');
-      DeleteFile(ExpandConstant('{userprograms}\{#LegacyProductName}.lnk'));
-      DeleteFile(ExpandConstant('{userdesktop}\{#LegacyProductName}.lnk'));
-    end;
     if not WizardIsTaskSelected('startup') then
       RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', '{#StartupName}');
     if not WizardIsTaskSelected('desktopicon') then

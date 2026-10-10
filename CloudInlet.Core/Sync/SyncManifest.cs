@@ -20,7 +20,7 @@ public sealed class SyncManifest
         _connectionString = new SqliteConnectionStringBuilder { DataSource = databasePath, Mode = SqliteOpenMode.ReadWriteCreate }.ToString();
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY COLLATE NOCASE, remote TEXT NOT NULL, local_size INTEGER NOT NULL, local_write TEXT NOT NULL); CREATE TABLE IF NOT EXISTS directories (path TEXT PRIMARY KEY COLLATE NOCASE, remote TEXT NOT NULL); CREATE TABLE IF NOT EXISTS pending_native_marks (path TEXT PRIMARY KEY COLLATE NOCASE);";
+        command.CommandText = "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY COLLATE NOCASE, remote TEXT NOT NULL, local_size INTEGER NOT NULL, local_write TEXT NOT NULL); CREATE TABLE IF NOT EXISTS directories (path TEXT PRIMARY KEY COLLATE NOCASE, remote TEXT NOT NULL); CREATE TABLE IF NOT EXISTS pending_native_marks (path TEXT PRIMARY KEY COLLATE NOCASE); CREATE TABLE IF NOT EXISTS registration_recovery (path TEXT PRIMARY KEY COLLATE NOCASE);";
         command.ExecuteNonQuery();
     }
 
@@ -29,6 +29,39 @@ public sealed class SyncManifest
         var connection = new SqliteConnection(_connectionString);
         connection.Open();
         return connection;
+    }
+
+    /// <summary>Commit before registering a missing native root. Windows package removal can
+    /// remove its online-only placeholders; absence must not become a cloud deletion on restart.</summary>
+    public void PrepareForNewRegistration()
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "INSERT OR IGNORE INTO registration_recovery(path) SELECT 'F:' || path FROM files; INSERT OR IGNORE INTO registration_recovery(path) SELECT 'D:' || path FROM directories;";
+        command.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    public HashSet<string> ReadRegistrationRecovery()
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT path FROM registration_recovery";
+        using var reader = command.ExecuteReader();
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        while (reader.Read()) paths.Add(reader.GetString(0));
+        return paths;
+    }
+
+    public void CompleteRegistrationRecovery(string path, bool directory = false)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM registration_recovery WHERE path=$path";
+        command.Parameters.AddWithValue("$path", (directory ? "D:" : "F:") + path);
+        command.ExecuteNonQuery();
     }
 
     public IReadOnlyDictionary<string, SyncEntry> ReadAll()
@@ -55,7 +88,7 @@ public sealed class SyncManifest
         using var transaction = connection.BeginTransaction();
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = "INSERT INTO files(path,remote,local_size,local_write) VALUES($path,$remote,$size,$write) ON CONFLICT(path) DO UPDATE SET remote=$remote,local_size=$size,local_write=$write; DELETE FROM pending_native_marks WHERE path=$path;" +
+        command.CommandText = "INSERT INTO files(path,remote,local_size,local_write) VALUES($path,$remote,$size,$write) ON CONFLICT(path) DO UPDATE SET remote=$remote,local_size=$size,local_write=$write; DELETE FROM pending_native_marks WHERE path=$path; DELETE FROM registration_recovery WHERE path='F:' || $path;" +
             (entry.NativeMarkPending ? " INSERT INTO pending_native_marks(path) VALUES($path);" : "");
         command.Parameters.AddWithValue("$path", entry.RelativePath);
         command.Parameters.AddWithValue("$remote", JsonSerializer.Serialize(entry.Remote));
@@ -71,7 +104,7 @@ public sealed class SyncManifest
         using var transaction = connection.BeginTransaction();
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = "DELETE FROM files WHERE path=$path; DELETE FROM pending_native_marks WHERE path=$path";
+        command.CommandText = "DELETE FROM files WHERE path=$path; DELETE FROM pending_native_marks WHERE path=$path; DELETE FROM registration_recovery WHERE path='F:' || $path";
         command.Parameters.AddWithValue("$path", path);
         command.ExecuteNonQuery();
         transaction.Commit();
@@ -97,7 +130,7 @@ public sealed class SyncManifest
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "INSERT INTO directories(path,remote) VALUES($path,$remote) ON CONFLICT(path) DO UPDATE SET remote=$remote";
+        command.CommandText = "INSERT INTO directories(path,remote) VALUES($path,$remote) ON CONFLICT(path) DO UPDATE SET remote=$remote; DELETE FROM registration_recovery WHERE path='D:' || $path";
         command.Parameters.AddWithValue("$path", entry.RelativePath);
         command.Parameters.AddWithValue("$remote", JsonSerializer.Serialize(entry.Remote));
         command.ExecuteNonQuery();
@@ -107,7 +140,7 @@ public sealed class SyncManifest
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "DELETE FROM directories WHERE path=$path";
+        command.CommandText = "DELETE FROM directories WHERE path=$path; DELETE FROM registration_recovery WHERE path='D:' || $path";
         command.Parameters.AddWithValue("$path", path);
         command.ExecuteNonQuery();
     }

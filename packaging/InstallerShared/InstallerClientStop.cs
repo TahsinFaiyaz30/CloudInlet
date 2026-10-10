@@ -42,8 +42,7 @@ namespace CloudInlet.Packaging
         {
             if (flavor != "Debug" && flavor != "Release") throw new ArgumentException("Unsupported build flavor.");
             var sid = WindowsIdentity.GetCurrent().User?.Value ?? throw new IOException("The current Windows user could not be identified.");
-            // Keep the existing activation channel so an upgrade can gracefully
-            // stop CloudBay as well as CloudInlet and its compatibility apphost.
+            // This is the stable Windows instance identity used by CloudInlet.
             var pipeName = "CloudBay.Client." + sid + (flavor == "Debug" ? ".Debug" : "");
             using (var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.Out, PipeOptions.Asynchronous))
             {
@@ -67,7 +66,7 @@ namespace CloudInlet.Packaging
                         pipe.WriteAsync(command, 0, command.Length, deadline.Token).GetAwaiter().GetResult();
                         pipe.FlushAsync(deadline.Token).GetAwaiter().GetResult();
                     }
-                    // Close the pipe before waiting so a legacy server sees EOF.
+                    // Close the pipe before waiting so the server sees EOF.
                     pipe.Dispose();
                     if (!process.WaitForExit(90000))
                         throw new IOException("CloudInlet is still safely finishing a transfer. Wait until syncing is idle, then try again.");
@@ -77,8 +76,7 @@ namespace CloudInlet.Packaging
 
         private static void AssertNoUnresponsiveClient(string directory)
         {
-            foreach (var name in new[] { "CloudInlet", "CloudBay" })
-            foreach (var candidate in Process.GetProcessesByName(name))
+            foreach (var candidate in Process.GetProcessesByName("CloudInlet"))
             {
                 using (candidate)
                 {
@@ -93,18 +91,13 @@ namespace CloudInlet.Packaging
             }
         }
 
-        private static string ApplicationImage(string directory)
-        {
-            var current = Path.Combine(Path.GetFullPath(directory), "CloudInlet.exe");
-            return File.Exists(current) ? current : Path.Combine(Path.GetFullPath(directory), "CloudBay.exe");
-        }
+        private static string ApplicationImage(string directory) => Path.Combine(Path.GetFullPath(directory), "CloudInlet.exe");
 
         private static bool IsApplicationImage(string? image, string directory)
         {
             if (image == null) return false;
             var root = Path.GetFullPath(directory);
-            return string.Equals(image, Path.Combine(root, "CloudInlet.exe"), StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(image, Path.Combine(root, "CloudBay.exe"), StringComparison.OrdinalIgnoreCase);
+            return string.Equals(image, Path.Combine(root, "CloudInlet.exe"), StringComparison.OrdinalIgnoreCase);
         }
     }
 }

@@ -11,6 +11,61 @@ namespace CloudInlet.Tests;
 public sealed class SyncEngineTests
 {
     [TestMethod]
+    public async Task MissingRegistrationRestoresAbsentFilesWithoutSendingCloudDeletions()
+    {
+        await using var h = new Harness();
+        h.Store.Seed("CloudInlet/online.txt", "preserved cloud bytes");
+        await h.Engine.SyncNowAsync();
+        File.Delete(h.Path("online.txt"));
+        new SyncManifest(h.Database).PrepareForNewRegistration();
+        await h.Engine.SyncNowAsync();
+        Assert.AreEqual(0, h.Store.Hidden.Count, "Windows removal of placeholders must not hide cloud files.");
+        Assert.IsTrue(File.Exists(h.Path("online.txt")));
+        Assert.AreEqual(0, new SyncManifest(h.Database).ReadRegistrationRecovery().Count);
+        File.Delete(h.Path("online.txt"));
+        await h.Engine.SyncNowAsync();
+        CollectionAssert.Contains(h.Store.Hidden, "CloudInlet/online.txt", "A later intentional deletion still syncs normally.");
+    }
+
+    [TestMethod]
+    public async Task RegistrationRecoverySurvivesFailedListingAndRestoresMissingDirectories()
+    {
+        await using var h = new Harness();
+        h.Store.Seed("CloudInlet/online.txt", "cloud bytes");
+        h.Store.Seed("CloudInlet/empty/", "");
+        await h.Engine.SyncNowAsync();
+        File.Delete(h.Path("online.txt")); Directory.Delete(h.Path("empty"));
+        new SyncManifest(h.Database).PrepareForNewRegistration();
+        h.Store.FailList = true;
+        await h.Engine.SyncNowAsync();
+        var reopened = new SyncManifest(h.Database);
+        Assert.IsTrue(reopened.ReadRegistrationRecovery().Contains("F:online.txt"));
+        Assert.IsTrue(reopened.ReadRegistrationRecovery().Contains("D:empty"));
+        h.Store.FailList = false;
+        await using var restarted = new SyncEngine(h.Store, h.Placeholders, reopened,
+            new AppSettings { RootPath = h.Root, BucketId = "bucket", KeyId = "key" }, h.Recovery, _ => { }, _ => { });
+        await restarted.SyncNowAsync();
+        Assert.AreEqual(0, h.Store.Hidden.Count);
+        Assert.IsTrue(File.Exists(h.Path("online.txt")));
+        Assert.IsTrue(Directory.Exists(h.Path("empty")));
+        Assert.AreEqual(0, reopened.ReadRegistrationRecovery().Count);
+    }
+
+    [TestMethod]
+    public async Task RegistrationRecoveryRestoresLargeMissingSetWithoutMassDeletionApproval()
+    {
+        await using var h = new Harness();
+        for (var i = 0; i < 12; i++) h.Store.Seed($"CloudInlet/{i}.txt", "cloud bytes");
+        await h.Engine.SyncNowAsync();
+        foreach (var file in Directory.GetFiles(h.Root, "*.txt")) File.Delete(file);
+        new SyncManifest(h.Database).PrepareForNewRegistration();
+        await h.Engine.SyncNowAsync();
+        Assert.AreEqual(0, h.Store.Hidden.Count);
+        Assert.AreEqual(12, Directory.GetFiles(h.Root, "*.txt").Length);
+        Assert.AreEqual(ClientState.UpToDate, h.Snapshot.State);
+    }
+
+    [TestMethod]
     public async Task NewAndEditedLocalFilesUploadAndPersistAcrossRestart()
     {
         await using var h = new Harness();

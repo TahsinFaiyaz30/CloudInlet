@@ -26,8 +26,8 @@ foreach ($flavor in @('Debug', 'Release')) {
     if ($gate.Count -ne 1 -or $gate[0].buildSucceeded -ne $true -or $gate[0].testsPassed -lt 1 -or $gate[0].testsFailed -ne 0 -or $gate[0].testsSkipped -ne 0) { throw "The $flavor build and test gates have not passed." }
 }
 & (Join-Path $PSScriptRoot 'generate-update-manifest.ps1') -Version $source.version -AssetDirectory $assetsRoot -Repository $Repository | Out-Null
-$files = @(Get-ChildItem -LiteralPath $assetsRoot -File | Where-Object { $_.Name -like "CloudInlet-$($source.version)-*" -or $_.Name -like "CloudBay-$($source.version)-*" -or $_.Name -in @('updates-v1.json', 'updates-v2.json', 'SHA256SUMS.txt', 'release-validation.json') } | Sort-Object Name)
-if ($files.Count -lt 16) { throw 'The complete canonical and compatibility release payload is not ready.' }
+$files = @(Get-ChildItem -LiteralPath $assetsRoot -File | Where-Object { $_.Name -like "CloudInlet-$($source.version)-*" -or $_.Name -in @('updates-v2.json', 'SHA256SUMS.txt', 'release-validation.json') } | Sort-Object Name)
+if ($files.Count -ne 9) { throw 'The release must contain exactly six canonical packages, schema 2, checksums and validation.' }
 foreach ($file in $files) { if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked release payloads are not allowed.' } }
 
 function Invoke-Gh([string[]]$Arguments) {
@@ -58,9 +58,9 @@ else {
     if ($matching.Count -eq 1) { $release = $matching[0] }
     else {
     $notes = @"
-CloudInlet $($source.version) renames CloudBay while preserving existing accounts, backup settings, Files On-Demand roots, transfer recovery, and installation choices. Direct OneDrive and Backblaze B2 transfers remain available.
+CloudInlet $($source.version) preserves existing accounts, backup settings, Files On-Demand roots, transfer recovery, and installation choices. Direct OneDrive and Backblaze B2 transfers remain available.
 
-Choose the CloudInlet asset with the same build flavor (Release or Debug) and installer type (EXE or MSI) already installed. Portable ZIP builds are also included. CloudBay-named assets are byte-identical compatibility aliases for older updaters. The application validates installer length and SHA-256 before applying a matching update.
+Choose the CloudInlet asset with the same build flavor (Release or Debug) and installer type (EXE or MSI) already installed. Portable ZIP builds are also included. CloudBay users must first take the existing 1.1.2 bridge update; later releases use only CloudInlet packages. The application validates installer length and SHA-256 before applying a matching update.
 
 Signing status is recorded in release-validation.json. Unsigned installers can show a Windows security prompt. Microsoft Store packages, when configured, are submitted separately through Partner Center.
 "@

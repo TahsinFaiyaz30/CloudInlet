@@ -92,21 +92,23 @@ try {
     }
     & (Join-Path $PSScriptRoot 'generate-update-manifest.ps1') -Version '1.0.0' -AssetDirectory $assets | Out-Null
     $manifest = Get-Content -LiteralPath (Join-Path $assets 'updates-v2.json') -Raw | ConvertFrom-Json
-    $legacyManifest = Get-Content -LiteralPath (Join-Path $assets 'updates-v1.json') -Raw | ConvertFrom-Json
     Assert-True ($manifest.schemaVersion -eq 2 -and $manifest.assets.Count -eq 6 -and $manifest.repository -ceq 'TahsinFaiyaz30/CloudInlet' -and $manifest.tag -ceq 'v1.0.0') 'The modern manifest carries all six immutable canonical variants.'
-    Assert-True ($legacyManifest.schemaVersion -eq 1 -and $legacyManifest.assets.Count -eq 6 -and $legacyManifest.repository -ceq 'TahsinFaiyaz30/CloudBay' -and $legacyManifest.tag -ceq $manifest.tag) 'The legacy bridge preserves the repository, schema, and variants accepted by released CloudBay updaters.'
+    Assert-True (!(Test-Path -LiteralPath (Join-Path $assets 'updates-v1.json')) -and @(Get-ChildItem -LiteralPath $assets -Filter 'CloudBay-*').Count -eq 0) 'New releases do not regenerate the frozen legacy manifest or aliases.'
     foreach ($asset in $manifest.assets) {
         $path = Join-Path $assets $asset.fileName
         Assert-True ($asset.size -eq (Get-Item -LiteralPath $path).Length -and $asset.sha256 -ceq (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()) 'Every manifest byte count and digest describes its actual asset.'
-        $legacy = @($legacyManifest.assets | Where-Object { $_.buildFlavor -ceq $asset.buildFlavor -and $_.installerKind -ceq $asset.installerKind })
-        Assert-True ($legacy.Count -eq 1 -and $legacy[0].fileName -ceq $asset.fileName.Replace('CloudInlet-', 'CloudBay-') -and $legacy[0].size -eq $asset.size -and $legacy[0].sha256 -ceq $asset.sha256) 'Each legacy asset is the same verified canonical package with its old updater name.'
-        Assert-True ((Get-FileHash -LiteralPath (Join-Path $assets $legacy[0].fileName) -Algorithm SHA256).Hash.ToLowerInvariant() -ceq $asset.sha256) 'Compatibility aliases are physically byte identical.'
     }
-    $legacyFixture = Join-Path $assets $legacyManifest.assets[0].fileName
-    $savedAlias = [IO.File]::ReadAllBytes($legacyFixture)
-    [IO.File]::WriteAllText($legacyFixture, 'different legacy alias')
-    Assert-Rejected { & (Join-Path $PSScriptRoot 'generate-update-manifest.ps1') -Version '1.0.0' -AssetDirectory $assets } 'Different legacy bytes cannot be silently replaced or published.' 'Legacy update alias differs'
-    [IO.File]::WriteAllBytes($legacyFixture, $savedAlias)
+    $legacyFixture = Join-Path $assets 'CloudBay-1.0.0-win-x64-release-setup.exe'
+    [IO.File]::WriteAllText($legacyFixture, 'historical bytes must not be altered')
+    Assert-Rejected { & (Join-Path $PSScriptRoot 'generate-update-manifest.ps1') -Version '1.0.0' -AssetDirectory $assets } 'A stale legacy alias cannot be included in a new canonical release.' 'Obsolete CloudBay release assets'
+    Assert-True ([IO.File]::ReadAllText($legacyFixture) -ceq 'historical bytes must not be altered') 'Rejected historical assets are left byte-for-byte unchanged.'
+    Remove-Item -LiteralPath $legacyFixture
+    $legacyFeed = Join-Path $assets 'updates-v1.json'
+    '{}' | Set-Content -LiteralPath $legacyFeed -Encoding utf8NoBOM
+    Assert-Rejected { & (Join-Path $PSScriptRoot 'generate-update-manifest.ps1') -Version '1.0.0' -AssetDirectory $assets } 'A stale schema-1 manifest cannot enter a canonical release.' 'Obsolete CloudBay release assets'
+    Remove-Item -LiteralPath $legacyFeed
+    $checksumInventory = Get-Content -LiteralPath (Join-Path $assets 'SHA256SUMS.txt')
+    Assert-True ($checksumInventory.Count -eq 7 -and !($checksumInventory -match 'CloudBay-|updates-v1')) 'Checksums describe only six canonical assets and schema 2.'
     Assert-Rejected { & (Join-Path $PSScriptRoot 'generate-update-manifest.ps1') -Version '1.0.0' -AssetDirectory $assets -Repository 'other/repository' } 'Another repository cannot supply the trusted update feed.'
     Assert-Rejected { & (Join-Path $PSScriptRoot 'generate-update-manifest.ps1') -Version '256.0.0' -AssetDirectory $assets } 'Manifest versions obey the installer version limits.'
     $required = Join-Path $assets 'CloudInlet-1.0.0-win-x64-debug-setup.exe'
@@ -136,7 +138,7 @@ try {
             if (!$state.exists -or $state.draft) { $global:LASTEXITCODE = 1; return }
             @{ id=42;tag_name='v1.0.0';draft=$state.draft;assets=@($state.assets) } | ConvertTo-Json -Depth 6 -Compress
         } elseif ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudInlet/releases/42' -and $arguments -contains 'PATCH') {
-            Assert-True ($state.assets.Count -eq 16 -and $arguments -contains 'draft=false' -and $arguments -contains 'make_latest=true') 'Publication by release ID occurs only after both feeds and all canonical and legacy packages have been uploaded.'
+            Assert-True ($state.assets.Count -eq 9 -and $arguments -contains 'draft=false' -and $arguments -contains 'make_latest=true') 'Publication by release ID occurs only after all six canonical packages, schema 2, checksums and validation have been uploaded.'
             $state.draft = $false; $state.publications++
             @{ id=42;tag_name='v1.0.0';draft=$false;published_at='2026-10-05T00:00:00Z';assets=@($state.assets) } | ConvertTo-Json -Depth 6 -Compress
         } elseif ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudInlet/releases/42') {
@@ -175,14 +177,14 @@ try {
     $global:CloudInletReleaseTestState.interruptAfter = 0
     $global:CloudInletReleaseTestState.blockFreshList = $false
     $url = & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision
-    Assert-True ($url -ceq 'https://github.com/TahsinFaiyaz30/CloudInlet/releases/tag/v1.0.0' -and $global:CloudInletReleaseTestState.uploads -eq 16 -and $global:CloudInletReleaseTestState.publications -eq 1) 'A complete release creates one draft, uploads the verified dual feed inventory, and publishes once.'
+    Assert-True ($url -ceq 'https://github.com/TahsinFaiyaz30/CloudInlet/releases/tag/v1.0.0' -and $global:CloudInletReleaseTestState.uploads -eq 9 -and $global:CloudInletReleaseTestState.publications -eq 1) 'A complete release creates one draft, uploads the verified canonical inventory, and publishes once.'
     Assert-True ($global:CloudInletReleaseTestState.starterDeletes -eq 1) 'An interrupted starter asset is recovered before retrying its exact file.'
     Assert-True ($global:CloudInletReleaseTestState.byId -ge 1) 'Draft integrity uses the release ID when the tag endpoint returns 404.'
     & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision | Out-Null
-    Assert-True ($global:CloudInletReleaseTestState.uploads -eq 16 -and $global:CloudInletReleaseTestState.publications -eq 1) 'Re-running a published identical release never replaces or re-uploads bytes.'
+    Assert-True ($global:CloudInletReleaseTestState.uploads -eq 9 -and $global:CloudInletReleaseTestState.publications -eq 1) 'Re-running a published identical release never replaces or re-uploads bytes.'
     $global:CloudInletReleaseTestState.assets[0].digest = 'sha256:' + ('0' * 64)
     Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } 'Different remote bytes are rejected rather than clobbered.'
-    Assert-True ($global:CloudInletReleaseTestState.uploads -eq 16) 'Immutable mismatch performs no asset replacement.'
+    Assert-True ($global:CloudInletReleaseTestState.uploads -eq 9) 'Immutable mismatch performs no asset replacement.'
     Assert-True ($global:CloudInletReleaseTestState.starterDeletes -eq 1) 'Different uploaded bytes are never deleted during recovery.'
     Invoke-TestGit -Arguments @('-C', $fixture, 'commit', '--quiet', '--allow-empty', '-m', 'Simulate newer main while release is building')
     Invoke-TestGit -Arguments @('-C', $fixture, 'push', '--quiet', 'origin', 'main')

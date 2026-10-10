@@ -3,39 +3,47 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:settings="using:CommunityToolkit.WinUI.Controls"
     xmlns:views="using:CloudInlet.Views"
+    xmlns:animated="using:Microsoft.UI.Xaml.Controls.AnimatedVisuals"
     x:Class="CloudInlet.MainWindow">
     <Window.SystemBackdrop>
         <MicaBackdrop Kind="BaseAlt" />
     </Window.SystemBackdrop>
     <Grid x:Name="RootGrid" Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}">
         <Grid.Resources>
+            <!-- Recycled rows bind native glyphs directly. Replacing bitmap
+                 IconSource instances during virtualization can fail in WinUI. -->
             <DataTemplate x:Key="TransferActivityRowTemplate">
                 <Border Style="{StaticResource CloudInletSurfaceStyle}" Padding="20,16">
                     <Grid ColumnSpacing="16" Loaded="ActivityRow_Loaded" SizeChanged="ActivityRow_SizeChanged">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <FontIcon Glyph="{Binding Glyph}" FontSize="20" VerticalAlignment="Top" Margin="0,2,0,0"
-                                  Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        <StackPanel Grid.Column="1" Spacing="6">
+                                  Foreground="{ThemeResource TextFillColorSecondaryBrush}" Width="20" Height="20" />
+                        <StackPanel x:Name="ActivityDetails" Grid.Column="1" Spacing="6">
                             <TextBlock x:Name="ActivityFileName" Text="{Binding FileName}" Style="{StaticResource BodyStrongTextBlockStyle}"
                                        TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Location}" />
                             <TextBlock Text="{Binding Location}" Style="{StaticResource CloudInletSecondaryTextStyle}"
                                        TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" ToolTipService.ToolTip="{Binding Location}" />
-                            <TextBlock Text="{Binding Summary}" Style="{StaticResource CloudInletSecondaryTextStyle}"
+                        </StackPanel>
+                        <StackPanel Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Spacing="6" Margin="0,6,0,0">
+                            <TextBlock x:Name="ActivityFileStatus" Text="{Binding StatusLine}" TextWrapping="Wrap"
+                                       Style="{StaticResource CloudInletSecondaryTextStyle}"
                                        ToolTipService.ToolTip="{Binding TimeFullText}" />
-                            <TextBlock x:Name="ActivityFileSpeed" Text="{Binding SpeedText}" Visibility="{Binding SpeedVisibility}"
-                                       Style="{StaticResource CloudInletSecondaryTextStyle}" />
                             <ProgressBar Value="{Binding Progress}" Maximum="100" IsIndeterminate="{Binding IsIndeterminate}"
                                          Visibility="{Binding ProgressVisibility}" AutomationProperties.Name="{Binding ProgressAccessibleName}" />
-                            <TextBlock x:Name="ActivityFileProgress" Text="{Binding ProgressLabel}" Visibility="{Binding ProgressLabelVisibility}"
-                                       Style="{StaticResource CloudInletSecondaryTextStyle}" TextWrapping="Wrap" />
                             <TextBlock Text="{Binding Detail}" Visibility="{Binding DetailVisibility}"
                                        Style="{StaticResource CloudInletSecondaryTextStyle}" />
                         </StackPanel>
-                        <StackPanel x:Name="ActivityActions" Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <views:ActionWrapPanel x:Name="ActivityActions" Grid.Column="2" Spacing="8" VerticalAlignment="Center"
+                                               SizeChanged="ActivityActions_SizeChanged">
                             <Button x:Name="ActivityOpenFolder" MinWidth="132" MinHeight="36" Padding="12,6"
                                     Visibility="{Binding Actions.OpenFolderVisibility}" ToolTipService.ToolTip="{Binding Actions.OpenFolderToolTip}"
                                     AutomationProperties.Name="Open activity folder" Click="ActivityOpenFolder_Click">
@@ -50,7 +58,7 @@
                                     <FontIcon Glyph="&#xE753;" FontSize="16" /><TextBlock Text="View in cloud" />
                                 </StackPanel>
                             </Button>
-                        </StackPanel>
+                        </views:ActionWrapPanel>
                     </Grid>
                 </Border>
             </DataTemplate>
@@ -59,23 +67,53 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
-        <TitleBar x:Name="AppTitleBar" Title="CloudInlet">
+        <TitleBar x:Name="AppTitleBar" Title="CloudInlet" MinHeight="48"
+                  IsBackButtonVisible="True" IsBackButtonEnabled="False" BackRequested="ShellBackRequested"
+                  IsPaneToggleButtonVisible="True" PaneToggleRequested="ShellPaneToggleRequested">
             <TitleBar.IconSource>
                 <ImageIconSource ImageSource="/Assets/CloudInlet-32.png" />
             </TitleBar.IconSource>
+            <TitleBar.Content>
+                <AutoSuggestBox x:Name="NavigationSearch" Width="440" MaxWidth="520"
+                                PlaceholderText="Search CloudInlet" QueryIcon="Find"
+                                AutomationProperties.Name="Search pages and settings"
+                                UpdateTextOnSelect="False" TextMemberPath="Title" MaxSuggestionListHeight="480"
+                                GotFocus="NavigationSearch_GotFocus"
+                                TextChanged="NavigationSearch_TextChanged" QuerySubmitted="NavigationSearch_QuerySubmitted">
+                    <AutoSuggestBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid ColumnSpacing="12" Padding="0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <FontIcon Width="20" Height="20" VerticalAlignment="Center"
+                                          Glyph="{Binding Glyph}" FontSize="20" />
+                                <TextBlock Grid.Column="1" Text="{Binding Title}" TextTrimming="CharacterEllipsis"
+                                           VerticalAlignment="Center" ToolTipService.ToolTip="{Binding Title}" />
+                                <TextBlock Grid.Column="2" Text="{Binding Hint}" FontSize="12" VerticalAlignment="Center"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </Grid>
+                        </DataTemplate>
+                    </AutoSuggestBox.ItemTemplate>
+                </AutoSuggestBox>
+            </TitleBar.Content>
         </TitleBar>
         <NavigationView
             x:Name="Navigation"
             Grid.Row="1"
             PaneDisplayMode="Auto"
-            OpenPaneLength="224"
+            OpenPaneLength="272"
             CompactPaneLength="56"
             CompactModeThresholdWidth="641"
-            ExpandedModeThresholdWidth="1008"
+            ExpandedModeThresholdWidth="1120"
             IsBackButtonVisible="Collapsed"
+            IsPaneToggleButtonVisible="False"
             IsSettingsVisible="True"
             AlwaysShowHeader="False"
             SelectionChanged="Navigation_SelectionChanged"
+            ItemInvoked="Navigation_ItemInvoked"
             Background="Transparent">
             <NavigationView.Resources>
                 <!-- Native Windows layering: a quiet commanding layer over
@@ -88,43 +126,57 @@
                 <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="Transparent" />
             </NavigationView.Resources>
             <NavigationView.MenuItems>
-                <NavigationViewItem Content="Overview" Icon="Home" Tag="overview" />
-                <NavigationViewItem Content="Activity" Icon="Clock" Tag="activity" />
-                <NavigationViewItem Content="Folder backup" Icon="Folder" Tag="backup" />
-                <NavigationViewItem Content="Files" Icon="Document" Tag="files" />
+                <NavigationViewItem Content="Home"  Tag="overview" Style="{StaticResource CloudInletNavigationItemStyle}">
+                    <NavigationViewItem.Icon><IconSourceElement IconSource="{views:FluentIcon Kind=home, Size=24}" Width="24" Height="24" Tag="home" /></NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Activity"  Tag="activity" Style="{StaticResource CloudInletNavigationItemStyle}">
+                    <NavigationViewItem.Icon><IconSourceElement IconSource="{views:FluentIcon Kind=history, Size=24}" Width="24" Height="24" Tag="history" /></NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Folder backup"  Tag="backup" Style="{StaticResource CloudInletNavigationItemStyle}">
+                    <NavigationViewItem.Icon><IconSourceElement IconSource="{views:FluentIcon Kind=folder, Size=24}" Width="24" Height="24" Tag="folder" /></NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Files"  Tag="files" Style="{StaticResource CloudInletNavigationItemStyle}">
+                    <NavigationViewItem.Icon><IconSourceElement IconSource="{views:FluentIcon Kind=document, Size=24}" Width="24" Height="24" Tag="document" /></NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem x:Name="ServicesNavigationItem" Content="Cloud services" Tag="services" Style="{StaticResource CloudInletNavigationItemStyle}">
+                    <NavigationViewItem.Icon><IconSourceElement IconSource="{views:FluentIcon Kind=cloud, Size=24}"  Width="24" Height="24" Tag="cloud" /></NavigationViewItem.Icon>
+                </NavigationViewItem>
             </NavigationView.MenuItems>
+            <NavigationView.PaneFooter>
+                <Border x:Name="NavigationStatusCard" Margin="20,12,20,20" Padding="16"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="{Binding StatusTitle}" Style="{StaticResource BodyStrongTextBlockStyle}" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding LastSyncLabel}" Style="{StaticResource CloudInletSecondaryTextStyle}" />
+                    </StackPanel>
+                </Border>
+            </NavigationView.PaneFooter>
             <Grid x:Name="ContentLayoutGrid">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
-                <Grid x:Name="PageHeader" MaxWidth="1120" HorizontalAlignment="Center" Margin="8,0,12,0" Padding="24,24,24,16">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <Button
-                        x:Name="SettingsBackButton"
-                        Width="40"
-                        Height="40"
-                        Margin="0,0,12,0"
-                        VerticalAlignment="Bottom"
-                        Style="{StaticResource SubtleButtonStyle}"
-                        Click="SettingsBack_Click"
-                        Visibility="Collapsed"
-                        AutomationProperties.Name="Back to settings">
-                        <FontIcon Glyph="" FontSize="18" />
-                    </Button>
-                    <StackPanel Grid.Column="1" Spacing="4">
-                        <TextBlock
-                            x:Name="SettingsContextLabel"
-                            Text="Settings"
-                            Style="{StaticResource CloudInletSecondaryTextStyle}"
-                            Visibility="Collapsed" />
+                <Grid x:Name="PageHeader" MaxWidth="1240" HorizontalAlignment="Center" Margin="8,0,12,0" Padding="28,24,28,16">
+                    <StackPanel Spacing="8">
+                        <BreadcrumbBar x:Name="PageBreadcrumb" Visibility="Collapsed"
+                                       ItemClicked="PageBreadcrumb_ItemClicked" AutomationProperties.Name="Page navigation">
+                            <BreadcrumbBar.Resources>
+                                <x:Double x:Key="BreadcrumbBarItemThemeFontSize">28</x:Double>
+                                <FontWeight x:Key="BreadcrumbBarItemFontWeight">SemiBold</FontWeight>
+                                <x:Double x:Key="BreadcrumbBarChevronFontSize">16</x:Double>
+                                <Thickness x:Key="BreadcrumbBarChevronPadding">8,0</Thickness>
+                                <StaticResource x:Key="BreadcrumbBarNormalForegroundBrush" ResourceKey="TextFillColorSecondaryBrush" />
+                            </BreadcrumbBar.Resources>
+                            <BreadcrumbBar.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Label}" Opacity="{Binding Opacity}" />
+                                </DataTemplate>
+                            </BreadcrumbBar.ItemTemplate>
+                        </BreadcrumbBar>
                         <TextBlock
                             x:Name="PageTitle"
-                            Text="Overview"
+                            Text="Home"
                             Style="{StaticResource TitleTextBlockStyle}"
                             TextWrapping="Wrap"
                             AutomationProperties.HeadingLevel="Level1" />
@@ -132,9 +184,18 @@
                             x:Name="PageDescription"
                             Style="{StaticResource CloudInletBodySecondaryTextStyle}"
                             Visibility="Collapsed" />
+                        <InfoBar x:Name="TransferConnectionBanner" Severity="Informational" IsClosable="False" Visibility="Collapsed"
+                                 Title="Transfer draft saved" Message="Connect the service, then return to finish choosing your locations.">
+                            <InfoBar.Content>
+                                <views:ActionWrapPanel x:Name="TransferConnectionActions" Spacing="8" Margin="0,0,16,16">
+                                    <Button Content="Return to transfer" HorizontalAlignment="Left" Click="ReturnToTransfer_Click" />
+                                    <Button Content="Cancel transfer setup" HorizontalAlignment="Left" Click="CancelTransferSetup_Click" />
+                                </views:ActionWrapPanel>
+                            </InfoBar.Content>
+                        </InfoBar>
                         <TextBlock
                             x:Name="ActivityPending"
-                            Text="{Binding TransferSummary}"
+                            Text="{Binding ActivityStatusSummary}"
                             Style="{StaticResource CloudInletSecondaryTextStyle}"
                             Visibility="Collapsed" />
                         <TextBlock
@@ -142,15 +203,13 @@
                             Text="{Binding StorageSummary}"
                             Style="{StaticResource CloudInletSecondaryTextStyle}"
                             Visibility="Collapsed" />
-                        <TextBlock x:Name="ActivityTransferSpeed" Text="{Binding TransferSpeedSummary}"
-                                   Style="{StaticResource CloudInletSecondaryTextStyle}" Visibility="Collapsed"
-                                   AutomationProperties.Name="Measured transfer speed" />
                     </StackPanel>
                 </Grid>
                 <InfoBar
                     x:Name="StatusInfoBar"
                     Grid.Row="1"
-                    Margin="32,12,32,0"
+                    Margin="36,0,40,12"
+                    MaxWidth="1184" HorizontalAlignment="Center" HorizontalContentAlignment="Stretch"
                     IsOpen="False"
                     Visibility="Collapsed"
                     Closed="StatusInfoBar_Closed"
@@ -166,40 +225,19 @@
                         HorizontalScrollBarVisibility="Disabled"
                         HorizontalContentAlignment="Stretch">
                         <StackPanel x:Name="OverviewContent" Style="{StaticResource CloudInletPageContentStyle}">
-                            <Border
-                                CornerRadius="{ThemeResource ControlCornerRadius}"
-                                Padding="32"
-                                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                BorderThickness="1"
-                                x:Name="WelcomePanel"
-                                MinHeight="280">
+                            <Border x:Name="WelcomePanel">
                                 <StackPanel Spacing="20">
-                                    <FontIcon
-                                        Glyph=""
-                                        FontSize="64"
-                                        Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
-                                        HorizontalAlignment="Left" />
-                                    <StackPanel Spacing="8">
-                                        <TextBlock
-                                            Text="Back up with Backblaze B2"
-                                            Style="{StaticResource TitleTextBlockStyle}"
-                                            TextWrapping="Wrap" />
-                                        <TextBlock
-                                            Text="Back up your folders to Backblaze B2 and open your files right from Windows."
-                                            Style="{StaticResource CloudInletBodySecondaryTextStyle}" />
-                                    </StackPanel>
-                                    <Button
-                                        x:Name="ConnectAccountButton"
-                                        Content="Connect your account"
-                                        Style="{StaticResource AccentButtonStyle}"
-                                        Click="Settings_Click"
-                                        MinHeight="44" />
+                                    <TextBlock Text="Start with your cloud" Style="{StaticResource SubtitleTextBlockStyle}" TextWrapping="Wrap" />
+                                    <TextBlock Text="Choose a service below. Your connection options depend on what each provider supports."
+                                               Style="{StaticResource CloudInletBodySecondaryTextStyle}" Margin="0,-8,0,0" />
+                                    <ContentControl x:Name="HomeServicesHost" HorizontalContentAlignment="Stretch" />
+                                    <Button x:Name="ConnectAccountButton" Content="Explore all cloud services" Tag="services" Click="QuickNavigate_Click"
+                                            Style="{StaticResource SubtleButtonStyle}" MinHeight="36" />
                                 </StackPanel>
                             </Border>
                             <StackPanel x:Name="ConnectedOverview" Spacing="24" Visibility="Collapsed">
                                 <Border
-                                    CornerRadius="{ThemeResource ControlCornerRadius}"
+                                    CornerRadius="8"
                                     Padding="24"
                                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
@@ -211,10 +249,8 @@
                                                 <ColumnDefinition Width="*" />
                                             </Grid.ColumnDefinitions>
                                             <Grid Width="64" Height="64" VerticalAlignment="Top">
-                                                <FontIcon
-                                                    Glyph=""
-                                                    FontSize="56"
-                                                    Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                                                <IconSourceElement
+                                                    IconSource="{views:FluentIcon Kind=cloud, Size=56}"  Width="56" Height="56" Tag="cloud" />
                                                 <Border
                                                     VerticalAlignment="Bottom"
                                                     Height="20"
@@ -222,10 +258,10 @@
                                                     Width="20"
                                                     HorizontalAlignment="Right"
                                                     CornerRadius="10">
-                                                    <FontIcon
-                                                        Glyph="{Binding StatusGlyph}"
-                                                        FontSize="12"
-                                                        x:Name="OverviewStatusIcon" />
+                                                    <IconSourceElement
+                                                        IconSource="{Binding StatusGlyph, Converter={StaticResource FluentGlyphConverter}, ConverterParameter=12}"
+
+                                                        x:Name="OverviewStatusIcon"  Width="12" Height="12" />
                                                 </Border>
                                             </Grid>
                                             <StackPanel Grid.Column="1" Spacing="6">
@@ -255,31 +291,31 @@
                                                 Text="{Binding ProgressLabel}"
                                                 Style="{StaticResource CloudInletSecondaryTextStyle}" TextWrapping="Wrap" />
                                         </StackPanel>
-                                        <StackPanel x:Name="DashboardActions" Orientation="Horizontal" Spacing="8">
+                                        <views:ActionWrapPanel x:Name="DashboardActions" Spacing="8">
                                             <Button
                                                 x:Name="ReviewDeletionsButton"
                                                 Content="Review pending deletions"
                                                 Style="{StaticResource AccentButtonStyle}"
                                                 Visibility="Collapsed"
                                                 Click="ReviewDeletions_Click"
-                                                MinHeight="40" />
+                                                MinHeight="36" />
                                             <Button
                                                 x:Name="OpenFolderButton"
                                                 Content="Open folder"
                                                 Style="{StaticResource AccentButtonStyle}"
                                                 Click="OpenFolder_Click"
-                                                MinHeight="40" />
+                                                MinHeight="36" />
                                             <Button
                                                 x:Name="SyncNowButton"
                                                 Content="Sync now"
                                                 Click="SyncNow_Click"
-                                                MinHeight="40" />
+                                                MinHeight="36" />
                                             <Button
                                                 x:Name="DashboardPauseButton"
                                                 Content="{Binding PauseLabel}"
                                                 Click="Pause_Click"
-                                                MinHeight="40" />
-                                        </StackPanel>
+                                                MinHeight="36" />
+                                        </views:ActionWrapPanel>
                                     </StackPanel>
                                 </Border>
                                 <StackPanel x:Name="BackupSuggestion" Spacing="12" Visibility="Collapsed">
@@ -290,11 +326,11 @@
                                         Click="ManageBackup_Click"
                                         MinHeight="76">
                                         <settings:SettingsCard.HeaderIcon>
-                                            <FontIcon Glyph="" />
+                                            <IconSourceElement IconSource="{views:FluentIcon Kind=folder, Size=24}"  Width="24" Height="24" Tag="folder" />
                                         </settings:SettingsCard.HeaderIcon>
                                     </settings:SettingsCard>
                                 </StackPanel>
-                                <Grid x:Name="OverviewSections" ColumnSpacing="24" RowSpacing="24">
+                                <Grid x:Name="OverviewSections" ColumnSpacing="16" RowSpacing="16">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="3*" />
                                         <ColumnDefinition Width="2*" />
@@ -359,26 +395,52 @@
                                     </StackPanel>
                                 </Grid>
                             </StackPanel>
+                            <StackPanel Spacing="16">
+                                <TextBlock Text="Quick access" Style="{StaticResource CloudInletSectionHeadingStyle}" />
+                                <Grid x:Name="HomeQuickActions" ColumnSpacing="16" RowSpacing="16">
+                                    <settings:SettingsCard Header="Folder backup" Description="Choose the folders you want to protect."
+                                                           Style="{StaticResource CloudInletCategoryStyle}" Click="ManageBackup_Click">
+                                        <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=folder, Size=24}"  Width="24" Height="24" Tag="folder" /></settings:SettingsCard.HeaderIcon>
+                                    </settings:SettingsCard>
+                                    <settings:SettingsCard x:Name="HomeCloudTransferCard" Header="Transfer between clouds" Description="Copy or move files between OneDrive, B2, and this PC."
+                                                           Style="{StaticResource CloudInletCategoryStyle}" Click="CloudTransfer_Click">
+                                        <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=sync, Size=24}"  Width="24" Height="24" Tag="sync" /></settings:SettingsCard.HeaderIcon>
+                                    </settings:SettingsCard>
+                                    <settings:SettingsCard Header="Your files" Description="Open folders, manage space, and restore versions."
+                                                           Style="{StaticResource CloudInletCategoryStyle}" Tag="files" Click="QuickNavigate_Click">
+                                        <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=document, Size=24}"  Width="24" Height="24" Tag="document" /></settings:SettingsCard.HeaderIcon>
+                                    </settings:SettingsCard>
+                                    <settings:SettingsCard Header="Cloud services" Description="Choose your provider and see what is coming next."
+                                                           Style="{StaticResource CloudInletCategoryStyle}" Tag="services" Click="QuickNavigate_Click">
+                                        <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=cloud, Size=24}"  Width="24" Height="24" Tag="cloud" /></settings:SettingsCard.HeaderIcon>
+                                    </settings:SettingsCard>
+                                </Grid>
+                            </StackPanel>
                         </StackPanel>
                     </ScrollViewer>
                     <Grid
                         x:Name="ActivityPage"
                         Grid.Row="0"
                         Visibility="Collapsed"
-                        MaxWidth="1120"
+                        MaxWidth="1240"
                         HorizontalAlignment="Center"
                         Padding="{StaticResource CloudInletPageInset}">
-                        <Grid RowSpacing="16">
+                        <Grid RowSpacing="24">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
                             <StackPanel Spacing="12">
-                                <Button x:Name="CloudTransferAction" Content="Transfer between clouds" Click="CloudTransfer_Click"
-                                        HorizontalAlignment="Left" />
-                                <ScrollViewer x:Name="CloudTransferJobsPanel" MaxHeight="280" Visibility="Collapsed"
+                                <Grid x:Name="ActivityToolbar" ColumnSpacing="16" RowSpacing="12" SizeChanged="ActivityToolbar_SizeChanged">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                                    <TextBlock x:Name="ActivityToolbarTitle" Text="Transfers and history" VerticalAlignment="Center" Style="{StaticResource CloudInletSectionHeadingStyle}" />
+                                    <Button x:Name="CloudTransferAction" Grid.Column="1" Content="New cloud transfer" Click="CloudTransfer_Click"
+                                            MinHeight="36" Style="{StaticResource AccentButtonStyle}" />
+                                </Grid>
+                                <ScrollViewer x:Name="CloudTransferJobsPanel" MaxHeight="320" Visibility="Collapsed"
                                               HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-                                    <StackPanel x:Name="CloudTransferJobRows" Spacing="8" />
+                                    <StackPanel x:Name="CloudTransferJobRows" Spacing="12" />
                                 </ScrollViewer>
                                 <ComboBox x:Name="ActivityFilterBox" Width="200" HorizontalAlignment="Left" SelectedIndex="0"
                                           AutomationProperties.Name="Activity filter" SelectionChanged="ActivityFilter_SelectionChanged">
@@ -404,10 +466,8 @@
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center"
                                 Spacing="12">
-                                <FontIcon
-                                    Glyph=""
-                                    FontSize="28"
-                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <IconSourceElement
+                                    IconSource="{views:FluentIcon Kind=clock, Size=48}"  Width="48" Height="48" Tag="clock" />
                                 <TextBlock
                                     Text="{Binding ActivityEmptyMessage}"
                                     Style="{StaticResource CloudInletSecondaryTextStyle}" />
@@ -426,32 +486,21 @@
                                 IsOpen="True"
                                 IsClosable="False"
                                 Severity="Informational"
-                                Message="Connect your account to choose folders.">
+                                Message="Choose a cloud service to start. Folder backup is currently available with Backblaze B2.">
                                 <InfoBar.ActionButton>
-                                    <Button Content="Connect" Click="Settings_Click" />
+                                    <Button Content="Choose service" Tag="services" Click="QuickNavigate_Click" />
                                 </InfoBar.ActionButton>
                             </InfoBar>
-                            <StackPanel Spacing="8">
-                                <TextBlock Text="Windows folders" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <StackPanel Spacing="12">
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                    <TextBlock Text="Windows folders" Style="{StaticResource CloudInletSectionHeadingStyle}" VerticalAlignment="Center" />
+                                    <ToggleButton x:Name="MoreWindowsFolders" Grid.Column="1" Content="Show all folders"
+                                                  Checked="MoreWindowsFolders_Toggled" Unchecked="MoreWindowsFolders_Toggled"
+                                                  AutomationProperties.Name="Show all Windows folders" MinHeight="32" />
+                                </Grid>
                                 <Grid ColumnSpacing="12" RowSpacing="12" x:Name="BackupRows" />
-                                <settings:SettingsExpander
-                                    x:Name="MoreWindowsFolders"
-                                    Header="More Windows folders"
-                                    Description="Additional personal folders available in Windows.">
-                                    <settings:SettingsExpander.HeaderIcon>
-                                        <FontIcon Glyph="" />
-                                    </settings:SettingsExpander.HeaderIcon>
-                                    <settings:SettingsExpander.Items>
-                                        <settings:SettingsCard
-                                            BorderThickness="0"
-                                            ContentAlignment="Vertical"
-                                            HorizontalContentAlignment="Stretch"
-                                            Padding="12"
-                                            Background="Transparent">
-                                            <Grid ColumnSpacing="12" RowSpacing="12" x:Name="MoreBackupRows" />
-                                        </settings:SettingsCard>
-                                    </settings:SettingsExpander.Items>
-                                </settings:SettingsExpander>
+                                <Grid ColumnSpacing="12" RowSpacing="12" x:Name="MoreBackupRows" Visibility="Collapsed" />
                             </StackPanel>
                             <StackPanel x:Name="CloudImportSection" Spacing="12" Visibility="Collapsed">
                                 <TextBlock Text="Bring in a cloud folder" Style="{StaticResource BodyStrongTextBlockStyle}" />
@@ -460,7 +509,7 @@
                                 <Grid x:Name="CloudImportRows" ColumnSpacing="12" RowSpacing="12" />
                             </StackPanel>
                             <StackPanel x:Name="CustomBackupSection" Spacing="8" Visibility="Collapsed">
-                                <TextBlock Text="Other folders" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                <TextBlock Text="Other folders" Style="{StaticResource CloudInletSectionHeadingStyle}" />
                                 <Grid ColumnSpacing="12" RowSpacing="12" x:Name="CustomBackupRows" />
                             </StackPanel>
                             <settings:SettingsExpander
@@ -468,7 +517,7 @@
                                 Header="Add another folder"
                                 Description="Back up a personal folder from its current location.">
                                 <settings:SettingsExpander.HeaderIcon>
-                                    <FontIcon Glyph="" />
+                                    <IconSourceElement IconSource="{views:FluentIcon Kind=add, Size=24}"  Width="24" Height="24" Tag="add" />
                                 </settings:SettingsExpander.HeaderIcon>
                                 <settings:SettingsExpander.Items>
                                     <settings:SettingsCard
@@ -504,26 +553,29 @@
                                     </settings:SettingsCard>
                                 </settings:SettingsExpander.Items>
                             </settings:SettingsExpander>
+                            <TextBlock Text="More you can do" Style="{StaticResource CloudInletSectionHeadingStyle}" />
+                            <Grid x:Name="BackupRelatedActions" ColumnSpacing="12" RowSpacing="12">
                             <settings:SettingsCard x:Name="BackupCloudTransferCard" Header="Transfer between clouds"
-                                                   Description="Browse OneDrive and B2 directly. Copy or move files through this PC's memory."
+                                                   Description="Copy or move files between your OneDrive and Backblaze B2 accounts."
                                                    IsClickEnabled="True" Click="CloudTransfer_Click">
-                                <settings:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE753;" /></settings:SettingsCard.HeaderIcon>
+                                <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=cloud, Size=24}"  Width="24" Height="24" Tag="cloud" /></settings:SettingsCard.HeaderIcon>
                             </settings:SettingsCard>
                             <settings:SettingsCard x:Name="ImportFilesCard" Header="Import from another location" Description="Choose a local folder, mounted cloud drive, OneDrive account, or Backblaze B2 bucket."
                                                    IsClickEnabled="True" Click="ImportFiles_Click">
                                 <settings:SettingsCard.HeaderIcon>
-                                    <FontIcon Glyph="&#xE896;" />
+                                    <IconSourceElement IconSource="{views:FluentIcon Kind=download, Size=24}"  Width="24" Height="24" Tag="download" />
                                 </settings:SettingsCard.HeaderIcon>
                             </settings:SettingsCard>
                             <settings:SettingsCard Header="Exclusions" Description="Choose what to leave out of your backups."
                                                    IsClickEnabled="True" Click="ExclusionsSettings_Click">
                                 <settings:SettingsCard.HeaderIcon>
-                                    <FontIcon Glyph="" />
+                                    <IconSourceElement IconSource="{views:FluentIcon Kind=filter, Size=24}"  Width="24" Height="24" Tag="filter" />
                                 </settings:SettingsCard.HeaderIcon>
                             </settings:SettingsCard>
+                            </Grid>
                             <settings:SettingsExpander Header="How folder backup works">
                                 <settings:SettingsExpander.HeaderIcon>
-                                    <FontIcon Glyph="" />
+                                    <IconSourceElement IconSource="{views:FluentIcon Kind=info, Size=24}"  Width="24" Height="24" Tag="info" />
                                 </settings:SettingsExpander.HeaderIcon>
                                 <settings:SettingsExpander.Items>
                                     <settings:SettingsCard
@@ -555,7 +607,7 @@
                         HorizontalContentAlignment="Stretch">
                         <StackPanel x:Name="FilesContent" Style="{StaticResource CloudInletPageContentStyle}">
                             <Border
-                                CornerRadius="{ThemeResource ControlCornerRadius}"
+                                CornerRadius="8"
                                 Padding="24"
                                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
@@ -563,19 +615,19 @@
                                 x:Name="FilesConnectPanel"
                                 MinHeight="200">
                                 <StackPanel Spacing="16">
-                                    <FontIcon
-                                        Glyph=""
-                                        FontSize="48"
-                                        Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
-                                        HorizontalAlignment="Left" />
+                                    <IconSourceElement
+                                        IconSource="{views:FluentIcon Kind=folder, Size=48}"
+                                        HorizontalAlignment="Left"  Width="48" Height="48" Tag="folder" />
                                     <TextBlock
-                                        Text="Connect your account to open your cloud files."
-                                        Style="{StaticResource CloudInletSecondaryTextStyle}" />
+                                        Text="Your files, close at hand"
+                                        Style="{StaticResource SubtitleTextBlockStyle}" TextWrapping="Wrap" />
+                                    <TextBlock Text="Choose a cloud service to get started. Backblaze B2 supports files in Explorer; OneDrive files are available through cloud transfers."
+                                               Style="{StaticResource CloudInletBodySecondaryTextStyle}" />
                                     <Button
-                                        Content="Connect account"
+                                        Content="Choose a cloud service"
                                         Style="{StaticResource AccentButtonStyle}"
-                                        Click="Settings_Click"
-                                        MinHeight="40" />
+                                        Tag="services" Click="QuickNavigate_Click"
+                                        MinHeight="36" />
                                 </StackPanel>
                             </Border>
                             <StackPanel x:Name="FilesConnectedPanel" Spacing="24" Visibility="Collapsed">
@@ -590,8 +642,8 @@
                                     <TextBlock Text="On this PC" Style="{StaticResource BodyStrongTextBlockStyle}" />
                                     <settings:SettingsCard
                                         x:Name="FileLocationCard"
-                                        MinHeight="128"
-                                        CornerRadius="{ThemeResource ControlCornerRadius}"
+                                        MinHeight="96"
+                                        CornerRadius="8"
                                         Padding="24">
                                         <settings:SettingsCard.Header>
                                             <TextBlock
@@ -606,13 +658,13 @@
                                                 Style="{StaticResource CloudInletBodySecondaryTextStyle}" />
                                         </settings:SettingsCard.Description>
                                         <settings:SettingsCard.HeaderIcon>
-                                            <FontIcon Glyph="" />
+                                            <IconSourceElement IconSource="{views:FluentIcon Kind=folder, Size=24}"  Width="24" Height="24" Tag="folder" />
                                         </settings:SettingsCard.HeaderIcon>
                                         <Button
                                             Content="Open folder"
                                             Style="{StaticResource AccentButtonStyle}"
                                             Click="OpenFileFolder_Click"
-                                            MinHeight="40" />
+                                            MinHeight="36" />
                                         <settings:SettingsCard.Resources>
                                             <x:Double x:Key="SettingsCardHeaderIconMaxSize">48</x:Double>
                                         </settings:SettingsCard.Resources>
@@ -628,7 +680,7 @@
                                         Header="Availability and version history"
                                         Description="Manage an individual file.">
                                         <settings:SettingsExpander.HeaderIcon>
-                                            <FontIcon Glyph="" />
+                                            <IconSourceElement IconSource="{views:FluentIcon Kind=clock, Size=24}"  Width="24" Height="24" Tag="clock" />
                                         </settings:SettingsExpander.HeaderIcon>
                                         <settings:SettingsExpander.Items>
                                             <settings:SettingsCard
@@ -650,14 +702,13 @@
                                                             Click="BrowseFile_Click"
                                                             VerticalAlignment="Bottom" />
                                                     </Grid>
-                                                    <StackPanel
+                                                    <views:ActionWrapPanel
                                                         x:Name="FileActions"
-                                                        Orientation="Horizontal"
                                                         Spacing="8">
                                                         <Button Content="Keep on this device" Click="PinFile_Click" />
                                                         <Button Content="Free up space" Click="FreeSpace_Click" />
                                                         <Button Content="Version history" Click="Versions_Click" />
-                                                    </StackPanel>
+                                                    </views:ActionWrapPanel>
                                                     <TextBlock
                                                         Text="Free up space removes downloaded content after the file is safely in sync. Your cloud copy stays available."
                                                         Style="{StaticResource CloudInletSecondaryTextStyle}" />
@@ -731,230 +782,55 @@
                         HorizontalContentAlignment="Stretch">
                         <StackPanel x:Name="SettingsContent" Style="{StaticResource CloudInletPageContentStyle}">
                             <StackPanel x:Name="SettingsHub" Spacing="24">
-                                <settings:SettingsCard
-                                    x:Name="SettingsAccountCard"
-                                    Description="Connect a private bucket to start protecting your files."
-                                    MinHeight="76"
-                                    Padding="0"
-                                    CornerRadius="{ThemeResource ControlCornerRadius}"
-                                    IsClickEnabled="False"
-                                    Background="Transparent"
-                                    BorderThickness="0">
-                                    <settings:SettingsCard.Header>
-                                        <TextBlock
-                                            x:Name="SettingsAccountHeading"
-                                            Text="Backblaze B2"
-                                            Style="{StaticResource SubtitleTextBlockStyle}"
-                                            TextWrapping="Wrap" />
-                                    </settings:SettingsCard.Header>
-                                    <settings:SettingsCard.HeaderIcon>
-                                        <FontIcon
-                                            Glyph=""
-                                            FontSize="20"
-                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                    </settings:SettingsCard.HeaderIcon>
-                                    <Button
-                                        x:Name="SettingsAccountAction"
-                                        Content="Connect account"
-                                        Click="SettingsAccount_Click"
-                                        Style="{StaticResource AccentButtonStyle}"
-                                        MinHeight="40" />
+                                <settings:SettingsCard x:Name="SettingsAccountCard" MinHeight="96" Padding="0,8,0,20" Background="Transparent" BorderThickness="0"
+                                                       Description="Connect a private bucket to start protecting your files.">
+                                    <settings:SettingsCard.Header><TextBlock x:Name="SettingsAccountHeading" Text="Backblaze B2" Style="{StaticResource SubtitleTextBlockStyle}" TextWrapping="Wrap" /></settings:SettingsCard.Header>
+                                    <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=cloud, Size=36}"  Width="36" Height="36" Tag="cloud" /></settings:SettingsCard.HeaderIcon>
+                                    <Button x:Name="SettingsAccountAction" Content="Connect account" Click="SettingsAccount_Click" MinHeight="36" />
                                 </settings:SettingsCard>
-                                <Grid x:Name="SettingsCategories" ColumnSpacing="24" RowSpacing="24">
-                                    <Border Style="{StaticResource CloudInletSurfaceStyle}" Padding="0">
-                                        <StackPanel Spacing="0">
-                                            <TextBlock
-                                                Text="Backup and sync"
-                                                Margin="20,20,20,12"
-                                                Style="{StaticResource CloudInletSectionHeadingStyle}" />
-                                            <settings:SettingsCard
-                                                x:Name="SyncCategory"
-                                                Description="Files on demand and downloaded file storage."
-                                                MinHeight="68"
-                                                Padding="20,14"
-                                                IsClickEnabled="True"
-                                                Tag="sync"
-                                                Click="SettingsCategory_Click"
-                                                CornerRadius="4"
-                                                Background="Transparent"
-                                                BorderThickness="0">
-                                                <settings:SettingsCard.Header>
-                                                    <TextBlock
-                                                        Text="Files and storage"
-                                                        Style="{StaticResource BodyTextBlockStyle}"
-                                                        TextWrapping="Wrap" />
-                                                </settings:SettingsCard.Header>
-                                                <settings:SettingsCard.HeaderIcon>
-                                                    <FontIcon
-                                                        Glyph=""
-                                                        FontSize="20"
-                                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                                </settings:SettingsCard.HeaderIcon>
-                                            </settings:SettingsCard>
-                                            <Border
-                                                Height="1"
-                                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"
-                                                Margin="20,0" />
-                                            <settings:SettingsCard
-                                                x:Name="NetworkCategory"
-                                                Description="Transfer limits and automatic pauses."
-                                                MinHeight="68"
-                                                Padding="20,14"
-                                                IsClickEnabled="True"
-                                                Tag="network"
-                                                Click="SettingsCategory_Click"
-                                                CornerRadius="4"
-                                                Background="Transparent"
-                                                BorderThickness="0">
-                                                <settings:SettingsCard.Header>
-                                                    <TextBlock
-                                                        Text="Transfers and power"
-                                                        Style="{StaticResource BodyTextBlockStyle}"
-                                                        TextWrapping="Wrap" />
-                                                </settings:SettingsCard.Header>
-                                                <settings:SettingsCard.HeaderIcon>
-                                                    <FontIcon
-                                                        Glyph=""
-                                                        FontSize="20"
-                                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                                </settings:SettingsCard.HeaderIcon>
-                                            </settings:SettingsCard>
-                                            <Border
-                                                Height="1"
-                                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"
-                                                Margin="20,0" />
-                                            <settings:SettingsCard
-                                                x:Name="CatalogCategory"
-                                                Description="See available and planned connections."
-                                                MinHeight="68"
-                                                Padding="20,14"
-                                                IsClickEnabled="True"
-                                                Tag="catalog"
-                                                Click="SettingsCategory_Click"
-                                                CornerRadius="4"
-                                                Background="Transparent"
-                                                BorderThickness="0">
-                                                <settings:SettingsCard.Header>
-                                                    <TextBlock
-                                                        Text="Providers and modes"
-                                                        Style="{StaticResource BodyTextBlockStyle}"
-                                                        TextWrapping="Wrap" />
-                                                </settings:SettingsCard.Header>
-                                                <settings:SettingsCard.HeaderIcon>
-                                                    <FontIcon
-                                                        Glyph=""
-                                                        FontSize="20"
-                                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                                </settings:SettingsCard.HeaderIcon>
-                                            </settings:SettingsCard>
-                                        </StackPanel>
-                                    </Border>
-                                    <Border Style="{StaticResource CloudInletSurfaceStyle}" Padding="0">
-                                        <StackPanel Spacing="0">
-                                            <TextBlock
-                                                Text="This app"
-                                                Margin="20,20,20,12"
-                                                Style="{StaticResource CloudInletSectionHeadingStyle}" />
-                                            <settings:SettingsCard
-                                                x:Name="AppearanceCategory"
-                                                Description="Choose your app theme."
-                                                MinHeight="68"
-                                                Padding="20,14"
-                                                IsClickEnabled="True"
-                                                Tag="appearance"
-                                                Click="SettingsCategory_Click"
-                                                CornerRadius="4"
-                                                Background="Transparent"
-                                                BorderThickness="0">
-                                                <settings:SettingsCard.Header>
-                                                    <TextBlock
-                                                        Text="Appearance"
-                                                        Style="{StaticResource BodyTextBlockStyle}"
-                                                        TextWrapping="Wrap" />
-                                                </settings:SettingsCard.Header>
-                                                <settings:SettingsCard.HeaderIcon>
-                                                    <FontIcon
-                                                        Glyph=""
-                                                        FontSize="20"
-                                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                                </settings:SettingsCard.HeaderIcon>
-                                            </settings:SettingsCard>
-                                            <Border
-                                                Height="1"
-                                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"
-                                                Margin="20,0" />
-                                            <settings:SettingsCard
-                                                x:Name="GeneralCategory"
-                                                Description="Run in the background after sign-in."
-                                                MinHeight="68"
-                                                Padding="20,14"
-                                                IsClickEnabled="True"
-                                                Tag="general"
-                                                Click="SettingsCategory_Click"
-                                                CornerRadius="4"
-                                                Background="Transparent"
-                                                BorderThickness="0">
-                                                <settings:SettingsCard.Header>
-                                                    <TextBlock
-                                                        Text="Startup"
-                                                        Style="{StaticResource BodyTextBlockStyle}"
-                                                        TextWrapping="Wrap" />
-                                                </settings:SettingsCard.Header>
-                                                <settings:SettingsCard.HeaderIcon>
-                                                    <FontIcon
-                                                        Glyph=""
-                                                        FontSize="20"
-                                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                                </settings:SettingsCard.HeaderIcon>
-                                            </settings:SettingsCard>
-                                            <Border
-                                                Height="1"
-                                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"
-                                                Margin="20,0" />
-                                            <settings:SettingsCard
-                                                x:Name="NotificationsCategory"
-                                                Header="Notifications"
-                                                Description="Choose which Windows alerts you receive."
-                                                MinHeight="68" Padding="20,14"
-                                                IsClickEnabled="True" Tag="notifications" Click="SettingsCategory_Click"
-                                                CornerRadius="4" Background="Transparent" BorderThickness="0">
-                                                <settings:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE7F4;" FontSize="20" Foreground="{ThemeResource TextFillColorSecondaryBrush}" /></settings:SettingsCard.HeaderIcon>
-                                            </settings:SettingsCard>
-                                            <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" Margin="20,0" />
-                                            <settings:SettingsCard
-                                                x:Name="AboutCategory"
-                                                Description="Version information and local diagnostics."
-                                                MinHeight="68"
-                                                Padding="20,14"
-                                                IsClickEnabled="True"
-                                                Tag="about"
-                                                Click="SettingsCategory_Click"
-                                                CornerRadius="4"
-                                                Background="Transparent"
-                                                BorderThickness="0">
-                                                <settings:SettingsCard.Header>
-                                                    <TextBlock
-                                                        Text="About CloudInlet"
-                                                        Style="{StaticResource BodyTextBlockStyle}"
-                                                        TextWrapping="Wrap" />
-                                                </settings:SettingsCard.Header>
-                                                <settings:SettingsCard.HeaderIcon>
-                                                    <FontIcon
-                                                        Glyph=""
-                                                        FontSize="20"
-                                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                                </settings:SettingsCard.HeaderIcon>
-                                            </settings:SettingsCard>
-                                        </StackPanel>
-                                    </Border>
+                                <Grid x:Name="SettingsCategories" ColumnSpacing="16" RowSpacing="16">
+                                    <StackPanel Spacing="12">
+                                    <TextBlock Text="Backup and transfers" Margin="0,0,0,4" Style="{StaticResource CloudInletSectionHeadingStyle}" />
+                                        <settings:SettingsCard x:Name="SyncCategory" Header="Files and storage" Description="Files on demand, disk space, and exclusions."
+                                                               Tag="sync" Click="SettingsCategory_Click" Style="{StaticResource CloudInletCategoryStyle}">
+                                            <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=folder, Size=24}"  Width="24" Height="24" Tag="folder" /></settings:SettingsCard.HeaderIcon>
+                                        </settings:SettingsCard>
+                                        <settings:SettingsCard x:Name="NetworkCategory" Header="Transfers and power" Description="Performance, bandwidth, and automatic pauses."
+                                                               Tag="network" Click="SettingsCategory_Click" Style="{StaticResource CloudInletCategoryStyle}">
+                                            <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=sync, Size=24}"  Width="24" Height="24" Tag="sync" /></settings:SettingsCard.HeaderIcon>
+                                        </settings:SettingsCard>
+                                        <settings:SettingsCard x:Name="CatalogCategory" Header="Backup capabilities" Description="Explore native backup providers and planned connection modes."
+                                                               Tag="catalog" Click="SettingsCategory_Click" Style="{StaticResource CloudInletCategoryStyle}">
+                                            <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=globe, Size=24}"  Width="24" Height="24" Tag="globe" /></settings:SettingsCard.HeaderIcon>
+                                        </settings:SettingsCard>
+                                    </StackPanel>
+                                    <StackPanel Spacing="12">
+                                        <TextBlock Text="Your app" Margin="0,0,0,4" Style="{StaticResource CloudInletSectionHeadingStyle}" />
+                                        <settings:SettingsCard x:Name="GeneralCategory" Header="Startup" Description="Choose when CloudInlet starts with Windows."
+                                                               Tag="general" Click="SettingsCategory_Click" Style="{StaticResource CloudInletCategoryStyle}">
+                                            <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=power, Size=24}"  Width="24" Height="24" Tag="power" /></settings:SettingsCard.HeaderIcon>
+                                        </settings:SettingsCard>
+                                        <settings:SettingsCard x:Name="AppearanceCategory" Header="Appearance" Description="Make CloudInlet feel at home on your desktop."
+                                                               Tag="appearance" Click="SettingsCategory_Click" Style="{StaticResource CloudInletCategoryStyle}">
+                                            <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=paint-brush, Size=24}"  Width="24" Height="24" Tag="paint-brush" /></settings:SettingsCard.HeaderIcon>
+                                        </settings:SettingsCard>
+                                        <settings:SettingsCard x:Name="NotificationsCategory" Header="Notifications" Description="Choose which updates need your attention."
+                                                               Tag="notifications" Click="SettingsCategory_Click" Style="{StaticResource CloudInletCategoryStyle}">
+                                            <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=alert, Size=24}"  Width="24" Height="24" Tag="alert" /></settings:SettingsCard.HeaderIcon>
+                                        </settings:SettingsCard>
+                                        <settings:SettingsCard x:Name="AboutCategory" Header="Updates and about" Description="App updates, version information, and diagnostics."
+                                                               Tag="about" Click="SettingsCategory_Click" Style="{StaticResource CloudInletCategoryStyle}">
+                                            <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=info, Size=24}"  Width="24" Height="24" Tag="info" /></settings:SettingsCard.HeaderIcon>
+                                        </settings:SettingsCard>
+                                    </StackPanel>
                                 </Grid>
                             </StackPanel>
                             <StackPanel x:Name="SettingsDetail" Spacing="24" Visibility="Collapsed">
-                                <StackPanel x:Name="AccountSettingsDetail" Spacing="4" Visibility="Collapsed">
+                                <ContentControl x:Name="OneDriveSettingsDetail" HorizontalContentAlignment="Stretch" Visibility="Collapsed" />
+                                <StackPanel x:Name="AccountSettingsDetail" Spacing="12" Visibility="Collapsed">
                                     <Border
                                         x:Name="ConnectionPanel"
                                         Padding="0"
-                                        MaxWidth="720"
                                         HorizontalAlignment="Left">
                                         <StackPanel Spacing="16">
                                             <Grid ColumnSpacing="12">
@@ -962,11 +838,10 @@
                                                     <ColumnDefinition Width="Auto" />
                                                     <ColumnDefinition Width="*" />
                                                 </Grid.ColumnDefinitions>
-                                                <FontIcon
-                                                    FontSize="32"
+                                                <IconSourceElement
+
                                                     VerticalAlignment="Top"
-                                                    Glyph=""
-                                                    Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                                                    IconSource="{views:FluentIcon Kind=cloud, Size=32}"  Width="32" Height="32" Tag="cloud" />
                                                 <StackPanel Spacing="8" Grid.Column="1">
                                                     <TextBlock
                                                         x:Name="AccountHeading"
@@ -978,6 +853,10 @@
                                                         Style="{StaticResource CloudInletBodySecondaryTextStyle}" />
                                                 </StackPanel>
                                             </Grid>
+                                            <Grid x:Name="AccountSectionsGrid" ColumnSpacing="16" RowSpacing="16" Tag="2" SizeChanged="SettingsDetailGrid_SizeChanged">
+                                            <Border Style="{StaticResource CloudInletSurfaceStyle}">
+                                            <StackPanel Spacing="16">
+                                            <TextBlock Text="Account credentials" Style="{StaticResource CloudInletSectionHeadingStyle}" AutomationProperties.HeadingLevel="Level2" />
                                             <Grid x:Name="AccountCredentialFields" ColumnSpacing="16" RowSpacing="16">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
@@ -1004,11 +883,24 @@
                                                     PlaceholderText="Application key"
                                                     PasswordRevealMode="Peek" />
                                             </Grid>
+                                            <TextBlock Text="Use an application key with access to your private bucket. Your key is stored securely for this Windows account." Style="{StaticResource CloudInletBodySecondaryTextStyle}" />
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <Button x:Name="ConnectButton" Content="Connect account" Style="{StaticResource AccentButtonStyle}" Click="Connect_Click" />
+                                                <Button x:Name="CancelConnectionButton" Content="Cancel" Click="CancelConnection_Click" Visibility="Collapsed" />
+                                            </StackPanel>
+                                            </StackPanel>
+                                            </Border>
+                                            <StackPanel Spacing="12">
                                             <settings:SettingsExpander
                                                 x:Name="ConnectionOptions"
-                                                Header="Advanced connection">
+                                                Header="Storage location"
+                                                Description="Choose the folder on this PC and the prefix in your bucket."
+                                                IsExpanded="True">
                                                 <settings:SettingsExpander.HeaderIcon>
-                                                    <FontIcon Glyph="" />
+                                                    <AnimatedIcon Width="24" Height="24">
+                                                        <AnimatedIcon.Source><animated:AnimatedSettingsVisualSource /></AnimatedIcon.Source>
+                                                        <AnimatedIcon.FallbackIconSource><FontIconSource Glyph="&#xE713;" /></AnimatedIcon.FallbackIconSource>
+                                                    </AnimatedIcon>
                                                 </settings:SettingsExpander.HeaderIcon>
                                                 <settings:SettingsExpander.Items>
                                                     <settings:SettingsCard
@@ -1046,249 +938,323 @@
                                                     </settings:SettingsCard>
                                                 </settings:SettingsExpander.Items>
                                             </settings:SettingsExpander>
-                                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                                <Button
-                                                    x:Name="ConnectButton"
-                                                    Content="Connect account"
-                                                    Style="{StaticResource AccentButtonStyle}"
-                                                    Click="Connect_Click" />
-                                                <Button
-                                                    x:Name="CancelConnectionButton"
-                                                    Content="Cancel"
-                                                    Click="CancelConnection_Click"
-                                                    Visibility="Collapsed" />
+                                            <TextBlock Text="Location settings are locked while folder backups are enabled." Style="{StaticResource CloudInletBodySecondaryTextStyle}" Margin="4,0" />
                                             </StackPanel>
+                                            </Grid>
                                         </StackPanel>
                                     </Border>
                                 </StackPanel>
-                                <StackPanel x:Name="SyncSettingsDetail" Spacing="4" Visibility="Collapsed">
-                                    <settings:SettingsCard
-                                        Header="Files on demand"
-                                        Description="Download files when you open them.">
-                                        <settings:SettingsCard.HeaderIcon>
-                                            <FontIcon Glyph="" />
-                                        </settings:SettingsCard.HeaderIcon>
-                                        <ToggleSwitch
-                                            x:Name="FilesOnDemandSwitch"
-                                            Style="{StaticResource CloudInletToggleStyle}"
-                                            AutomationProperties.Name="Files on demand"
-                                            Toggled="Preference_Toggled" />
-                                    </settings:SettingsCard>
-                                    <settings:SettingsCard
-                                        Header="Downloaded file space"
-                                        Description="Windows Storage Sense manages downloaded files.">
-                                        <settings:SettingsCard.HeaderIcon>
-                                            <FontIcon Glyph="" />
-                                        </settings:SettingsCard.HeaderIcon>
-                                        <Button Content="Storage Sense" Click="StorageSense_Click" />
-                                    </settings:SettingsCard>
-                                    <settings:SettingsExpander
-                                        x:Name="ExclusionsExpander"
-                                        Header="Excluded files and folders"
-                                        Description="Choose files, folders, file types, or build a rule.">
-                                        <settings:SettingsExpander.HeaderIcon>
-                                            <FontIcon Glyph="" />
-                                        </settings:SettingsExpander.HeaderIcon>
-                                        <settings:SettingsExpander.Items>
-                                            <settings:SettingsCard
-                                                ContentAlignment="Vertical"
-                                                HorizontalContentAlignment="Stretch"
-                                                Background="Transparent"
-                                                BorderThickness="0">
-                                                <views:ExclusionEditor x:Name="ExclusionsEditor" />
+                                <StackPanel x:Name="SyncSettingsDetail" Spacing="24" Visibility="Collapsed">
+                                    <StackPanel.Resources>
+                                        <x:Double x:Key="SettingsCardWrapThreshold">0</x:Double>
+                                        <x:Double x:Key="SettingsCardWrapNoIconThreshold">0</x:Double>
+                                    </StackPanel.Resources>
+                                    <StackPanel Spacing="12">
+                                        <TextBlock Text="On this PC" Style="{StaticResource CloudInletSectionHeadingStyle}" AutomationProperties.HeadingLevel="Level2" />
+                                        <Grid x:Name="StorageOptionsGrid" ColumnSpacing="12" RowSpacing="12" Tag="2" SizeChanged="SettingsDetailGrid_SizeChanged">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                            <settings:SettingsCard Header="Files on demand"
+                                                                   Description="Keep files online until you open them.">
+                                                <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=cloud, Size=24}"  Width="24" Height="24" Tag="cloud" /></settings:SettingsCard.HeaderIcon>
+                                                <ToggleSwitch x:Name="FilesOnDemandSwitch" Style="{StaticResource CloudInletToggleStyle}"
+                                                              AutomationProperties.Name="Files on demand" Toggled="Preference_Toggled" />
                                             </settings:SettingsCard>
-                                        </settings:SettingsExpander.Items>
-                                    </settings:SettingsExpander>
+                                            <settings:SettingsCard Grid.Column="1" Header="Downloaded file space"
+                                                                   Description="Let Windows manage downloaded copies." IsClickEnabled="True" Click="StorageSense_Click">
+                                                <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=storage, Size=24}"  Width="24" Height="24" Tag="storage" /></settings:SettingsCard.HeaderIcon>
+                                                <settings:SettingsCard.ActionIcon><FontIcon Glyph="&#xE8A7;" /></settings:SettingsCard.ActionIcon>
+                                            </settings:SettingsCard>
+                                        </Grid>
+                                    </StackPanel>
+                                    <views:ExclusionEditor x:Name="ExclusionsEditor" />
                                 </StackPanel>
-                                <StackPanel x:Name="NetworkSettingsDetail" Spacing="4" Visibility="Collapsed">
-                                    <settings:SettingsCard x:Name="UploadPerformanceCard" Header="Transfer performance"
-                                        Description="Balances uploads and downloads with available system resources. Applies to local and cloud transfers.">
-                                        <settings:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE895;" /></settings:SettingsCard.HeaderIcon>
-                                        <ComboBox x:Name="UploadModeBox" Width="220" SelectionChanged="UploadMode_SelectionChanged"
-                                                  AutomationProperties.Name="Transfer performance mode">
-                                            <ComboBoxItem Content="Intelligent (recommended)" Tag="Intelligent" />
-                                            <ComboBoxItem Content="Maximum throughput" Tag="MaximumThroughput" />
-                                            <ComboBoxItem Content="Manual" Tag="Manual" />
-                                        </ComboBox>
-                                    </settings:SettingsCard>
-                                    <settings:SettingsCard x:Name="ManualConcurrencyCard" Header="Upload slots"
-                                        Description="Maximum simultaneous upload requests across accounts, shared by files and large-file parts." Visibility="Collapsed">
-                                        <NumberBox x:Name="ConcurrencyBox" Width="200" Minimum="1" Maximum="16" SmallChange="1"
-                                                   SpinButtonPlacementMode="Compact" ValidationMode="Disabled"
-                                                   AutomationProperties.Name="Maximum simultaneous upload requests" />
-                                    </settings:SettingsCard>
-                                    <settings:SettingsCard x:Name="ManualDownloadConcurrencyCard" Header="Download slots"
-                                        Description="Maximum simultaneous download requests across accounts, shared by files and large-file chunks." Visibility="Collapsed">
-                                        <NumberBox x:Name="DownloadConcurrencyBox" Width="200" Minimum="1" Maximum="16" SmallChange="1"
-                                                   SpinButtonPlacementMode="Compact" ValidationMode="Disabled"
-                                                   AutomationProperties.Name="Maximum simultaneous downloads" />
-                                    </settings:SettingsCard>
-                                    <settings:SettingsCard
-                                        Header="Metered connections"
-                                        Description="Pause syncing to limit mobile data use.">
-                                        <settings:SettingsCard.HeaderIcon>
-                                            <FontIcon Glyph="" />
-                                        </settings:SettingsCard.HeaderIcon>
-                                        <ToggleSwitch
-                                            x:Name="MeteredBox"
-                                            Style="{StaticResource CloudInletToggleStyle}"
-                                            AutomationProperties.Name="Pause on metered connections"
-                                            Toggled="Preference_Toggled" />
-                                    </settings:SettingsCard>
-                                    <settings:SettingsCard
-                                        Header="Battery Saver"
-                                        Description="Pause syncing while Battery Saver is on.">
-                                        <settings:SettingsCard.HeaderIcon>
-                                            <FontIcon Glyph="" />
-                                        </settings:SettingsCard.HeaderIcon>
-                                        <ToggleSwitch
-                                            x:Name="BatterySaverBox"
-                                            Style="{StaticResource CloudInletToggleStyle}"
-                                            AutomationProperties.Name="Pause with Battery Saver"
-                                            Toggled="Preference_Toggled" />
-                                    </settings:SettingsCard>
-                                    <settings:SettingsExpander
-                                        x:Name="NetworkSettingsExpander"
-                                        Header="Bandwidth limits"
-                                        Description="Set upload and download speed limits.">
-                                        <settings:SettingsExpander.HeaderIcon>
-                                            <FontIcon Glyph="" />
-                                        </settings:SettingsExpander.HeaderIcon>
-                                        <settings:SettingsExpander.Items>
-                                            <settings:SettingsCard
-                                                Header="Upload limit"
-                                                Description="KiB/s · 0 means unlimited">
-                                                <NumberBox
-                                                    x:Name="UploadLimitBox"
-                                                    Width="200"
-                                                    Minimum="0"
-                                                    Maximum="1048576"
-                                                    SmallChange="64"
-                                                    SpinButtonPlacementMode="Compact"
-                                                    ValidationMode="Disabled" />
+                                <StackPanel x:Name="NetworkSettingsDetail" Spacing="24" Visibility="Collapsed">
+                                    <StackPanel Spacing="12">
+                                        <TextBlock Text="Transfer performance" Style="{StaticResource CloudInletSectionHeadingStyle}" AutomationProperties.HeadingLevel="Level2" />
+                                        <settings:SettingsCard x:Name="UploadPerformanceCard" Header="Performance mode"
+                                                               Description="Recommended · Automatically balances speed and system resources.">
+                                            <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=sync, Size=24}" Width="24" Height="24" Tag="sync" /></settings:SettingsCard.HeaderIcon>
+                                            <ComboBox x:Name="UploadModeBox" Width="208" SelectionChanged="UploadMode_SelectionChanged"
+                                                      AutomationProperties.Name="Transfer performance mode">
+                                                <ComboBoxItem Content="Intelligent" Tag="Intelligent" />
+                                                <ComboBoxItem Content="Maximum throughput" Tag="MaximumThroughput" />
+                                                <ComboBoxItem Content="Manual" Tag="Manual" />
+                                            </ComboBox>
+                                        </settings:SettingsCard>
+                                        <Grid x:Name="NetworkCapacityGrid" ColumnSpacing="12" RowSpacing="12" Visibility="Collapsed"
+                                              Tag="2" SizeChanged="SettingsDetailGrid_SizeChanged">
+                                            <Grid.Resources>
+                                                <x:Double x:Key="SettingsCardWrapThreshold">0</x:Double>
+                                                <x:Double x:Key="SettingsCardWrapNoIconThreshold">0</x:Double>
+                                            </Grid.Resources>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                            <settings:SettingsCard x:Name="ManualConcurrencyCard" Header="Upload slots"
+                                                                   Description="Simultaneous upload requests · 1–16"
+                                                                   Visibility="Collapsed">
+                                                <NumberBox x:Name="ConcurrencyBox" Width="120" Minimum="1" Maximum="16" SmallChange="1"
+                                                           SpinButtonPlacementMode="Compact" ValidationMode="Disabled"
+                                                           AutomationProperties.Name="Maximum simultaneous upload requests" />
                                             </settings:SettingsCard>
-                                            <settings:SettingsCard
-                                                Header="Download limit"
-                                                Description="KiB/s · 0 means unlimited">
-                                                <NumberBox
-                                                    x:Name="DownloadLimitBox"
-                                                    Width="200"
-                                                    Minimum="0"
-                                                    Maximum="1048576"
-                                                    SmallChange="64"
-                                                    SpinButtonPlacementMode="Compact"
-                                                    ValidationMode="Disabled" />
+                                            <settings:SettingsCard x:Name="ManualDownloadConcurrencyCard" Grid.Column="1" Header="Download slots"
+                                                                   Description="Simultaneous download requests · 1–16"
+                                                                   Visibility="Collapsed">
+                                                <NumberBox x:Name="DownloadConcurrencyBox" Width="120" Minimum="1" Maximum="16" SmallChange="1"
+                                                           SpinButtonPlacementMode="Compact" ValidationMode="Disabled"
+                                                           AutomationProperties.Name="Maximum simultaneous downloads" />
                                             </settings:SettingsCard>
-                                        </settings:SettingsExpander.Items>
-                                    </settings:SettingsExpander>
-                                    <StackPanel Orientation="Horizontal" Padding="0,16,0,0">
-                                        <Button Content="Apply transfer settings" Style="{StaticResource AccentButtonStyle}" Click="ApplyNetwork_Click" />
+                                        </Grid>
+                                    </StackPanel>
+                                    <StackPanel Spacing="12">
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Text="Bandwidth limits" Style="{StaticResource CloudInletSectionHeadingStyle}" AutomationProperties.HeadingLevel="Level2" />
+                                            <TextBlock Text="Limit transfer speeds across your accounts. Use 0 for unlimited."
+                                                       Style="{StaticResource CloudInletBodySecondaryTextStyle}" />
+                                        </StackPanel>
+                                        <Grid x:Name="NetworkBandwidthGrid" ColumnSpacing="12" RowSpacing="12" Tag="2" SizeChanged="SettingsDetailGrid_SizeChanged">
+                                            <Grid.Resources>
+                                                <x:Double x:Key="SettingsCardWrapThreshold">0</x:Double>
+                                                <x:Double x:Key="SettingsCardWrapNoIconThreshold">0</x:Double>
+                                            </Grid.Resources>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                            <settings:SettingsCard Header="Upload limit" Description="Sending files · KiB/s">
+                                                <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=upload, Size=24}" Width="24" Height="24" Tag="upload" /></settings:SettingsCard.HeaderIcon>
+                                                    <NumberBox x:Name="UploadLimitBox" Width="144"
+                                                               Minimum="0" Maximum="1048576" SmallChange="64" SpinButtonPlacementMode="Compact"
+                                                               ValidationMode="Disabled" AutomationProperties.Name="Upload speed limit in KiB per second" />
+                                            </settings:SettingsCard>
+                                            <settings:SettingsCard Grid.Column="1" Header="Download limit" Description="Receiving files · KiB/s">
+                                                <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=download, Size=24}" Width="24" Height="24" Tag="download" /></settings:SettingsCard.HeaderIcon>
+                                                    <NumberBox x:Name="DownloadLimitBox" Width="144"
+                                                               Minimum="0" Maximum="1048576" SmallChange="64" SpinButtonPlacementMode="Compact"
+                                                               ValidationMode="Disabled" AutomationProperties.Name="Download speed limit in KiB per second" />
+                                            </settings:SettingsCard>
+                                        </Grid>
+                                        <Grid ColumnSpacing="20">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                            <TextBlock Text="Save changes to performance and bandwidth."
+                                                       VerticalAlignment="Center" Style="{StaticResource CloudInletBodySecondaryTextStyle}" />
+                                            <Button Grid.Column="1" Content="Apply changes" Style="{StaticResource AccentButtonStyle}" Click="ApplyNetwork_Click"
+                                                    AutomationProperties.Name="Apply transfer settings" />
+                                        </Grid>
+                                    </StackPanel>
+                                    <StackPanel Spacing="12">
+                                        <TextBlock Text="Pause automatically" Style="{StaticResource CloudInletSectionHeadingStyle}" AutomationProperties.HeadingLevel="Level2" />
+                                        <Grid x:Name="NetworkPauseGrid" ColumnSpacing="12" RowSpacing="12" Tag="2" SizeChanged="SettingsDetailGrid_SizeChanged">
+                                            <Grid.Resources>
+                                                <x:Double x:Key="SettingsCardWrapThreshold">0</x:Double>
+                                                <x:Double x:Key="SettingsCardWrapNoIconThreshold">0</x:Double>
+                                            </Grid.Resources>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                            <settings:SettingsCard Header="Metered connections" Description="Pause syncing to limit mobile data use.">
+                                                <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=globe, Size=24}"  Width="24" Height="24" Tag="globe" /></settings:SettingsCard.HeaderIcon>
+                                                <ToggleSwitch x:Name="MeteredBox" Style="{StaticResource CloudInletToggleStyle}"
+                                                              AutomationProperties.Name="Pause on metered connections" Toggled="Preference_Toggled" />
+                                            </settings:SettingsCard>
+                                            <settings:SettingsCard Grid.Column="1" Header="Battery Saver" Description="Pause syncing to save battery power.">
+                                                <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=battery, Size=24}"  Width="24" Height="24" Tag="battery" /></settings:SettingsCard.HeaderIcon>
+                                                <ToggleSwitch x:Name="BatterySaverBox" Style="{StaticResource CloudInletToggleStyle}"
+                                                              AutomationProperties.Name="Pause with Battery Saver" Toggled="Preference_Toggled" />
+                                            </settings:SettingsCard>
+                                        </Grid>
                                     </StackPanel>
                                 </StackPanel>
-                                <StackPanel x:Name="AppearanceSettingsDetail" Spacing="4" Visibility="Collapsed">
-                                    <settings:SettingsCard Header="App theme" Description="Choose how CloudInlet looks.">
-                                        <settings:SettingsCard.HeaderIcon>
-                                            <FontIcon Glyph="" />
-                                        </settings:SettingsCard.HeaderIcon>
-                                        <ComboBox
-                                            x:Name="ThemeBox"
-                                            Width="220"
-                                            SelectionChanged="Theme_SelectionChanged">
-                                            <ComboBoxItem Content="Use system setting" Tag="System" />
-                                            <ComboBoxItem Content="Light" Tag="Light" />
-                                            <ComboBoxItem Content="Dark" Tag="Dark" />
-                                        </ComboBox>
-                                    </settings:SettingsCard>
+                                <StackPanel x:Name="AppearanceSettingsDetail" Spacing="24" Visibility="Collapsed" Loaded="AppearanceSettings_Loaded">
+                                    <StackPanel.Resources>
+                                        <DataTemplate x:Key="AppearanceWindowPreview">
+                                            <Border Height="124" Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+                                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="6">
+                                                <Grid RowSpacing="0">
+                                                    <Grid.RowDefinitions><RowDefinition Height="23" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+                                                    <Grid.ColumnDefinitions><ColumnDefinition Width="42" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                                    <Grid Grid.ColumnSpan="2" Padding="8,0" ColumnSpacing="6">
+                                                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                                        <IconSourceElement IconSource="{views:FluentIcon Kind=cloud, Size=10}"  Width="10" Height="10" Tag="cloud" />
+                                                        <Border Grid.Column="1" Width="44" Height="3" HorizontalAlignment="Left" Background="{ThemeResource TextFillColorSecondaryBrush}" CornerRadius="1" />
+                                                        <FontIcon Grid.Column="2" Glyph="&#xE8BB;" FontSize="6" />
+                                                    </Grid>
+                                                    <StackPanel Grid.Row="1" Spacing="10" Padding="5,8">
+                                                        <Border Height="17" CornerRadius="3" Background="{ThemeResource SubtleFillColorSecondaryBrush}">
+                                                            <Grid><Border Width="2" Height="10" HorizontalAlignment="Left" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1" /><IconSourceElement IconSource="{views:FluentIcon Kind=home, Size=10}"   Width="10" Height="10" Tag="home" /></Grid>
+                                                        </Border>
+                                                        <IconSourceElement IconSource="{views:FluentIcon Kind=folder, Size=10}"  Width="10" Height="10" Tag="folder" />
+                                                        <IconSourceElement IconSource="{views:FluentIcon Kind=settings, Size=10}"  Width="10" Height="10" Tag="settings" />
+                                                    </StackPanel>
+                                                    <Border Grid.Row="1" Grid.Column="1" Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}" CornerRadius="6,0,0,0" Padding="10">
+                                                        <StackPanel Spacing="7">
+                                                            <Border Width="46" Height="5" HorizontalAlignment="Left" Background="{ThemeResource TextFillColorPrimaryBrush}" CornerRadius="2" Margin="0,1,0,3" />
+                                                            <Border Height="24" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4" Padding="7,0">
+                                                                <Grid><Border Width="34" Height="3" HorizontalAlignment="Left" Background="{ThemeResource TextFillColorSecondaryBrush}" CornerRadius="1" /><Border Width="19" Height="10" HorizontalAlignment="Right" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="5" /></Grid>
+                                                            </Border>
+                                                            <Border Height="24" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4" Padding="7,0">
+                                                                <Grid><Border Width="26" Height="3" HorizontalAlignment="Left" Background="{ThemeResource TextFillColorSecondaryBrush}" CornerRadius="1" /><FontIcon Glyph="&#xE76C;" FontSize="7" HorizontalAlignment="Right" /></Grid>
+                                                            </Border>
+                                                        </StackPanel>
+                                                    </Border>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </StackPanel.Resources>
+                                    <StackPanel Spacing="6">
+                                        <TextBlock Text="Choose your look" Style="{StaticResource CloudInletSectionHeadingStyle}" AutomationProperties.HeadingLevel="Level2" />
+                                        <TextBlock Text="Make CloudInlet feel at home on your PC." Style="{StaticResource CloudInletBodySecondaryTextStyle}" />
+                                    </StackPanel>
+                                    <Grid x:Name="ThemeChoiceGrid" ColumnSpacing="12" RowSpacing="12" SizeChanged="ThemeChoices_SizeChanged">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                        <ToggleButton x:Name="SystemThemeChoice" Tag="System" Click="ThemeChoice_Click" CornerRadius="8" Padding="14"
+                                                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" AutomationProperties.Name="Use Windows system theme">
+                                            <StackPanel Spacing="12">
+                                                <ContentControl x:Name="SystemThemePreview" Content="System" ContentTemplate="{StaticResource AppearanceWindowPreview}" HorizontalContentAlignment="Stretch" IsHitTestVisible="False" IsTabStop="False" />
+                                                <StackPanel Spacing="4"><TextBlock Text="System" Style="{StaticResource BodyStrongTextBlockStyle}" /><TextBlock Text="Follow Windows" FontSize="12" Opacity="0.8" TextWrapping="Wrap" /></StackPanel>
+                                            </StackPanel>
+                                        </ToggleButton>
+                                        <ToggleButton x:Name="LightThemeChoice" Grid.Column="1" Tag="Light" Click="ThemeChoice_Click" CornerRadius="8" Padding="14"
+                                                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" AutomationProperties.Name="Use light theme">
+                                            <StackPanel Spacing="12">
+                                                <ContentControl Content="Light" RequestedTheme="Light" ContentTemplate="{StaticResource AppearanceWindowPreview}" HorizontalContentAlignment="Stretch" IsHitTestVisible="False" IsTabStop="False" />
+                                                <StackPanel Spacing="4"><TextBlock Text="Light" Style="{StaticResource BodyStrongTextBlockStyle}" /><TextBlock Text="A brighter workspace" FontSize="12" Opacity="0.8" TextWrapping="Wrap" /></StackPanel>
+                                            </StackPanel>
+                                        </ToggleButton>
+                                        <ToggleButton x:Name="DarkThemeChoice" Grid.Column="2" Tag="Dark" Click="ThemeChoice_Click" CornerRadius="8" Padding="14"
+                                                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" AutomationProperties.Name="Use dark theme">
+                                            <StackPanel Spacing="12">
+                                                <ContentControl Content="Dark" RequestedTheme="Dark" ContentTemplate="{StaticResource AppearanceWindowPreview}" HorizontalContentAlignment="Stretch" IsHitTestVisible="False" IsTabStop="False" />
+                                                <StackPanel Spacing="4"><TextBlock Text="Dark" Style="{StaticResource BodyStrongTextBlockStyle}" /><TextBlock Text="A darker workspace" FontSize="12" Opacity="0.8" TextWrapping="Wrap" /></StackPanel>
+                                            </StackPanel>
+                                        </ToggleButton>
+                                    </Grid>
+                                    <!-- Keep the established preference and rollback path as the single source of truth. -->
+                                    <ComboBox x:Name="ThemeBox" Visibility="Collapsed" SelectionChanged="Theme_SelectionChanged">
+                                        <ComboBoxItem Content="Use system setting" Tag="System" />
+                                        <ComboBoxItem Content="Light" Tag="Light" />
+                                        <ComboBoxItem Content="Dark" Tag="Dark" />
+                                    </ComboBox>
+                                    <StackPanel Spacing="12" Margin="0,8,0,0">
+                                        <TextBlock Text="Personalize in Windows" Style="{StaticResource CloudInletSectionHeadingStyle}" AutomationProperties.HeadingLevel="Level2" />
+                                        <settings:SettingsCard Header="Accent color and transparency" Description="CloudInlet follows your Windows accent color and accessibility preferences." IsClickEnabled="True" Click="WindowsAppearance_Click">
+                                            <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=paint-brush, Size=24}"  Width="24" Height="24" Tag="paint-brush" /></settings:SettingsCard.HeaderIcon>
+                                            <settings:SettingsCard.ActionIcon><FontIcon Glyph="&#xE8A7;" /></settings:SettingsCard.ActionIcon>
+                                        </settings:SettingsCard>
+                                    </StackPanel>
                                 </StackPanel>
-                                <StackPanel x:Name="GeneralSettingsDetail" Spacing="4" Visibility="Collapsed">
-                                    <settings:SettingsCard
-                                        Header="Start at sign-in"
-                                        Description="Keep CloudInlet working in the background."
-                                        x:Name="StartupSettingsCard">
-                                        <settings:SettingsCard.HeaderIcon>
-                                            <FontIcon Glyph="" />
-                                        </settings:SettingsCard.HeaderIcon>
-                                        <ToggleSwitch
-                                            x:Name="StartAtSignInBox"
-                                            Style="{StaticResource CloudInletToggleStyle}"
-                                            AutomationProperties.Name="Start CloudInlet when I sign in"
-                                            Toggled="Preference_Toggled" />
-                                    </settings:SettingsCard>
+                                <StackPanel x:Name="GeneralSettingsDetail" Spacing="24" Visibility="Collapsed">
+                                    <StackPanel.Resources>
+                                        <x:Double x:Key="SettingsCardWrapThreshold">0</x:Double>
+                                        <x:Double x:Key="SettingsCardWrapNoIconThreshold">0</x:Double>
+                                    </StackPanel.Resources>
+                                    <StackPanel Spacing="12">
+                                        <TextBlock Text="When you sign in" Style="{StaticResource CloudInletSectionHeadingStyle}" AutomationProperties.HeadingLevel="Level2" />
+                                        <settings:SettingsCard x:Name="StartupSettingsCard" Header="Start with Windows"
+                                                               Description="Launch CloudInlet in the system tray so your folders can stay up to date.">
+                                            <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=power, Size=24}"  Width="24" Height="24" Tag="power" /></settings:SettingsCard.HeaderIcon>
+                                            <ToggleSwitch x:Name="StartAtSignInBox" Style="{StaticResource CloudInletToggleStyle}"
+                                                          AutomationProperties.Name="Start CloudInlet when I sign in" Toggled="Preference_Toggled" />
+                                        </settings:SettingsCard>
+                                    </StackPanel>
+                                    <StackPanel Spacing="12">
+                                        <TextBlock Text="Working in the background" Style="{StaticResource CloudInletSectionHeadingStyle}" AutomationProperties.HeadingLevel="Level2" />
+                                        <Grid x:Name="StartupBackgroundGrid" Tag="2" ColumnSpacing="12" RowSpacing="12" SizeChanged="SettingsDetailGrid_SizeChanged">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                            <settings:SettingsCard Header="Always within reach" Description="After account setup, CloudInlet opens quietly in the system tray. Select its tray icon to check progress or open the app.">
+                                                <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=apps, Size=24}"  Width="24" Height="24" Tag="apps" /></settings:SettingsCard.HeaderIcon>
+                                            </settings:SettingsCard>
+                                            <settings:SettingsCard Grid.Column="1" Header="Notifications" Description="Choose the background activity you want to hear about." IsClickEnabled="True" Tag="settings/notifications" Click="QuickNavigate_Click">
+                                                <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=alert, Size=24}"  Width="24" Height="24" Tag="alert" /></settings:SettingsCard.HeaderIcon>
+                                            </settings:SettingsCard>
+                                        </Grid>
+                                    </StackPanel>
                                 </StackPanel>
                                 <ContentControl x:Name="NotificationSettingsDetail" HorizontalContentAlignment="Stretch" Visibility="Collapsed">
-                                  <StackPanel Spacing="4">
-                                    <settings:SettingsCard Header="Windows notifications" Description="Show CloudInlet alerts in Notification Center with buttons for related actions.">
-                                        <settings:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE7E7;" /></settings:SettingsCard.HeaderIcon>
-                                        <ToggleSwitch x:Name="NotificationsSwitch" Style="{StaticResource CloudInletToggleStyle}" AutomationProperties.Name="Windows notifications" Toggled="NotificationPreference_Toggled" />
-                                    </settings:SettingsCard>
-                                    <ContentControl x:Name="NotificationChoices" HorizontalContentAlignment="Stretch">
-                                      <StackPanel Spacing="4">
-                                        <settings:SettingsCard Header="Backup problems" Description="Grouped alerts when files or your account need attention.">
-                                            <settings:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE7BA;" /></settings:SettingsCard.HeaderIcon>
-                                            <ToggleSwitch x:Name="NotificationProblemsSwitch" Style="{StaticResource CloudInletToggleStyle}" AutomationProperties.Name="Notify about backup problems" Toggled="NotificationPreference_Toggled" />
+                                    <ContentControl.Resources>
+                                        <x:Double x:Key="SettingsCardWrapThreshold">0</x:Double>
+                                        <x:Double x:Key="SettingsCardWrapNoIconThreshold">0</x:Double>
+                                    </ContentControl.Resources>
+                                    <StackPanel Spacing="24">
+                                        <settings:SettingsCard Header="Windows notifications" Description="Receive CloudInlet alerts in Notification Center.">
+                                            <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=alert, Size=24}"  Width="24" Height="24" Tag="alert" /></settings:SettingsCard.HeaderIcon>
+                                            <ToggleSwitch x:Name="NotificationsSwitch" Style="{StaticResource CloudInletToggleStyle}" AutomationProperties.Name="Windows notifications" Toggled="NotificationPreference_Toggled" />
                                         </settings:SettingsCard>
-                                        <settings:SettingsCard Header="Folder backup changes" Description="Confirm when folder backup is enabled or stopped.">
-                                            <settings:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE8B7;" /></settings:SettingsCard.HeaderIcon>
-                                            <ToggleSwitch x:Name="NotificationFoldersSwitch" Style="{StaticResource CloudInletToggleStyle}" AutomationProperties.Name="Notify about folder backup changes" Toggled="NotificationPreference_Toggled" />
-                                        </settings:SettingsCard>
-                                        <settings:SettingsCard Header="Sync completed" Description="A single summary when your transfers finish.">
-                                            <settings:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE895;" /></settings:SettingsCard.HeaderIcon>
-                                            <ToggleSwitch x:Name="NotificationSyncSwitch" Style="{StaticResource CloudInletToggleStyle}" AutomationProperties.Name="Notify when sync completes" Toggled="NotificationPreference_Toggled" />
-                                        </settings:SettingsCard>
-                                        <settings:SettingsCard Header="App updates" Description="Notify when an update is available or ready to install.">
-                                            <settings:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE896;" /></settings:SettingsCard.HeaderIcon>
-                                            <ToggleSwitch x:Name="NotificationUpdatesSwitch" Style="{StaticResource CloudInletToggleStyle}" AutomationProperties.Name="Notify about app updates" Toggled="NotificationPreference_Toggled" />
-                                        </settings:SettingsCard>
-                                        <settings:SettingsCard Header="Notification sound" Description="Windows controls the sound and Do not disturb behavior.">
-                                            <settings:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE767;" /></settings:SettingsCard.HeaderIcon>
-                                            <ToggleSwitch x:Name="NotificationSoundSwitch" Style="{StaticResource CloudInletToggleStyle}" AutomationProperties.Name="Play a notification sound" Toggled="NotificationPreference_Toggled" />
-                                        </settings:SettingsCard>
-                                      </StackPanel>
-                                    </ContentControl>
-                                    <settings:SettingsCard Header="Windows notification settings" Description="Control banners, Notification Center, and Do not disturb.">
-                                        <settings:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE713;" /></settings:SettingsCard.HeaderIcon>
-                                        <Button Content="Open Windows settings" Click="WindowsNotifications_Click" />
-                                    </settings:SettingsCard>
-                                    <InfoBar x:Name="NotificationNotice" IsOpen="False" IsClosable="True" Severity="Warning" Title="Notification settings" />
-                                  </StackPanel>
-                                </ContentControl>
-                                <StackPanel x:Name="AboutSettingsDetail" Spacing="4" Visibility="Collapsed">
-                                    <settings:SettingsExpander x:Name="VersionCard" Header="CloudInlet">
-                                        <settings:SettingsExpander.HeaderIcon>
-                                            <FontIcon Glyph="" />
-                                        </settings:SettingsExpander.HeaderIcon>
-                                        <settings:SettingsExpander.Items>
-                                            <settings:SettingsCard
-                                                Header="Diagnostics"
-                                                Description="Open local diagnostics and activity logs.">
-                                                <Button Content="Open diagnostics" Click="Diagnostics_Click" />
-                                            </settings:SettingsCard>
-                                        </settings:SettingsExpander.Items>
-                                    </settings:SettingsExpander>
-                                    <settings:SettingsCard Header="Updates" Description="Check for a new version of your installed package.">
-                                        <settings:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE895;" /></settings:SettingsCard.HeaderIcon>
-                                        <Button x:Name="CheckUpdateButton" Content="Check for updates" Click="CheckUpdate_Click" />
-                                    </settings:SettingsCard>
-                                    <Border Style="{StaticResource CloudInletSurfaceStyle}" Padding="24" Margin="0,12">
+                                        <ContentControl x:Name="NotificationChoices" HorizontalContentAlignment="Stretch">
+                                            <StackPanel Spacing="24">
+                                                <StackPanel Spacing="12">
+                                                    <TextBlock Text="Notify me about" Style="{StaticResource CloudInletSectionHeadingStyle}" AutomationProperties.HeadingLevel="Level2" />
+                                                    <Grid x:Name="NotificationEventsGrid" Tag="2" ColumnSpacing="12" RowSpacing="12" SizeChanged="SettingsDetailGrid_SizeChanged">
+                                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                                                        <settings:SettingsCard Header="Backup problems" Description="Files or your account need attention.">
+                                                            <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=warning, Size=24}"  Width="24" Height="24" Tag="warning" /></settings:SettingsCard.HeaderIcon>
+                                                            <ToggleSwitch x:Name="NotificationProblemsSwitch" Style="{StaticResource CloudInletToggleStyle}" AutomationProperties.Name="Notify about backup problems" Toggled="NotificationPreference_Toggled" />
+                                                        </settings:SettingsCard>
+                                                        <settings:SettingsCard Grid.Column="1" Header="Folder backup changes" Description="A folder backup is enabled or stopped.">
+                                                            <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=folder, Size=24}"  Width="24" Height="24" Tag="folder" /></settings:SettingsCard.HeaderIcon>
+                                                            <ToggleSwitch x:Name="NotificationFoldersSwitch" Style="{StaticResource CloudInletToggleStyle}" AutomationProperties.Name="Notify about folder backup changes" Toggled="NotificationPreference_Toggled" />
+                                                        </settings:SettingsCard>
+                                                        <settings:SettingsCard Grid.Row="1" Header="Sync completed" Description="A summary when your transfers finish.">
+                                                            <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=sync, Size=24}"  Width="24" Height="24" Tag="sync" /></settings:SettingsCard.HeaderIcon>
+                                                            <ToggleSwitch x:Name="NotificationSyncSwitch" Style="{StaticResource CloudInletToggleStyle}" AutomationProperties.Name="Notify when sync completes" Toggled="NotificationPreference_Toggled" />
+                                                        </settings:SettingsCard>
+                                                        <settings:SettingsCard Grid.Row="1" Grid.Column="1" Header="App updates" Description="An update is available or ready to install.">
+                                                            <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=download, Size=24}"  Width="24" Height="24" Tag="download" /></settings:SettingsCard.HeaderIcon>
+                                                            <ToggleSwitch x:Name="NotificationUpdatesSwitch" Style="{StaticResource CloudInletToggleStyle}" AutomationProperties.Name="Notify about app updates" Toggled="NotificationPreference_Toggled" />
+                                                        </settings:SettingsCard>
+                                                    </Grid>
+                                                </StackPanel>
+                                                <StackPanel Spacing="12">
+                                                    <TextBlock Text="Sound" Style="{StaticResource CloudInletSectionHeadingStyle}" AutomationProperties.HeadingLevel="Level2" />
+                                                    <settings:SettingsCard Header="Play a notification sound" Description="Windows Do not disturb settings still apply.">
+                                                        <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=music, Size=24}"  Width="24" Height="24" Tag="music" /></settings:SettingsCard.HeaderIcon>
+                                                        <ToggleSwitch x:Name="NotificationSoundSwitch" Style="{StaticResource CloudInletToggleStyle}" AutomationProperties.Name="Play a notification sound" Toggled="NotificationPreference_Toggled" />
+                                                    </settings:SettingsCard>
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </ContentControl>
                                         <StackPanel Spacing="12">
-                                            <TextBlock x:Name="UpdateStatusText" Text="Updates are unavailable in this preview." TextWrapping="Wrap" />
-                                            <TextBlock x:Name="UpdateTimingText" Style="{StaticResource CloudInletSecondaryTextStyle}" />
+                                            <TextBlock Text="Related settings" Style="{StaticResource CloudInletSectionHeadingStyle}" AutomationProperties.HeadingLevel="Level2" />
+                                            <settings:SettingsCard Header="Windows notification settings" Description="Manage banners, Notification Center, and Do not disturb." IsClickEnabled="True" Click="WindowsNotifications_Click">
+                                                <settings:SettingsCard.HeaderIcon>
+                                                    <AnimatedIcon Width="24" Height="24">
+                                                        <AnimatedIcon.Source><animated:AnimatedSettingsVisualSource /></AnimatedIcon.Source>
+                                                        <AnimatedIcon.FallbackIconSource><FontIconSource Glyph="&#xE713;" /></AnimatedIcon.FallbackIconSource>
+                                                    </AnimatedIcon>
+                                                </settings:SettingsCard.HeaderIcon>
+                                                <settings:SettingsCard.ActionIcon><FontIcon Glyph="&#xE8A7;" /></settings:SettingsCard.ActionIcon>
+                                            </settings:SettingsCard>
+                                        </StackPanel>
+                                        <InfoBar x:Name="NotificationNotice" IsOpen="False" IsClosable="True" Severity="Warning" Title="Notification settings" />
+                                    </StackPanel>
+                                </ContentControl>
+                                <StackPanel x:Name="AboutSettingsDetail" Spacing="24" Visibility="Collapsed">
+                                    <Border Style="{StaticResource CloudInletSurfaceStyle}" Padding="24">
+                                    <StackPanel Spacing="16">
+                                    <Grid x:Name="UpdateHero" ColumnSpacing="16">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                        <IconSourceElement IconSource="{views:FluentIcon Kind=sync, Size=40}"  Width="40" Height="40" Tag="sync" />
+                                        <StackPanel Grid.Column="1" Spacing="8" VerticalAlignment="Center">
+                                            <TextBlock x:Name="UpdateStatusText" Text="Updates are unavailable in this preview." Style="{StaticResource SubtitleTextBlockStyle}" TextWrapping="Wrap" />
+                                            <TextBlock x:Name="UpdateTimingText" Style="{StaticResource CloudInletBodySecondaryTextStyle}" />
                                             <ProgressBar x:Name="UpdateDownloadProgress" Visibility="Collapsed" />
                                             <TextBlock x:Name="UpdateDownloadDetail" Visibility="Collapsed" Style="{StaticResource CloudInletSecondaryTextStyle}" TextWrapping="Wrap" />
-                                            <InfoBar x:Name="UpdateNotice" IsOpen="False" IsClosable="False" />
-                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                        </StackPanel>
+                                    </Grid>
+                                            <views:ActionWrapPanel x:Name="UpdateActions" Spacing="8">
                                                 <Button x:Name="DownloadUpdateButton" Content="Download update" Click="DownloadUpdate_Click" Visibility="Collapsed" Style="{StaticResource AccentButtonStyle}" />
                                                 <Button x:Name="InstallUpdateButton" Content="Install and restart" Click="InstallUpdate_Click" Visibility="Collapsed" Style="{StaticResource AccentButtonStyle}" />
-                                                <Button x:Name="DeleteUpdateButton" Content="Delete downloaded updates" Click="DeleteUpdate_Click" />
+                                                <Button x:Name="CheckUpdateButton" Content="Check for updates" Click="CheckUpdate_Click" MinHeight="32" />
+                                                <Button x:Name="DeleteUpdateButton" Content="Delete downloads" Click="DeleteUpdate_Click"
+                                                        ToolTipService.ToolTip="Delete downloaded update installers" AutomationProperties.Name="Delete downloaded updates" />
                                                 <HyperlinkButton x:Name="UpdateReleaseLink" Content="Release notes" NavigateUri="https://github.com/TahsinFaiyaz30/CloudInlet/releases" />
-                                            </StackPanel>
-                                        </StackPanel>
+                                            </views:ActionWrapPanel>
+                                    </StackPanel>
                                     </Border>
-                                    <StackPanel x:Name="UpdatePreferencesPanel" Spacing="4">
+                                    <InfoBar x:Name="UpdateNotice" IsOpen="False" Visibility="Collapsed" IsClosable="False" />
+                                    <StackPanel x:Name="UpdatePreferencesPanel" Spacing="12">
+                                        <TextBlock Text="Update preferences" Style="{StaticResource CloudInletSectionHeadingStyle}" Margin="0,0,0,4" />
+                                        <Grid x:Name="UpdatePreferencesGrid" ColumnSpacing="12" RowSpacing="12" Tag="2" SizeChanged="SettingsDetailGrid_SizeChanged">
                                         <settings:SettingsCard Header="Check automatically" Description="Check GitHub Releases in the background.">
+                                            <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=clock, Size=24}"  Width="24" Height="24" Tag="clock" /></settings:SettingsCard.HeaderIcon>
                                             <ToggleSwitch x:Name="AutoCheckUpdateSwitch" Style="{StaticResource CloudInletToggleStyle}" AutomationProperties.Name="Automatically check for updates" Toggled="UpdatePreference_Changed" />
                                         </settings:SettingsCard>
                                         <settings:SettingsCard Header="Check interval" Description="Server limits can delay the next check.">
+                                            <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=clock, Size=24}"  Width="24" Height="24" Tag="clock" /></settings:SettingsCard.HeaderIcon>
                                             <ComboBox x:Name="UpdateIntervalBox" Width="180" AutomationProperties.Name="Update check interval" SelectionChanged="UpdateInterval_Changed">
                                                 <ComboBoxItem Content="Every hour" Tag="1" /><ComboBoxItem Content="Every 6 hours" Tag="6" />
                                                 <ComboBoxItem Content="Every 12 hours" Tag="12" /><ComboBoxItem Content="Every day" Tag="24" />
@@ -1296,16 +1262,31 @@
                                             </ComboBox>
                                         </settings:SettingsCard>
                                         <settings:SettingsCard x:Name="AutoDownloadUpdateCard" Header="Download automatically" Description="Download and verify a matching update when available.">
+                                            <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=download, Size=24}"  Width="24" Height="24" Tag="download" /></settings:SettingsCard.HeaderIcon>
                                             <ToggleSwitch x:Name="AutoDownloadUpdateSwitch" Style="{StaticResource CloudInletToggleStyle}" AutomationProperties.Name="Automatically download updates" Toggled="UpdatePreference_Changed" />
                                         </settings:SettingsCard>
                                         <settings:SettingsCard x:Name="AutoInstallUpdateCard" Header="Install automatically" Description="Close CloudInlet, install silently, then resume with your current settings.">
+                                            <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=sync, Size=24}"  Width="24" Height="24" Tag="sync" /></settings:SettingsCard.HeaderIcon>
                                             <ToggleSwitch x:Name="AutoInstallUpdateSwitch" Style="{StaticResource CloudInletToggleStyle}" AutomationProperties.Name="Automatically install updates" Toggled="UpdatePreference_Changed" />
                                         </settings:SettingsCard>
+                                        </Grid>
+                                    </StackPanel>
+                                    <StackPanel Spacing="12">
+                                    <TextBlock Text="App information" Style="{StaticResource CloudInletSectionHeadingStyle}" />
+                                    <settings:SettingsExpander x:Name="VersionCard" Header="CloudInlet" IsExpanded="True">
+                                        <settings:SettingsExpander.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=info, Size=24}"  Width="24" Height="24" Tag="info" /></settings:SettingsExpander.HeaderIcon>
+                                        <settings:SettingsExpander.Items>
+                                            <settings:SettingsCard Header="Diagnostics" Description="Open local diagnostics and activity logs.">
+                                                <Button Content="Open diagnostics" Click="Diagnostics_Click" />
+                                            </settings:SettingsCard>
+                                        </settings:SettingsExpander.Items>
+                                    </settings:SettingsExpander>
                                     </StackPanel>
                                 </StackPanel>
                             </StackPanel>
                         </StackPanel>
                     </ScrollViewer>
+                    <ContentControl x:Name="ServicesPage" Visibility="Collapsed" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
                     <Grid x:Name="BusyFooter" Grid.Row="1" Padding="24,16" ColumnSpacing="12" Visibility="Collapsed">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
@@ -1324,7 +1305,7 @@
         <ContentDialog
             x:Name="CatalogDialog"
             Grid.RowSpan="2"
-            Title="Providers and modes"
+            Title="Backup providers and modes"
             CloseButtonText="Done"
             DefaultButton="Close">
             <Grid RowSpacing="16" MinWidth="300">
@@ -1335,7 +1316,7 @@
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
                 <TextBlock
-                    Text="Backblaze B2 and Native backup are available now. Coming soon entries preview future releases."
+                    Text="Backblaze B2 supports native Windows backup today. This catalog describes native backup support; OneDrive cloud transfers are available from Cloud services."
                     Style="{StaticResource CloudInletSecondaryTextStyle}" />
                 <Grid Grid.Row="1" ColumnSpacing="12">
                     <Grid.ColumnDefinitions>
@@ -1348,7 +1329,7 @@
                         SelectedIndex="0"
                         HorizontalAlignment="Stretch"
                         SelectionChanged="CatalogFilter_Changed">
-                        <ComboBoxItem Content="Providers" />
+                        <ComboBoxItem Content="Backup providers" />
                         <ComboBoxItem Content="Modes" />
                     </ComboBox>
                     <ComboBox

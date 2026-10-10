@@ -5,7 +5,7 @@
     <Window.SystemBackdrop>
         <DesktopAcrylicBackdrop />
     </Window.SystemBackdrop>
-    <!-- Keep the stock Fluent menu templates, spacing, theme colors and peers.
+    <!-- Keep the stock Fluent menu templates, theme colors and peers.
          This presenter is the entire window: no activity/main window underneath. -->
     <Grid x:Name="MenuRoot" Background="Transparent">
         <Grid.Resources>
@@ -17,7 +17,7 @@
         </Grid.Resources>
         <MenuFlyoutPresenter
             x:Name="MenuPresenter"
-            MinWidth="248"
+            MinWidth="272"
             HorizontalAlignment="Stretch"
             VerticalAlignment="Stretch"
             TabFocusNavigation="Cycle"

@@ -1,5 +1,7 @@
 # CloudInlet
 
+For removal and recovery, see [uninstalling CloudInlet and managing retained data](docs/UNINSTALL.md).
+
 Previously CloudBay. **Version 1.1.2** updates existing installations to the new name while preserving accounts, backups and transfer recovery. See [upgrade compatibility](docs/REBRANDING.md).
 
 CloudInlet is a native Windows backup and sync client for **Backblaze B2**. It runs in the background, uses **WinUI 3 Mica Alt**, and integrates with File Explorer through the Windows Cloud Files API. Mountain Duck is not required.

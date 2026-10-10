@@ -26,6 +26,7 @@ function Assert-NormalTree([string]$Path) {
 Assert-NormalTree $appRoot
 Assert-NormalTree $outputRoot
 $appExe = Join-Path $appRoot 'CloudInlet.exe'
+if (Get-ChildItem -LiteralPath $appRoot -File | Where-Object { $_.Name -match '^CloudBay(?:\.|$)' }) { throw 'The application payload contains obsolete CloudBay launchers. Use a fresh CloudInlet publish directory.' }
 if (!(Test-Path -LiteralPath $appExe)) { throw 'AppFolder must contain the full published CloudInlet application.' }
 $productVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($appExe).ProductVersion.Split('+')[0]
 if ($productVersion -ne $Version) { throw "The application version ($productVersion) does not match installer version ($Version)." }
@@ -78,8 +79,7 @@ function Stable-Guid([string]$Value) {
         ([Guid]::new($guidBytes)).ToString('D')
     } finally { $algorithm.Dispose() }
 }
-# Keep the installed distribution key recognized by the already-running
-# CloudBay update worker. Display names and launch targets use CloudInlet.
+# Preserve the installed Windows product identity for CloudInlet 1.1.2 and later.
 $registry = "Software\CloudBay\Distribution\$Configuration\Msi"
 $components = [Collections.Generic.List[string]]::new()
 $directories = [Text.StringBuilder]::new()

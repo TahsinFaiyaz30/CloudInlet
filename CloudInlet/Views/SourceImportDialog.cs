@@ -19,14 +19,13 @@ internal sealed class SourceImportDialog : ContentDialog
     private readonly bool _chooseFolderOnly;
     private readonly string? _knownFolderName;
     private readonly CancellationTokenSource _lifetime = new();
-    private readonly StackPanel _body = new() { Spacing = 20 };
-    private readonly ScrollViewer _scroll = new() { HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-        VerticalScrollBarVisibility = ScrollBarVisibility.Auto, MaxHeight = 540, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+    private readonly StackPanel _body = new() { Spacing = 16 };
+    private readonly ScrollViewer _scroll;
     private readonly InfoBar _error = new() { Severity = InfoBarSeverity.Error, IsClosable = true };
     private readonly ProgressRing _progress = new() { Width = 24, Height = 24, Visibility = Visibility.Collapsed };
-    private readonly TextBox _destination = new() { Header = "Folder inside CloudInlet", PlaceholderText = "For example, Imported files" };
-    private readonly TextBox _prefix = new() { Header = "Source folder (optional)", PlaceholderText = "Leave empty to use the whole bucket" };
-    private readonly ComboBox _bucket = new() { Header = "Source bucket", HorizontalAlignment = HorizontalAlignment.Stretch, DisplayMemberPath = "Name" };
+    private readonly TextBox _destination = new() { Header = "Folder inside CloudInlet", PlaceholderText = "For example, Imported files", MinHeight = 36 };
+    private readonly TextBox _prefix = new() { Header = "Source folder (optional)", PlaceholderText = "Leave empty to use the whole bucket", MinHeight = 36 };
+    private readonly ComboBox _bucket = new() { Header = "Source bucket", HorizontalAlignment = HorizontalAlignment.Stretch, DisplayMemberPath = "Name", MinHeight = 36 };
     private string _stage = "choose";
     private string _folder = "";
     private string _sourceName = "";
@@ -66,10 +65,10 @@ internal sealed class SourceImportDialog : ContentDialog
         Title = chooseFolderOnly ? "Choose an additional source" : "Import files";
         CloseButtonText = "Cancel";
         DefaultButton = ContentDialogButton.None;
-        Resources["ContentDialogMaxWidth"] = 640d;
-        var content = new StackPanel { Spacing = 12, MinWidth = 0 };
+        ConfigureLayout(this);
+        _scroll = ScrollContent(_body);
+        var content = new StackPanel { Spacing = 16, MinWidth = 0 };
         content.Children.Add(_error);
-        _scroll.Content = _body;
         content.Children.Add(_scroll);
         content.Children.Add(_progress);
         Content = content;
@@ -117,7 +116,7 @@ internal sealed class SourceImportDialog : ContentDialog
             {
                 // History is secondary navigation. Loading it happens only when requested,
                 // so large checkpoints cannot stall the initial source choices.
-                var history = new HyperlinkButton { Content = "Import history", HorizontalAlignment = HorizontalAlignment.Left };
+                var history = new HyperlinkButton { Content = "Import history", HorizontalAlignment = HorizontalAlignment.Left, MinHeight = 36 };
                 history.Click += async (_, _) => await ShowHistoryAsync();
                 _body.Children.Add(history);
             }
@@ -146,9 +145,9 @@ internal sealed class SourceImportDialog : ContentDialog
         if (_closed) return;
         BeginStage("existing", _knownFolderName is null ? "Existing cloud folders" : _knownFolderName + " in other clouds");
         _body.Children.Add(Text("These are folders found in Windows. Choose the source yourself; CloudInlet does not disconnect or remove another app.", true));
-        var rows = new StackPanel { Spacing = 8 };
+        var rows = new StackPanel { Spacing = 12 };
         _body.Children.Add(rows);
-        var browse = new Button { Content = "Browse for a folder…", HorizontalAlignment = HorizontalAlignment.Left };
+        var browse = ActionButton("Browse for a folder…");
         browse.Click += async (_, _) => await BrowseAsync();
         _body.Children.Add(browse);
         _body.Children.Add(Text("Keep the source app signed in and running if any of its files are online only. Mounted drives can also be chosen with Browse.", true));
@@ -196,7 +195,7 @@ internal sealed class SourceImportDialog : ContentDialog
             var selected = candidate;
             var card = new SettingsCard { Header = candidate.DisplayName,
                 Description = candidate.ProviderName + " · " + candidate.Kind + Environment.NewLine + candidate.Path,
-                HeaderIcon = new FontIcon { Glyph = "\uE8B7" }, IsClickEnabled = true };
+                HeaderIcon = FluentIcons.FromGlyph("\uE8B7"), IsClickEnabled = true };
             card.Click += (_, _) => { if (!_working && !_closed) ShowFolder(selected.Path, selected.DisplayName); };
             rows.Children.Add(card);
         }
@@ -235,7 +234,7 @@ internal sealed class SourceImportDialog : ContentDialog
             _body.Children.Add(Text("Choose a source and destination in OneDrive and Backblaze B2. CloudInlet streams content through bounded memory and verifies each copy. Activity keeps recoverable job progress.", true));
             UpdatePrimary();
         });
-        var planned = new StackPanel { Spacing = 8 };
+        var planned = new StackPanel { Spacing = 12 };
         foreach (var provider in ProductCatalog.Providers.Where(item => !item.Available && item.Id != "onedrive"))
         {
             var row = new SettingsCard { Header = provider.Name, Description = provider.Group,
@@ -244,7 +243,7 @@ internal sealed class SourceImportDialog : ContentDialog
             planned.Children.Add(row);
         }
         _body.Children.Add(new Expander { Header = "More providers · Coming soon", Content = planned, HorizontalAlignment = HorizontalAlignment.Stretch });
-        var browse = new Button { Content = "Use an existing Windows folder…", HorizontalAlignment = HorizontalAlignment.Left };
+        var browse = ActionButton("Use an existing Windows folder…");
         browse.Click += async (_, _) => await ShowExistingFoldersAsync();
         _body.Children.Add(browse);
     }
@@ -364,7 +363,7 @@ internal sealed class SourceImportDialog : ContentDialog
             var card = HistoryCard(item.Source, item.Destination, item.State, item.StartedUtc, item.Error);
             if (item.Review is { } review)
             {
-                var button = new Button { Content = "Review and continue" };
+                var button = ActionButton("Review and continue");
                 button.Click += (_, _) => review();
                 card.Content = button;
             }
@@ -373,18 +372,22 @@ internal sealed class SourceImportDialog : ContentDialog
         if (_history.Count > pageSize)
         {
             var navigation = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
-            var previous = new Button { Content = "Previous", IsEnabled = _historyPage > 0 };
+            var previous = ActionButton("Previous");
+            previous.IsEnabled = _historyPage > 0;
             previous.Click += (_, _) => NavigateHistoryPage(-1);
-            var next = new Button { Content = "Next", IsEnabled = start + pageSize < _history.Count };
+            var next = ActionButton("Next");
+            next.IsEnabled = start + pageSize < _history.Count;
             next.Click += (_, _) => NavigateHistoryPage(1);
             navigation.Children.Add(previous);
-            navigation.Children.Add(Text($"Page {_historyPage + 1} of {(_history.Count + pageSize - 1) / pageSize}", true));
+            var pageLabel = Text($"Page {_historyPage + 1} of {(_history.Count + pageSize - 1) / pageSize}", true);
+            pageLabel.VerticalAlignment = VerticalAlignment.Center;
+            navigation.Children.Add(pageLabel);
             navigation.Children.Add(next);
             _body.Children.Add(navigation);
         }
         if (_presentationCandidates is null && (_olderFolders || _olderClouds))
         {
-            var older = new Button { Content = "Load older imports", HorizontalAlignment = HorizontalAlignment.Left };
+            var older = ActionButton("Load older imports");
             older.Click += async (_, _) => await ShowHistoryAsync(older: true);
             _body.Children.Add(older);
         }
@@ -414,7 +417,7 @@ internal sealed class SourceImportDialog : ContentDialog
     private static SettingsCard HistoryCard(string source, string destination, string state, DateTimeOffset started, string? error) =>
         new() { Header = Path.GetFileName(destination), Tag = destination, Description = source + Environment.NewLine + destination + Environment.NewLine +
             started.ToLocalTime().ToString("g") + " · " + state + (error is null ? "" : Environment.NewLine + error),
-            HeaderIcon = new FontIcon { Glyph = state == "Completed" ? "\uE73E" : "\uE81C" } };
+            HeaderIcon = FluentIcons.FromGlyph(state == "Completed" ? "\uE73E" : "\uE81C") };
 
     private async void Primary_Click(ContentDialog sender, ContentDialogButtonClickEventArgs args)
     {
@@ -524,14 +527,14 @@ internal sealed class SourceImportDialog : ContentDialog
 
     private void AddChoice(string header, string description, string glyph, Action action)
     {
-        var card = new SettingsCard { Header = header, Description = description, HeaderIcon = new FontIcon { Glyph = glyph }, IsClickEnabled = true };
+        var card = new SettingsCard { Header = header, Description = description, HeaderIcon = FluentIcons.FromGlyph(glyph), IsClickEnabled = true };
         card.Click += (_, _) => { if (!_working) action(); };
         _body.Children.Add(card);
     }
 
     private void AddAsyncChoice(string header, string description, string glyph, Func<Task> action)
     {
-        var card = new SettingsCard { Header = header, Description = description, HeaderIcon = new FontIcon { Glyph = glyph }, IsClickEnabled = true };
+        var card = new SettingsCard { Header = header, Description = description, HeaderIcon = FluentIcons.FromGlyph(glyph), IsClickEnabled = true };
         card.Click += async (_, _) => { if (!_working) await action(); };
         _body.Children.Add(card);
     }
@@ -539,18 +542,100 @@ internal sealed class SourceImportDialog : ContentDialog
     internal static TextBlock Text(string value, bool secondary = false) => new() { Text = value, TextWrapping = TextWrapping.Wrap,
         Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources[secondary ? "CloudInletBodySecondaryTextStyle" : "BodyTextBlockStyle"] };
 
+    internal static TextBlock Heading(string value) => new()
+    {
+        Text = value, TextWrapping = TextWrapping.Wrap,
+        Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudInletSectionHeadingStyle"]
+    };
+
+    internal static Button ActionButton(string text) => new()
+    {
+        Content = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap },
+        MinHeight = 36, Padding = new Thickness(14, 7, 14, 7),
+        HorizontalAlignment = HorizontalAlignment.Left
+    };
+
+    internal static Border Surface(UIElement content) => new()
+    {
+        Child = content, Padding = new Thickness(20, 16, 20, 16),
+        Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudInletSurfaceStyle"]
+    };
+
+    internal static Grid PairedContent(FrameworkElement first, FrameworkElement second, double minimumColumnWidth = 280)
+    {
+        var grid = new Grid { ColumnSpacing = 16 };
+        grid.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
+        grid.RowDefinitions.Add(new() { Height = GridLength.Auto });
+        grid.RowDefinitions.Add(new() { Height = GridLength.Auto });
+        grid.Children.Add(first);
+        grid.Children.Add(second);
+        var settings = new global::Windows.UI.ViewManagement.UISettings();
+        void Reflow()
+        {
+            var stacked = grid.ActualWidth < minimumColumnWidth * 2 * settings.TextScaleFactor + grid.ColumnSpacing;
+            Grid.SetColumnSpan(first, stacked ? 2 : 1);
+            Grid.SetColumnSpan(second, stacked ? 2 : 1);
+            Grid.SetColumn(second, stacked ? 0 : 1);
+            Grid.SetRow(second, stacked ? 1 : 0);
+            grid.RowSpacing = stacked ? 16 : 0;
+        }
+        void TextScaleChanged(global::Windows.UI.ViewManagement.UISettings sender, object args) => grid.DispatcherQueue.TryEnqueue(Reflow);
+        grid.SizeChanged += (_, _) => Reflow();
+        grid.Loaded += (_, _) => { settings.TextScaleFactorChanged += TextScaleChanged; Reflow(); };
+        grid.Unloaded += (_, _) => settings.TextScaleFactorChanged -= TextScaleChanged;
+        Reflow();
+        return grid;
+    }
+
+    internal static void ConfigureLayout(ContentDialog dialog, double maximumWidth = 720)
+    {
+        FluentIconMotion.Attach(dialog);
+        dialog.Resources["ContentDialogMaxWidth"] = maximumWidth;
+        dialog.HorizontalContentAlignment = HorizontalAlignment.Stretch;
+    }
+
+    internal static ScrollViewer ScrollContent(FrameworkElement content, double maximumHeight = 600)
+    {
+        var viewer = new ScrollViewer
+        {
+            Content = content, MaxHeight = maximumHeight,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Padding = new Thickness(0, 0, 4, 4)
+        };
+        XamlRoot? observedRoot = null;
+        void ResizeToWindow(XamlRoot root) => viewer.MaxHeight = Math.Min(maximumHeight, Math.Max(80, root.Size.Height - 240));
+        void RootChanged(XamlRoot root, XamlRootChangedEventArgs args) => ResizeToWindow(root);
+        viewer.Loaded += (_, _) =>
+        {
+            if (observedRoot is not null) observedRoot.Changed -= RootChanged;
+            observedRoot = viewer.XamlRoot;
+            if (observedRoot is null) return;
+            observedRoot.Changed += RootChanged;
+            ResizeToWindow(observedRoot);
+        };
+        viewer.Unloaded += (_, _) =>
+        {
+            if (observedRoot is not null) observedRoot.Changed -= RootChanged;
+            observedRoot = null;
+        };
+        return viewer;
+    }
+
     internal static SettingsCard PathCard(string heading, string name, string path) => new()
     {
         Header = heading + " · " + name, Description = new TextBlock { Text = path, TextWrapping = TextWrapping.Wrap,
             IsTextSelectionEnabled = true, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudInletBodySecondaryTextStyle"] },
-        HeaderIcon = new FontIcon { Glyph = "\uE8B7" }
+        HeaderIcon = FluentIcons.FromGlyph("\uE8B7")
     };
 
     internal static SettingsCard Summary(long files, long bytes, long? available) => new()
     {
         Header = $"{files:N0} {(files == 1 ? "file" : "files")} · {ClientViewModel.FormatSize(bytes)}",
         Description = available is { } free ? ClientViewModel.FormatSize(free) + " available on the destination drive" : "Reviewed file contents",
-        HeaderIcon = new FontIcon { Glyph = "\uE8A5" }
+        HeaderIcon = FluentIcons.FromGlyph("\uE8A5")
     };
 
     private static string SafeDestinationName(string label)

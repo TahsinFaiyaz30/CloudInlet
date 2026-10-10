@@ -86,7 +86,11 @@ public sealed class WindowsPlaceholderService : IPlaceholderService
         ];
     }
 
-    public async Task ConnectAsync(string rootPath, string accountIdentity, HydrationHandler hydrate, CancellationToken cancellationToken = default)
+    public Task ConnectAsync(string rootPath, string accountIdentity, HydrationHandler hydrate, CancellationToken cancellationToken = default) =>
+        ConnectAsync(rootPath, accountIdentity, hydrate, cancellationToken, beforeNewRegistration: null);
+
+    public async Task ConnectAsync(string rootPath, string accountIdentity, HydrationHandler hydrate,
+        CancellationToken cancellationToken, Action? beforeNewRegistration)
     {
         ArgumentNullException.ThrowIfNull(hydrate);
         ArgumentException.ThrowIfNullOrWhiteSpace(accountIdentity);
@@ -102,6 +106,9 @@ public sealed class WindowsPlaceholderService : IPlaceholderService
             ValidateAncestorLinks(root);
             if (!wasRegistered) RejectOrphanedPlaceholders(root, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
+            // Persist recovery before Windows creates the registration, so a crash after
+            // registration cannot turn OS-removed placeholders into ordinary deletions.
+            if (!wasRegistered) beforeNewRegistration?.Invoke();
             var id = GetRegistrationId(accountIdentity);
             var info = new StorageProviderSyncRootInfo
             {

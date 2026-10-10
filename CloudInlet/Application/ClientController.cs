@@ -63,6 +63,8 @@ public sealed partial class ClientController : IAsyncDisposable
     private long _manualPauseUntilTicks;
     public AppSettings Settings { get; private set; }
     public SyncSnapshot Snapshot { get; private set; } = new(ClientState.NotConnected, "Connect a Backblaze B2 bucket to get started");
+    public bool IsTransferPauseActive => Interlocked.Read(ref _manualPauseUntilTicks) > DateTimeOffset.UtcNow.UtcTicks ||
+        Snapshot.State == ClientState.Paused;
     public IReadOnlyList<ActivityEvent> Activity => _storage.Activity;
     public string DiagnosticsPath => _storage.DiagnosticsPath;
     public event EventHandler? Changed;
@@ -210,6 +212,10 @@ public sealed partial class ClientController : IAsyncDisposable
             if (account.AllowedNamePrefix is { Length: > 0 } allowed && !settings.Prefix.StartsWith(allowed, StringComparison.Ordinal))
                 throw new IOException("The selected cloud folder is outside the application key's permitted file prefix.");
             settings = settings with { AccountId = account.AccountId, BucketId = bucket.Id };
+            // Each account/root/prefix retains its own baseline across registration loss.
+            var identity = account.AccountId + "|" + bucket.Id + "|" + settings.Prefix + "|" + settings.RootPath.ToUpperInvariant();
+            var stateName = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..24];
+            var manifest = new SyncManifest(Path.Combine(_storage.DirectoryPath, "State", stateName + ".sqlite"));
             placeholders = new WindowsPlaceholderService();
             placeholders.ConfigureTransferLimits(TransferLimits.For(settings).Downloads);
             await placeholders.ConnectAsync(settings.RootPath, account.AccountId + ":" + bucket.Id + ":" + settings.Prefix,
@@ -217,11 +223,7 @@ public sealed partial class ClientController : IAsyncDisposable
                 {
                     await HydrateTrackedAsync(cloud, file, settings.Prefix, BuildInfo.ProductName, offset, length, destination, token,
                         new(settings.RootPath, null, "", settings.BucketId, settings.Prefix));
-                }, ct);
-            // Each account/root/prefix has independent state, so reconnecting never inherits a different baseline.
-            var identity = account.AccountId + "|" + bucket.Id + "|" + settings.Prefix + "|" + settings.RootPath.ToUpperInvariant();
-            var stateName = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..24];
-            var manifest = new SyncManifest(Path.Combine(_storage.DirectoryPath, "State", stateName + ".sqlite"));
+                }, ct, manifest.PrepareForNewRegistration);
             _cloud = cloud; _placeholders = placeholders; Settings = settings;
             foreach (var folder in settings.Backups)
             {
@@ -481,15 +483,15 @@ public sealed partial class ClientController : IAsyncDisposable
         {
             var cloud = _cloud;
             var activitySettings = Settings;
+            var identity = Settings.AccountId + "|" + Settings.BucketId + "|" + folder.Prefix + "|" + folder.SourcePath.ToUpperInvariant();
+            var stateName = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..24];
+            var manifest = new SyncManifest(Path.Combine(_storage.DirectoryPath, "State", stateName + ".sqlite"));
             await placeholders.ConnectAsync(folder.SourcePath, Settings.AccountId + ":" + Settings.BucketId + ":" + folder.Prefix,
                 async (file, offset, length, destination, token) =>
                 {
                     await HydrateTrackedAsync(cloud, file, folder.Prefix, folder.Name, offset, length, destination, token,
                         new(folder.SourcePath, folder.Name, "", activitySettings.BucketId, folder.Prefix));
-                }, ct);
-            var identity = Settings.AccountId + "|" + Settings.BucketId + "|" + folder.Prefix + "|" + folder.SourcePath.ToUpperInvariant();
-            var stateName = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..24];
-            var manifest = new SyncManifest(Path.Combine(_storage.DirectoryPath, "State", stateName + ".sqlite"));
+                }, ct, manifest.PrepareForNewRegistration);
             var engine = new SyncEngine(cloud, placeholders, manifest, CustomSettings(folder),
                 Path.Combine(_storage.DirectoryPath, "Recovery", folder.Name),
                 value => AddActivity(value with { Path = folder.Name + "/" + value.Path,
@@ -574,6 +576,7 @@ public sealed partial class ClientController : IAsyncDisposable
         _engine?.Pause(duration); foreach (var root in _customRoots.Values) root.Engine.Pause(duration);
         PauseAllCloudTransfers();
         ScheduleCloudTransferResume(duration);
+        NotifyChanged();
     }
     public void Resume()
     {
@@ -585,6 +588,7 @@ public sealed partial class ClientController : IAsyncDisposable
         Interlocked.Exchange(ref _manualPauseUntilTicks, 0);
         Interlocked.Increment(ref _cloudPauseGeneration);
         ResumeAllCloudTransfers();
+        NotifyChanged();
         if (_maintenance) return;
         _engine?.Resume(); foreach (var root in _customRoots.Values) root.Engine.Resume();
     }

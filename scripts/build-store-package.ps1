@@ -87,20 +87,45 @@ try {
     $publisherXml = [Security.SecurityElement]::Escape($Publisher)
     $displayXml = [Security.SecurityElement]::Escape($PublisherDisplayName)
     $notificationActivatorId = if ($LocalValidationIdentity) { 'C722D540-4407-4B56-966E-4C5DFCB4FF90' } else { 'B424C182-71F3-45E8-A349-321EB851B896' }
+    # Windows 11 honors these specific exclusions instead of the older desktop6
+    # switches. Keep the switches for the supported Windows 10 minimum, whose
+    # manifest schema cannot express individual directories or registry keys.
+    # Client is the shared Release account/recovery store. Presentation caches
+    # remain virtualized. Known-folder changes use the Windows Shell API; these
+    # two Shell-owned keys hold its mappings and legacy compatibility cache.
+    $excludedDirectories = @('$(KnownFolder:LocalAppData)\CloudBay\Client')
+    $excludedRegistryKeys = @(
+        'HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders',
+        'HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders'
+    )
+    $directoryExclusionsXml = ($excludedDirectories | ForEach-Object { '    <virtualization:ExcludedDirectory>' + [Security.SecurityElement]::Escape($_) + '</virtualization:ExcludedDirectory>' }) -join "`n"
+    $registryExclusionsXml = ($excludedRegistryKeys | ForEach-Object { '    <virtualization:ExcludedKey>' + [Security.SecurityElement]::Escape($_) + '</virtualization:ExcludedKey>' }) -join "`n"
     @"
 <?xml version="1.0" encoding="utf-8"?>
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+ xmlns:desktop3="http://schemas.microsoft.com/appx/manifest/desktop/windows10/3"
  xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6"
+ xmlns:virtualization="http://schemas.microsoft.com/appx/manifest/virtualization/windows10"
  xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
- IgnorableNamespaces="uap desktop desktop6 com rescap">
+ IgnorableNamespaces="uap desktop desktop3 desktop6 virtualization com rescap">
  <Identity Name="$identityXml" Publisher="$publisherXml" Version="$Version.0" ProcessorArchitecture="x64" />
  <Properties>
   <DisplayName>CloudInlet</DisplayName><PublisherDisplayName>$displayXml</PublisherDisplayName><Logo>StoreAssets\Logo50.png</Logo>
   <desktop6:RegistryWriteVirtualization>disabled</desktop6:RegistryWriteVirtualization>
   <desktop6:FileSystemWriteVirtualization>disabled</desktop6:FileSystemWriteVirtualization>
+  <virtualization:FileSystemWriteVirtualization>
+   <virtualization:ExcludedDirectories>
+$directoryExclusionsXml
+   </virtualization:ExcludedDirectories>
+  </virtualization:FileSystemWriteVirtualization>
+  <virtualization:RegistryWriteVirtualization>
+   <virtualization:ExcludedKeys>
+$registryExclusionsXml
+   </virtualization:ExcludedKeys>
+  </virtualization:RegistryWriteVirtualization>
  </Properties>
  <Resources><Resource Language="en-US" /></Resources>
  <Dependencies><TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" /></Dependencies>
@@ -109,6 +134,9 @@ try {
   <Extensions><desktop:Extension Category="windows.startupTask" Executable="CloudInlet.exe" EntryPoint="Windows.FullTrustApplication">
    <desktop:StartupTask TaskId="CloudBayStartup" Enabled="false" DisplayName="CloudInlet" />
   </desktop:Extension>
+  <desktop3:Extension Category="windows.cloudFiles">
+   <desktop3:CloudFiles IconResource="Assets\CloudInlet-32.png" />
+  </desktop3:Extension>
   <desktop:Extension Category="windows.toastNotificationActivation">
    <desktop:ToastNotificationActivation ToastActivatorCLSID="$notificationActivatorId" />
   </desktop:Extension>
@@ -160,7 +188,17 @@ try {
     Copy-Item -LiteralPath $msix -Destination $uploadStaging
     $upload = Join-Path $output "$baseName.msixupload"
     [IO.Compression.ZipFile]::CreateFromDirectory($uploadStaging, $upload, [IO.Compression.CompressionLevel]::Optimal, $false)
-    [ordered]@{ version = $Version; sourceRevision = $SourceRevision; localValidationIdentity = [bool]$LocalValidationIdentity; packageIdentityName = $PackageIdentityName; resourceIndexName = $primaryMaps[0].GetAttribute('name'); publisher = $Publisher; signed = $false; restrictedCapabilities = @('runFullTrust', 'unvirtualizedResources'); msix = [IO.Path]::GetFileName($msix); msixupload = [IO.Path]::GetFileName($upload) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output "$baseName-package-info.json") -Encoding utf8NoBOM
+    [ordered]@{
+        version = $Version; sourceRevision = $SourceRevision; localValidationIdentity = [bool]$LocalValidationIdentity
+        packageIdentityName = $PackageIdentityName; resourceIndexName = $primaryMaps[0].GetAttribute('name'); publisher = $Publisher; signed = $false
+        restrictedCapabilities = @('runFullTrust', 'unvirtualizedResources')
+        virtualizationPolicy = [ordered]@{
+            windows11 = [ordered]@{ excludedDirectories = $excludedDirectories; excludedRegistryKeys = $excludedRegistryKeys }
+            windows10Fallback = [ordered]@{ registryWriteVirtualization = 'disabled'; fileSystemWriteVirtualization = 'disabled' }
+            minimumWindowsVersion = '10.0.19041.0'
+        }
+        msix = [IO.Path]::GetFileName($msix); msixupload = [IO.Path]::GetFileName($upload)
+    } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output "$baseName-package-info.json") -Encoding utf8NoBOM
     Write-Output $msix
     Write-Output $upload
 } finally {

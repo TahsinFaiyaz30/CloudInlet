@@ -151,18 +151,11 @@ internal sealed class GitHubUpdateTransport : IDisposable
 
     private static bool IsReleasePath(string path)
     {
-        foreach (var feed in new[] { UpdateManifestRules.FeedUri, UpdateManifestRules.LegacyFeedUri })
-        {
-            if (path == feed.AbsolutePath) return true;
-            var prefix = feed.AbsolutePath[..feed.AbsolutePath.IndexOf("/releases/", StringComparison.Ordinal)] + "/releases/download/";
-            if (!path.StartsWith(prefix, StringComparison.Ordinal)) continue;
-            var legacy = feed == UpdateManifestRules.LegacyFeedUri;
-            var pattern = legacy
-                ? @"^v\d{1,5}\.\d{1,5}\.\d{1,5}/(updates-v1\.json|CloudBay-[A-Za-z0-9._-]+\.(exe|msi|zip))$"
-                : @"^v\d{1,5}\.\d{1,5}\.\d{1,5}/(updates-v2\.json|CloudInlet-[A-Za-z0-9._-]+\.(exe|msi|zip))$";
-            if (Regex.IsMatch(path[prefix.Length..], pattern, RegexOptions.CultureInvariant)) return true;
-        }
-        return false;
+        var feed = UpdateManifestRules.FeedUri;
+        if (path == feed.AbsolutePath) return true;
+        var prefix = $"/{UpdateManifestRules.Repository}/releases/download/";
+        return path.StartsWith(prefix, StringComparison.Ordinal) && Regex.IsMatch(path[prefix.Length..],
+            @"^v\d{1,5}\.\d{1,5}\.\d{1,5}/(updates-v2\.json|CloudInlet-[A-Za-z0-9._-]+\.(exe|msi|zip))$", RegexOptions.CultureInvariant);
     }
 
     public void Dispose() => _http.Dispose();

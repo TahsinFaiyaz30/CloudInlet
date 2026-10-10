@@ -1,0 +1,274 @@
+[
+  {
+    "File": "home.svg",
+    "SourcePath": "assets/Home/SVG/ic_fluent_home_24_color.svg",
+    "Variant": "color",
+    "Tint": null,
+    "SHA256": "1b6a5c06d4c44ebe0f0b675fdbde99968a96ef5c22c6d8eb303bdbe0cf40a92f",
+    "Bytes": 2303
+  },
+  {
+    "File": "history.svg",
+    "SourcePath": "assets/History/SVG/ic_fluent_history_24_color.svg",
+    "Variant": "color",
+    "Tint": null,
+    "SHA256": "f3240058f37c5bb0a9797cc8ba3ee1685c01de8af52f488cf9d5e0f2b698a324",
+    "Bytes": 1335
+  },
+  {
+    "File": "clock.svg",
+    "SourcePath": "assets/Clock/SVG/ic_fluent_clock_24_color.svg",
+    "Variant": "color",
+    "Tint": null,
+    "SHA256": "2a1f40b0e5c23fbec26fed225d4b5bb5dd3f128f0826918c9d588b88c11355c7",
+    "Bytes": 1020
+  },
+  {
+    "File": "folder.svg",
+    "SourcePath": "assets/Folder/SVG/ic_fluent_folder_24_filled.svg",
+    "Variant": "filled",
+    "Tint": "#E6B43C",
+    "SHA256": "abce874fae67dbc84bdbb4e575ecf10b89fe0ed3250eef8777ebcd0b39c7c185",
+    "Bytes": 469
+  },
+  {
+    "File": "document.svg",
+    "SourcePath": "assets/Document/SVG/ic_fluent_document_24_color.svg",
+    "Variant": "color",
+    "Tint": null,
+    "SHA256": "3219a365c3b637a5ae5f695ee541189236e8780696507e78a811bd3684eee5ee",
+    "Bytes": 1280
+  },
+  {
+    "File": "cloud.svg",
+    "SourcePath": "assets/Cloud/SVG/ic_fluent_cloud_24_color.svg",
+    "Variant": "color",
+    "Tint": null,
+    "SHA256": "9cf711cee8850b08b8a273546fb40929d5d6256233594f9f957339b28e22874e",
+    "Bytes": 2782
+  },
+  {
+    "File": "settings.svg",
+    "SourcePath": "assets/Settings/SVG/ic_fluent_settings_24_color.svg",
+    "Variant": "color",
+    "Tint": null,
+    "SHA256": "5703399b75763538275f16f22b4156894b97cc8aacb0141baaeac891e46b1d1e",
+    "Bytes": 2232
+  },
+  {
+    "File": "storage.svg",
+    "SourcePath": "assets/Storage/SVG/ic_fluent_storage_24_filled.svg",
+    "Variant": "filled",
+    "Tint": "#7896AF",
+    "SHA256": "3fcbc6100c53cb48feed42213ed10499110dbede4fbecc17293189b3bfef31c6",
+    "Bytes": 581
+  },
+  {
+    "File": "sync.svg",
+    "SourcePath": "assets/Arrow Sync/SVG/ic_fluent_arrow_sync_24_color.svg",
+    "Variant": "color",
+    "Tint": null,
+    "SHA256": "bb5b3763ca57b2dd31b31e309dd186886be05d38f1a29ad4e41284eb62289171",
+    "Bytes": 1550
+  },
+  {
+    "File": "download.svg",
+    "SourcePath": "assets/Arrow Download/SVG/ic_fluent_arrow_download_24_filled.svg",
+    "Variant": "filled",
+    "Tint": "#159CB8",
+    "SHA256": "da8087531e332f0618fb694824051c9367dc2af113382f920a7e6bb04a8f6b06",
+    "Bytes": 617
+  },
+  {
+    "File": "upload.svg",
+    "SourcePath": "assets/Arrow Upload/SVG/ic_fluent_arrow_upload_24_filled.svg",
+    "Variant": "filled",
+    "Tint": "#368BD6",
+    "SHA256": "abc5b0c118aef559f2f1747e1e89dcd0e24c11da8c75635bd8c1be1e3b530d9e",
+    "Bytes": 646
+  },
+  {
+    "File": "alert.svg",
+    "SourcePath": "assets/Alert/SVG/ic_fluent_alert_24_color.svg",
+    "Variant": "color",
+    "Tint": null,
+    "SHA256": "9e0fed3fd7bd32040155690fa6a31aee6f6ea51da19ca12a5b5efe8302dc61cc",
+    "Bytes": 1157
+  },
+  {
+    "File": "paint-brush.svg",
+    "SourcePath": "assets/Paint Brush/SVG/ic_fluent_paint_brush_24_color.svg",
+    "Variant": "color",
+    "Tint": null,
+    "SHA256": "48412b9d97b91d57df6f1b5bd122495b53d39a46957f4c1bff5c2daf270ce6b5",
+    "Bytes": 2078
+  },
+  {
+    "File": "power.svg",
+    "SourcePath": "assets/Power/SVG/ic_fluent_power_24_filled.svg",
+    "Variant": "filled",
+    "Tint": "#8674D5",
+    "SHA256": "7a1b165143a9e4391e5eb4518ac09cbe93806d16468c2167c6563d3df373ae9c",
+    "Bytes": 865
+  },
+  {
+    "File": "battery.svg",
+    "SourcePath": "assets/Battery Saver/SVG/ic_fluent_battery_saver_24_filled.svg",
+    "Variant": "filled",
+    "Tint": "#299B78",
+    "SHA256": "ed90b61b8806504fbb13229cdca53865ded117d35ab8cbc6119e0c280efc9f08",
+    "Bytes": 1916
+  },
+  {
+    "File": "filter.svg",
+    "SourcePath": "assets/Filter/SVG/ic_fluent_filter_24_filled.svg",
+    "Variant": "filled",
+    "Tint": "#9273D5",
+    "SHA256": "2d427135b59b5882d8a4406b43ca6c34f1727c83788264cb23555e6f16e4fbc4",
+    "Bytes": 623
+  },
+  {
+    "File": "info.svg",
+    "SourcePath": "assets/Info/SVG/ic_fluent_info_24_filled.svg",
+    "Variant": "filled",
+    "Tint": "#379AD7",
+    "SHA256": "39add1e884567e5721350ae7ebec925ab1975aaa3041513406e64f576114a80a",
+    "Bytes": 595
+  },
+  {
+    "File": "person.svg",
+    "SourcePath": "assets/Person/SVG/ic_fluent_person_24_color.svg",
+    "Variant": "color",
+    "Tint": null,
+    "SHA256": "e8488bba19a2aa80cb7e3fcd20d325ebb33babaf44fec62a11ca95182abb0f76",
+    "Bytes": 1804
+  },
+  {
+    "File": "search.svg",
+    "SourcePath": "assets/Search/SVG/ic_fluent_search_24_filled.svg",
+    "Variant": "filled",
+    "Tint": "#5297BC",
+    "SHA256": "308204a4a95124a0e7f2db508d69e0a5394a43e72216c0739ad68f418ac68a04",
+    "Bytes": 542
+  },
+  {
+    "File": "add.svg",
+    "SourcePath": "assets/Add Circle/SVG/ic_fluent_add_circle_24_color.svg",
+    "Variant": "color",
+    "Tint": null,
+    "SHA256": "c054ef1d2ba0520d069695807f7e6af152efa07c25ba32077437d96ad1195c20",
+    "Bytes": 1151
+  },
+  {
+    "File": "edit.svg",
+    "SourcePath": "assets/Edit/SVG/ic_fluent_edit_24_color.svg",
+    "Variant": "color",
+    "Tint": null,
+    "SHA256": "41bb14a45848ee07a97ec299e2f24f5cc790cb9bc66fb261931d0e329c72de72",
+    "Bytes": 2035
+  },
+  {
+    "File": "delete.svg",
+    "SourcePath": "assets/Delete/SVG/ic_fluent_delete_24_filled.svg",
+    "Variant": "filled",
+    "Tint": "#D86670",
+    "SHA256": "3bdfe77a120224e652225000b714b2c8450a74376a61090dd4d01ffe09385b45",
+    "Bytes": 803
+  },
+  {
+    "File": "music.svg",
+    "SourcePath": "assets/Music Note 2/SVG/ic_fluent_music_note_2_24_filled.svg",
+    "Variant": "filled",
+    "Tint": "#B673D3",
+    "SHA256": "22186b1837e729a3672b2a20795fdc003024f548ef552ab1957ea49f22627ff8",
+    "Bytes": 718
+  },
+  {
+    "File": "video.svg",
+    "SourcePath": "assets/Video/SVG/ic_fluent_video_24_color.svg",
+    "Variant": "color",
+    "Tint": null,
+    "SHA256": "aa6cb202df1ab81ea00a814fa95324cf754bb4decf810cabbe8fb50d4275429d",
+    "Bytes": 2264
+  },
+  {
+    "File": "desktop.svg",
+    "SourcePath": "assets/Desktop/SVG/ic_fluent_desktop_24_filled.svg",
+    "Variant": "filled",
+    "Tint": "#479ACA",
+    "SHA256": "35259c8ed35f1ac0a9c5d0ebfba3d8e30488166cf4d9d9e10513c5aab46f805f",
+    "Bytes": 702
+  },
+  {
+    "File": "image.svg",
+    "SourcePath": "assets/Image/SVG/ic_fluent_image_24_color.svg",
+    "Variant": "color",
+    "Tint": null,
+    "SHA256": "97d8d9226dac215783c8ce7121ad669eb78c9d79e6bb02b5bddbfe5ef17403b6",
+    "Bytes": 1473
+  },
+  {
+    "File": "warning.svg",
+    "SourcePath": "assets/Warning/SVG/ic_fluent_warning_24_color.svg",
+    "Variant": "color",
+    "Tint": null,
+    "SHA256": "148ebb9a2c5e9958fa74c4b11fc44da4edff63386f6b71bf5093acd8e2126b6d",
+    "Bytes": 1306
+  },
+  {
+    "File": "checkmark.svg",
+    "SourcePath": "assets/Checkmark Circle/SVG/ic_fluent_checkmark_circle_24_color.svg",
+    "Variant": "color",
+    "Tint": null,
+    "SHA256": "bf4fc912b3c2b41a3143f631f49cb5f6deda8c70083a1909528b899afe7dbed8",
+    "Bytes": 1086
+  },
+  {
+    "File": "globe.svg",
+    "SourcePath": "assets/Globe/SVG/ic_fluent_globe_24_color.svg",
+    "Variant": "color",
+    "Tint": null,
+    "SHA256": "b726489c1c3e0438b0d9f2d85495643c1e1d8dbaf44613290baf3efce115fd34",
+    "Bytes": 2589
+  },
+  {
+    "File": "lock.svg",
+    "SourcePath": "assets/Lock Closed/SVG/ic_fluent_lock_closed_24_color.svg",
+    "Variant": "color",
+    "Tint": null,
+    "SHA256": "9a1c1d5d3c1e272ef9570fd9f7b293d6c73cf0b78bf4a4a92af6a23978a2e674",
+    "Bytes": 1404
+  },
+  {
+    "File": "link.svg",
+    "SourcePath": "assets/Link/SVG/ic_fluent_link_24_color.svg",
+    "Variant": "color",
+    "Tint": null,
+    "SHA256": "708e05623bd258e6d95a2df373fdda40b05fb223fe8a2d4fa2e1bbb6ae85be2c",
+    "Bytes": 1174
+  },
+  {
+    "File": "apps.svg",
+    "SourcePath": "assets/Apps/SVG/ic_fluent_apps_24_color.svg",
+    "Variant": "color",
+    "Tint": null,
+    "SHA256": "481ba3bb599932a37a40c5784bda8dadeeb42cae60f03cfcd9f1f66aac4cc291",
+    "Bytes": 1907
+  },
+  {
+    "File": "shield.svg",
+    "SourcePath": "assets/Shield Checkmark/SVG/ic_fluent_shield_checkmark_24_color.svg",
+    "Variant": "color",
+    "Tint": null,
+    "SHA256": "79974746d0aac9f6910cb86e4e673e32f3b9e36c2b02eaff9c084810c6e578dc",
+    "Bytes": 2550
+  },
+  {
+    "File": "database.svg",
+    "SourcePath": "assets/Database/SVG/ic_fluent_database_24_color.svg",
+    "Variant": "color",
+    "Tint": null,
+    "SHA256": "ec181d4822154949b1e7986be45cd68a9854c0083866a7a350674796fcba693e",
+    "Bytes": 1605
+  }
+]

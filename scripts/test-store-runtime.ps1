@@ -22,7 +22,8 @@ if (Get-ChildItem -LiteralPath $payload -Recurse -Force | Where-Object { $_.Attr
 [xml]$manifest = Get-Content -LiteralPath (Join-Path $payload 'AppxManifest.xml') -Raw
 $identity = $manifest.DocumentElement.SelectSingleNode("*[local-name()='Identity']")
 $applications = @($manifest.DocumentElement.SelectNodes("*[local-name()='Applications']/*[local-name()='Application']"))
-if (!$identity -or $identity.GetAttribute('Name') -cne 'CloudInlet.LocalValidation' -or $identity.GetAttribute('Publisher') -cne 'CN=CloudInlet Local Validation' -or $applications.Count -ne 1 -or $applications[0].GetAttribute('Id') -cne 'CloudInlet' -or $applications[0].GetAttribute('Executable') -cne 'CloudInlet.exe') { throw 'Only the separate CloudInlet.LocalValidation identity may be registered by this test.' }
+# The package display name changed, but its Windows application ID stays stable.
+if (!$identity -or $identity.GetAttribute('Name') -cne 'CloudInlet.LocalValidation' -or $identity.GetAttribute('Publisher') -cne 'CN=CloudInlet Local Validation' -or $applications.Count -ne 1 -or $applications[0].GetAttribute('Id') -cne 'CloudBay' -or $applications[0].GetAttribute('Executable') -cne 'CloudInlet.exe') { throw 'Only the separate CloudInlet.LocalValidation identity may be registered by this test.' }
 $expectedVersion = ([Version]$identity.GetAttribute('Version')).ToString(3)
 if ([Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $payload 'CloudInlet.exe')).ProductVersion.Split('+')[0] -cne $expectedVersion) { throw 'The Store test payload version does not match its manifest.' }
 if (!('CloudInlet.StoreRuntimeTests.Activation' -as [type])) {
@@ -77,7 +78,7 @@ try {
     Add-AppxPackage -Register (Join-Path $payload 'AppxManifest.xml') -ErrorAction Stop
     $registered = Get-AppxPackage -Name 'CloudInlet.LocalValidation'
     if (!$registered -or $registered.Publisher -cne 'CN=CloudInlet Local Validation' -or !$registered.InstallLocation.Equals($payload, [StringComparison]::OrdinalIgnoreCase)) { throw 'The newly registered test package does not match its isolated payload.' }
-    $aumid = $registered.PackageFamilyName + '!CloudInlet'
+    $aumid = $registered.PackageFamilyName + '!' + $applications[0].GetAttribute('Id')
     $resultDirectory = Join-Path $workspace 'Result'
     New-Item -ItemType Directory -Path $resultDirectory | Out-Null
     $arguments = '--ui-smoke --store-runtime-smoke "--validation-output=' + $resultDirectory + '"'

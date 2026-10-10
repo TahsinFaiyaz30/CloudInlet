@@ -32,8 +32,6 @@ public sealed class WindowsUpdateInstaller(UpdateInstallation installation, stri
                 throw new IOException("The update package is outside its download directory.");
             EnsureUnlinked(cache); EnsureUnlinked(payload);
             var bundledHelper = Path.Combine(installation.Directory, "CloudInlet.SetupHelper.exe");
-            // Existing installations can still carry the old helper during an update handoff.
-            if (!File.Exists(bundledHelper)) bundledHelper = Path.Combine(installation.Directory, "CloudBay.SetupHelper.exe");
             if (!File.Exists(bundledHelper)) throw new IOException("The update helper is missing. Reinstall the matching installer package.");
             EnsureUnlinked(bundledHelper);
             var workerDirectory = Path.Combine(cache, "host");
@@ -89,7 +87,7 @@ public sealed class WindowsUpdateInstaller(UpdateInstallation installation, stri
     {
         var cache = Path.GetFullPath(cacheDirectory);
         EnsureUnlinked(cache);
-        // Old helpers still own pending packages in this cache. Its on-disk protocol cannot be rebranded.
+        // Preserve the durable update-cache ownership protocol across CloudInlet versions.
         var owner = Path.Combine(cache, ".cloudbay-update-cache-v1");
         EnsureUnlinked(owner);
         if (!File.Exists(owner) || new FileInfo(owner).Length != "CloudBay update cache v1\n".Length ||

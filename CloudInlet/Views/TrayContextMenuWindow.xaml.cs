@@ -44,6 +44,7 @@ public sealed partial class TrayContextMenuWindow : Window
         _actions = actions;
         _theme = theme;
         InitializeComponent();
+        FluentIconMotion.Attach(MenuRoot);
         _openApp = AddItem("Open CloudInlet", "\uE80F", MenuCommand.OpenApp);
         _openFolder = AddItem("Open folder", "\uE8B7", MenuCommand.OpenFolder);
         _pause = AddItem("Pause syncing", "\uE769", MenuCommand.TogglePause);
@@ -200,7 +201,12 @@ public sealed partial class TrayContextMenuWindow : Window
 
     private MenuFlyoutItem AddItem(string text, string glyph, MenuCommand command)
     {
-        var item = new MenuFlyoutItem { Text = text, Icon = new FontIcon { Glyph = glyph } };
+        var item = new MenuFlyoutItem
+        {
+            Text = text,
+            Icon = command == MenuCommand.TogglePause ? new FontIcon { Glyph = glyph } : FluentIcons.FromGlyph(glyph, 20),
+            MinHeight = 44
+        };
         AutomationProperties.SetName(item, text);
         item.Click += (_, _) => Invoke(command);
         _items.Items.Add(item);

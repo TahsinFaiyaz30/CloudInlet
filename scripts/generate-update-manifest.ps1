@@ -13,6 +13,8 @@ if (!(Test-Path -LiteralPath $root -PathType Container)) { throw 'Release asset 
 for ($ancestor = [IO.DirectoryInfo]$root; $null -ne $ancestor; $ancestor = $ancestor.Parent) {
     if ($ancestor.Exists -and ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Release assets cannot be read through a linked directory.' }
 }
+# The published 1.1.2 bridge is immutable; new releases contain only CloudInlet assets.
+if (Get-ChildItem -LiteralPath $root -File | Where-Object { $_.Name -like 'CloudBay-*' -or $_.Name -eq 'updates-v1.json' }) { throw 'Obsolete CloudBay release assets are not allowed. Use a fresh canonical asset directory.' }
 function Read-Asset([string]$Name, [string]$Flavor, [string]$Kind) {
     $path = Join-Path $root $Name
     if (!(Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required release asset is missing: $Name" }
@@ -21,35 +23,22 @@ function Read-Asset([string]$Name, [string]$Flavor, [string]$Kind) {
     [ordered]@{ buildFlavor = $Flavor; installerKind = $Kind; architecture = 'x64'; fileName = $Name; size = $item.Length; sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() }
 }
 $assets = [Collections.Generic.List[object]]::new()
-$legacyAssets = [Collections.Generic.List[object]]::new()
 foreach ($flavor in @('Release', 'Debug')) {
     foreach ($kind in @('Exe', 'Msi', 'Portable')) {
         $ending = switch ($kind) { 'Exe' { 'setup.exe' } 'Msi' { 'setup.msi' } 'Portable' { 'portable.zip' } }
         $name = "CloudInlet-$Version-win-x64-$($flavor.ToLowerInvariant())-$ending"
         $asset = Read-Asset $name $flavor $kind
         $assets.Add($asset)
-        # Released CloudBay clients require these exact names. They are aliases
-        # of the same installer bytes, never a separately built older product.
-        $legacyName = "CloudBay-$Version-win-x64-$($flavor.ToLowerInvariant())-$ending"
-        $legacyPath = Join-Path $root $legacyName
-        if (!(Test-Path -LiteralPath $legacyPath)) { Copy-Item -LiteralPath (Join-Path $root $name) -Destination $legacyPath }
-        $legacy = Read-Asset $legacyName $flavor $kind
-        if ($legacy.size -ne $asset.size -or $legacy.sha256 -cne $asset.sha256) { throw "Legacy update alias differs from its canonical package: $legacyName" }
-        $legacyAssets.Add($legacy)
+
     }
 }
-foreach ($feed in @(
-    @{ Name = 'updates-v2.json'; Schema = 2; Repository = $Repository; Assets = @($assets) },
-    @{ Name = 'updates-v1.json'; Schema = 1; Repository = 'TahsinFaiyaz30/CloudBay'; Assets = @($legacyAssets) }
-)) {
-    $manifest = [ordered]@{ schemaVersion = $feed.Schema; repository = $feed.Repository; version = $Version; tag = "v$Version"; assets = $feed.Assets }
-    $temporary = Join-Path $root ('.updates-' + [Guid]::NewGuid().ToString('N') + '.json')
-    try {
-        $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $temporary -Encoding utf8NoBOM
-        Move-Item -LiteralPath $temporary -Destination (Join-Path $root $feed.Name) -Force
-    } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary } }
-}
-$releaseFiles = @(Get-ChildItem -LiteralPath $root -File | Where-Object { $_.Name -in @('updates-v1.json', 'updates-v2.json') -or $_.Name -like "CloudInlet-$Version-*" -or $_.Name -like "CloudBay-$Version-*" })
+$manifest = [ordered]@{ schemaVersion = 2; repository = $Repository; version = $Version; tag = "v$Version"; assets = @($assets) }
+$temporary = Join-Path $root ('.updates-' + [Guid]::NewGuid().ToString('N') + '.json')
+try {
+    $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $temporary -Encoding utf8NoBOM
+    Move-Item -LiteralPath $temporary -Destination (Join-Path $root 'updates-v2.json') -Force
+} finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary } }
+$releaseFiles = @(Get-ChildItem -LiteralPath $root -File | Where-Object { $_.Name -eq 'updates-v2.json' -or $_.Name -like "CloudInlet-$Version-*" })
 $sums = foreach ($file in $releaseFiles | Sort-Object Name) {
     if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Release payload cannot contain linked files.' }
     "$((Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($file.Name)"

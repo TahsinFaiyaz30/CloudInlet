@@ -45,8 +45,10 @@ if (!$CompletionFile -or ![IO.Path]::GetFullPath($CompletionFile).StartsWith($ou
 Assert-NormalPath ([IO.Path]::GetDirectoryName($CompletionFile))
 Start-Transcript -LiteralPath (Join-Path ([IO.Path]::GetDirectoryName($CompletionFile)) 'transcript.txt') | Out-Null
 trap {
-    [ordered]@{ success=$false; error=$_.Exception.Message } | ConvertTo-Json | Set-Content -LiteralPath $CompletionFile -Encoding utf8NoBOM
-    Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
+    if ($PhysicalContext -and $CompletionFile) {
+        [ordered]@{ success=$false; error=$_.Exception.Message } | ConvertTo-Json | Set-Content -LiteralPath $CompletionFile -Encoding utf8NoBOM
+        Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
+    }
     throw $_
 }
 $runId = [Guid]::NewGuid().ToString('N')
@@ -85,8 +87,8 @@ function Assert-Identity([string]$Path, [string]$Kind, [string]$Version, [bool]$
     $metadata = Get-Content -LiteralPath (Join-Path $Path 'distribution.json') -Raw | ConvertFrom-Json
     if ($metadata.version -ne $Version -or $metadata.installerKind -ne $Kind -or $metadata.buildFlavor -ne 'Debug' -or $metadata.installDirectory.TrimEnd('\') -ne $Path.TrimEnd('\')) { throw 'Installed identity was not preserved correctly.' }
     if ($metadata.startWithWindows -ne $Startup -or $metadata.desktopShortcut -ne $Shortcut) { throw "$Kind $Version current preferences were not recorded correctly." }
-    $name = if ($Version -eq '1.1.1') { 'CloudBayDebug' } else { 'CloudInletDebug' }
-    $shortcutPath = if ($Version -eq '1.1.1') { Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'CloudBay Debug.lnk' } else { $desktop }
+    $name = 'CloudInletDebug'
+    $shortcutPath = $desktop
     $runExists = !!(Get-ItemProperty -LiteralPath $runKey -Name $name -ErrorAction SilentlyContinue)
     if ($runExists -ne $Startup -or (Test-Path -LiteralPath $shortcutPath) -ne $Shortcut) { throw "$Kind $Version current startup/shortcut choices changed." }
     if ((Get-FileHash -LiteralPath $ownedMarker -Algorithm SHA256).Hash -ne $markerHash) { throw 'Private client state changed.' }
@@ -98,28 +100,13 @@ function Wait-File([string]$Path, [int]$Seconds = 10) {
         Start-Sleep -Milliseconds 100
     }
 }
-function Test-CompatibilityLauncher([string]$Install) {
-    $capture = Join-Path $fixture 'launcher-arguments.txt'
-    $values = @('', 'a path with spaces', 'embedded"quote', 'C:\trailing slash\', '\\server\folder with space\', 'cloudinlet://open?name=日本語')
-    $start = [Diagnostics.ProcessStartInfo]::new((Join-Path $Install 'CloudBay.exe'))
-    $start.UseShellExecute = $false
-    $start.CreateNoWindow = $true
-    foreach ($value in @('--capture-arguments', $capture) + $values) { $start.ArgumentList.Add($value) }
-    $launcher = [Diagnostics.Process]::Start($start)
-    if (!$launcher.WaitForExit(10000) -or $launcher.ExitCode -ne 0) { throw 'The compatibility launcher could not start CloudInlet.' }
-    Wait-File ($capture + '.ready')
-    $lines = [IO.File]::ReadAllLines($capture)
-    if ($lines[0] -cne 'CloudInlet' -or $lines.Length -ne $values.Count + 1) { throw 'The compatibility launcher did not start the branded process.' }
-    for ($index = 0; $index -lt $values.Count; $index++) {
-        if ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($lines[$index + 1])) -cne $values[$index]) { throw 'The compatibility launcher changed activation arguments.' }
-    }
-}
-function Invoke-Worker([string]$Install, [string]$Kind, [string]$Package, [switch]$Corrupt) {
-    $case = $Kind.ToLowerInvariant() + $(if ($Corrupt) { '-corrupt' } else { '-valid' })
+function Invoke-Worker([string]$Install, [string]$Kind, [string]$Package, [string]$TargetVersion = '1.1.3', [switch]$Corrupt) {
+    $installedVersion = (Get-Content -LiteralPath (Join-Path $Install 'distribution.json') -Raw | ConvertFrom-Json).version
+    $case = $Kind.ToLowerInvariant() + '-' + $TargetVersion + $(if ($Corrupt) { '-corrupt' } else { '-valid' })
     $hostRoot = Join-Path $cache ('fixture-host-' + $runId + '-' + $case)
     New-Item -ItemType Directory -Path $hostRoot | Out-Null
-    foreach ($name in @('CloudBay.SetupHelper.exe', 'CloudBay.SetupHelper.exe.config')) { Copy-Item -LiteralPath (Join-Path $Install $name) -Destination $hostRoot }
-    $pending = Join-Path $cache ('pending-CloudBay-1.1.2-win-x64-debug-setup.' + $Kind.ToLowerInvariant())
+    foreach ($name in @('CloudInlet.SetupHelper.exe', 'CloudInlet.SetupHelper.exe.config')) { Copy-Item -LiteralPath (Join-Path $Install $name) -Destination $hostRoot }
+    $pending = Join-Path $cache ('pending-CloudInlet-' + $TargetVersion + '-win-x64-debug-setup.' + $Kind.ToLowerInvariant())
     Copy-Item -LiteralPath $Package -Destination $pending
     $hash = (Get-FileHash -LiteralPath $pending -Algorithm SHA256).Hash.ToLowerInvariant()
     $size = (Get-Item -LiteralPath $pending).Length
@@ -127,22 +114,22 @@ function Invoke-Worker([string]$Install, [string]$Kind, [string]$Package, [switc
         $stream = [IO.File]::Open($pending, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::None)
         try { $stream.WriteByte(0); $stream.Flush($true) } finally { $stream.Dispose() }
     }
-    $parent = Start-Process -FilePath (Join-Path $Install 'CloudBay.exe') -ArgumentList @('--wait', '5') -PassThru -WindowStyle Hidden
+    $parent = Start-Process -FilePath (Join-Path $Install 'CloudInlet.exe') -ArgumentList @('--wait', '5') -PassThru -WindowStyle Hidden
     $parent.Refresh()
     $result = Join-Path $hostRoot 'result.json'
     $ready = Join-Path $hostRoot 'ready.json'
     $request = Join-Path $hostRoot 'request.json'
-    [ordered]@{ schemaVersion=1; parentProcessId=$parent.Id; parentStartUtcTicks=$parent.StartTime.ToUniversalTime().Ticks; installDirectory=$Install; buildFlavor='Debug'; installerKind=$Kind; installedVersion='1.1.1'; targetVersion='1.1.2'; packagePath=$pending; packageSha256=$hash; packageSize=$size; resultPath=$result; readinessPath=$ready; restartBackground=$true } | ConvertTo-Json | Set-Content -LiteralPath $request -Encoding utf8NoBOM
-    $worker = Start-Process -FilePath (Join-Path $hostRoot 'CloudBay.SetupHelper.exe') -ArgumentList @('--update', ('"' + $request + '"')) -PassThru -WindowStyle Hidden
+    [ordered]@{ schemaVersion=1; parentProcessId=$parent.Id; parentStartUtcTicks=$parent.StartTime.ToUniversalTime().Ticks; installDirectory=$Install; buildFlavor='Debug'; installerKind=$Kind; installedVersion=$installedVersion; targetVersion=$TargetVersion; packagePath=$pending; packageSha256=$hash; packageSize=$size; resultPath=$result; readinessPath=$ready; restartBackground=$true } | ConvertTo-Json | Set-Content -LiteralPath $request -Encoding utf8NoBOM
+    $worker = Start-Process -FilePath (Join-Path $hostRoot 'CloudInlet.SetupHelper.exe') -ArgumentList @('--update', ('"' + $request + '"')) -PassThru -WindowStyle Hidden
     Wait-File $ready
     $readiness = Get-Content -LiteralPath $ready -Raw | ConvertFrom-Json
-    if (!$readiness.ready -or $readiness.targetVersion -ne '1.1.2') { throw 'The worker did not acknowledge the verified request.' }
+    if (!$readiness.ready -or $readiness.targetVersion -ne $TargetVersion) { throw 'The worker did not acknowledge the verified request.' }
     if (!$worker.WaitForExit(120000)) { throw 'The update fixture did not complete. Do not terminate an active installer.' }
     Wait-File $result
     $record = Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
     if ($Corrupt) {
         if ($worker.ExitCode -eq 0 -or $record.success -or $record.message -notmatch 'checksum changed') { throw 'The worker did not reject the corrupted package before installation.' }
-        if ((Get-Content -LiteralPath (Join-Path $Install 'distribution.json') -Raw | ConvertFrom-Json).version -ne '1.1.1') { throw 'A corrupt update changed the installation.' }
+        if ((Get-Content -LiteralPath (Join-Path $Install 'distribution.json') -Raw | ConvertFrom-Json).version -ne $installedVersion) { throw 'A corrupt update changed the installation.' }
     } elseif ($worker.ExitCode -notin @(0,3010) -or !$record.success) { throw "The external update worker failed: $($record.message)" }
     Remove-Item -LiteralPath $pending
 }
@@ -151,17 +138,17 @@ $uninstallMsi = $null
 try {
     # Compile the real published installer/helper source for the baseline. This is
     # a source snapshot in ignored artifacts, not another Git worktree.
-    $oldSource = Join-Path $fixture 'Published-1.1.1'
+    $oldSource = Join-Path $fixture 'Published-1.1.2'
     New-Item -ItemType Directory -Path $oldSource | Out-Null
     $archive = Join-Path $fixture 'published-installer-source.tar'
-    git -C $repository archive v1.1.1 -o $archive packaging scripts/build-installers.ps1 scripts/build-installer-helper.ps1 scripts/get-installer-tools.ps1 Directory.Build.props Directory.Build.targets version.json LICENSE
+    git -C $repository archive v1.1.2 -o $archive packaging scripts/build-installers.ps1 scripts/build-installer-helper.ps1 scripts/get-installer-tools.ps1 CloudInlet/Assets/CloudInlet.ico Directory.Build.props Directory.Build.targets version.json LICENSE
     if ($LASTEXITCODE -ne 0) { throw 'The immutable published installer source could not be read.' }
     tar -xf $archive -C $oldSource
     if ($LASTEXITCODE -ne 0) { throw 'The published installer fixture snapshot could not be extracted.' }
     $tools = & (Join-Path $PSScriptRoot 'get-installer-tools.ps1')
-    foreach ($version in @('1.1.1', '1.1.2')) {
-        $legacy = $version -eq '1.1.1'
-        $brand = if ($legacy) { 'CloudBay' } else { 'CloudInlet' }
+    foreach ($version in @('1.1.2', '1.1.3', '1.1.4')) {
+        $published = $version -eq '1.1.2'
+        $brand = 'CloudInlet'
         $app = Join-Path $fixture "$version/App"
         $packages = Join-Path $fixture "$version/Packages"
         New-Item -ItemType Directory -Path $app, (Join-Path $app 'Assets'), $packages -Force | Out-Null
@@ -171,28 +158,33 @@ try {
         foreach ($name in @("$brand.exe", "$brand.exe.config")) { Copy-Item -LiteralPath (Join-Path $client $name) -Destination $app }
         Copy-Item -LiteralPath (Join-Path $repository 'CloudInlet/Assets/CloudInlet.ico') -Destination (Join-Path $app "Assets/$brand.ico")
         Copy-Item -LiteralPath (Join-Path $repository 'THIRD-PARTY-NOTICES.md') -Destination $app
-        $builder = if ($legacy) { Join-Path $oldSource 'scripts/build-installers.ps1' } else { Join-Path $PSScriptRoot 'build-installers.ps1' }
+        $builder = if ($published) { Join-Path $oldSource 'scripts/build-installers.ps1' } else { Join-Path $PSScriptRoot 'build-installers.ps1' }
         & $builder -AppFolder $app -Version $version -Configuration Debug -OutputDirectory $packages -InnoCompiler $tools.InnoCompiler -WixToolPath $tools.WixToolPath
+        if (!$published -and (Get-ChildItem -LiteralPath $app -Recurse -File | Where-Object { $_.Name -match '^CloudBay(?:\.|$)' })) { throw 'A future payload contains an obsolete CloudBay executable.' }
     }
-    $exe0 = Join-Path $fixture '1.1.1/Packages/CloudBay-1.1.1-win-x64-debug-setup.exe'
-    $exe1 = Join-Path $fixture '1.1.2/Packages/CloudInlet-1.1.2-win-x64-debug-setup.exe'
-    $msi0 = Join-Path $fixture '1.1.1/Packages/CloudBay-1.1.1-win-x64-debug-setup.msi'
-    $msi1 = Join-Path $fixture '1.1.2/Packages/CloudInlet-1.1.2-win-x64-debug-setup.msi'
-    $exeRoot = Join-Path $fixture 'Installed Exe'
+    $exe0 = Join-Path $fixture '1.1.2/Packages/CloudInlet-1.1.2-win-x64-debug-setup.exe'
+    $exe1 = Join-Path $fixture '1.1.3/Packages/CloudInlet-1.1.3-win-x64-debug-setup.exe'
+    $msi0 = Join-Path $fixture '1.1.2/Packages/CloudInlet-1.1.2-win-x64-debug-setup.msi'
+    $msi1 = Join-Path $fixture '1.1.3/Packages/CloudInlet-1.1.3-win-x64-debug-setup.msi'
+    $exe2 = Join-Path $fixture '1.1.4/Packages/CloudInlet-1.1.4-win-x64-debug-setup.exe'
+    $msi2 = Join-Path $fixture '1.1.4/Packages/CloudInlet-1.1.4-win-x64-debug-setup.msi'
+    # Keep an original branded folder as well as a custom folder.
+    $exeRoot = Join-Path $fixture 'CloudBay Debug'
     $msiRoot = Join-Path $fixture 'Installed Msi'
     Run-Setup $exe1 @('/UPDATE','/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-',('/DIR="' + $exeRoot + '"')) -ExpectFailure
     Run-Setup msiexec.exe @('/i', ('"' + $msi1 + '"'), '/qn','/norestart','UPDATE=1',('INSTALLDIR="' + $msiRoot + '"'),'/l*v',('"' + (Join-Path $fixture 'msi-fresh-update-refused.log') + '"')) -ExpectFailure
     Run-Setup $exe0 @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-',('/DIR="' + $exeRoot + '"'),'/TASKS=startup,desktopicon')
     $uninstallExe = Join-Path $exeRoot 'unins000.exe'
-    Assert-Identity $exeRoot Exe '1.1.1' $true $true
+    Assert-Identity $exeRoot Exe '1.1.2' $true $true
     Run-Setup msiexec.exe @('/i', ('"' + $msi0 + '"'), '/qn','/norestart',('INSTALLDIR="' + $msiRoot + '"'),'/l*v',('"' + (Join-Path $fixture 'msi-kind-refused.log') + '"')) -ExpectFailure
-    Remove-ItemProperty -LiteralPath $runKey -Name CloudBayDebug
-    Remove-Item -LiteralPath (Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'CloudBay Debug.lnk')
+    Remove-ItemProperty -LiteralPath $runKey -Name CloudInletDebug
+    Remove-Item -LiteralPath $desktop
     Invoke-Worker $exeRoot Exe $exe1 -Corrupt
     if ((Get-ItemProperty -LiteralPath $runKey -Name CloudInletDebug -ErrorAction SilentlyContinue) -or (Test-Path -LiteralPath $desktop)) { throw 'A rejected update changed current Windows preferences.' }
     Invoke-Worker $exeRoot Exe $exe1
-    Assert-Identity $exeRoot Exe '1.1.2' $false $false
-    Test-CompatibilityLauncher $exeRoot
+    Assert-Identity $exeRoot Exe '1.1.3' $false $false
+    Invoke-Worker $exeRoot Exe $exe2 -TargetVersion '1.1.4'
+    Assert-Identity $exeRoot Exe '1.1.4' $false $false
     # A real matching activation server proves that uninstall waits for graceful
     # exit instead of stopping unrelated processes or overwriting a running app.
     $pipeReady = Join-Path $fixture 'pipe-ready.txt'
@@ -208,20 +200,23 @@ try {
     if (!$running.WaitForExit(5000) -or $running.ExitCode -ne 0) { throw 'The installer did not request a clean client shutdown.' }
     Run-Setup msiexec.exe @('/i', ('"' + $msi0 + '"'), '/qn','/norestart',('INSTALLDIR="' + $msiRoot + '"'),'/l*v',('"' + (Join-Path $fixture 'msi-install.log') + '"'))
     $uninstallMsi = $msi0
-    Assert-Identity $msiRoot Msi '1.1.1' $true $false
+    Assert-Identity $msiRoot Msi '1.1.2' $true $false
     Run-Setup $exe0 @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-',('/DIR="' + $exeRoot + '"')) -ExpectFailure
     New-Item -Path $approvedKey -Force | Out-Null
     $disabledStartup = [byte[]]@(3,0,0,0,11,12,13,14,15,16,17,18)
-    New-ItemProperty -LiteralPath $approvedKey -Name CloudBayDebug -Value $disabledStartup -PropertyType Binary -Force | Out-Null
+    New-ItemProperty -LiteralPath $approvedKey -Name CloudInletDebug -Value $disabledStartup -PropertyType Binary -Force | Out-Null
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($desktop); $shortcut.TargetPath = Join-Path $msiRoot 'CloudInlet.exe'; $shortcut.Save()
     Invoke-Worker $msiRoot Msi $msi1
     $uninstallMsi = $msi1
-    Assert-Identity $msiRoot Msi '1.1.2' $true $true
+    Assert-Identity $msiRoot Msi '1.1.3' $true $true
     $approval = (Get-ItemProperty -LiteralPath $approvedKey -Name CloudInletDebug).CloudInletDebug
     if ([Convert]::ToBase64String($approval) -cne [Convert]::ToBase64String($disabledStartup)) { throw 'MSI rebrand enabled startup disabled in Task Manager.' }
     if (Get-ItemProperty -LiteralPath $runKey -Name CloudBayDebug -ErrorAction SilentlyContinue) { throw 'MSI left a duplicate legacy startup command.' }
-    Run-Setup msiexec.exe @('/x', ('"' + $msi1 + '"'), '/qn','/norestart','/l*v',('"' + (Join-Path $fixture 'msi-uninstall.log') + '"'))
+    Invoke-Worker $msiRoot Msi $msi2 -TargetVersion '1.1.4'
+    $uninstallMsi = $msi2
+    Assert-Identity $msiRoot Msi '1.1.4' $true $true
+    Run-Setup msiexec.exe @('/x', ('"' + $msi2 + '"'), '/qn','/norestart','/l*v',('"' + (Join-Path $fixture 'msi-uninstall.log') + '"'))
     $uninstallMsi = $null
     if ((Test-Path -LiteralPath (Join-Path $exeRoot 'CloudInlet.exe')) -or (Test-Path -LiteralPath (Join-Path $msiRoot 'CloudInlet.exe'))) { throw 'Uninstall did not remove its application files.' }
     foreach ($path in $releaseHashes.Keys) { if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $releaseHashes[$path]) { throw 'Release client settings or credentials changed.' } }
@@ -229,7 +224,7 @@ try {
     if ((Get-ItemProperty -LiteralPath $runKey -Name CloudBay -ErrorAction SilentlyContinue).CloudBay -ne $legacyReleaseRun) { throw 'The legacy Release startup choice changed.' }
     if ((Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders' | ConvertTo-Json -Compress) -ne $releaseFolders) { throw 'Windows folder mappings changed.' }
     if ((Get-FileHash -LiteralPath $ownedMarker -Algorithm SHA256).Hash -ne $markerHash) { throw 'Uninstall changed private client data.' }
-    [ordered]@{ fixtureRoot=$fixture; publishedLegacyWorkerUsed=$true; windowsDisabledStartupPreserved=$true; legacy1_1_1ToCloudInlet1_1_2Passed=$true; exeWorkerUpgradePassed=$true; msiWorkerUpgradePassed=$true; checksumRecheckedAfterShutdown=$true; readinessAcknowledged=$true; currentChoicesPreserved=$true; customInstallDirectoryPreserved=$true; gracefulShutdownPassed=$true; crossKindRefused=$true; freshUpdateRefused=$true; privateStatePreserved=$true; releaseUntouched=$true } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $fixture 'installer-validation.json') -Encoding utf8NoBOM
+    [ordered]@{ fixtureRoot=$fixture; publishedCloudInlet1_1_2WorkerUsed=$true; currentWorkerUpgradePassed=$true; windowsDisabledStartupPreserved=$true; bridgeToCanonicalOnlyPassed=$true; originalBrandedDirectoryPreserved=$true; exeWorkerUpgradePassed=$true; msiWorkerUpgradePassed=$true; checksumRecheckedAfterShutdown=$true; readinessAcknowledged=$true; currentChoicesPreserved=$true; customInstallDirectoryPreserved=$true; gracefulShutdownPassed=$true; crossKindRefused=$true; freshUpdateRefused=$true; privateStatePreserved=$true; releaseUntouched=$true } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $fixture 'installer-validation.json') -Encoding utf8NoBOM
     Write-Output "Installer/update fixture tests passed: $fixture"
 } finally {
     if ($uninstallExe -and (Test-Path -LiteralPath $uninstallExe)) { Run-Setup $uninstallExe @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') }
@@ -239,8 +234,8 @@ try {
     $remaining = Get-ItemProperty -LiteralPath ($debugRegistry + '\Msi') -ErrorAction SilentlyContinue
     if ($remaining -and $remaining.InstallDirectory.TrimEnd('\') -eq (Join-Path $fixture 'Installed Msi')) {
         $installedVersion = $remaining.Version
-        if ($installedVersion -notin @('1.1.1','1.1.2')) { throw 'Fixture MSI cleanup encountered an unexpected product version.' }
-        $cleanupBrand = if ($installedVersion -eq '1.1.1') { 'CloudBay' } else { 'CloudInlet' }
+        if ($installedVersion -notin @('1.1.2','1.1.3','1.1.4')) { throw 'Fixture MSI cleanup encountered an unexpected product version.' }
+        $cleanupBrand = 'CloudInlet'
         $installedPackage = Join-Path $fixture ($installedVersion + '/Packages/' + $cleanupBrand + '-' + $installedVersion + '-win-x64-debug-setup.msi')
         Run-Setup msiexec.exe @('/x', ('"' + $installedPackage + '"'), '/qn','/norestart')
     }

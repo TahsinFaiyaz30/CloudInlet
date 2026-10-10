@@ -15,6 +15,77 @@ namespace CloudInlet.Tests;
 public sealed class CloudTransferControllerTests
 {
     [TestMethod]
+    public async Task GlobalResumeRemainsReachableWhenAccountAttentionMasksPausedJobs()
+    {
+        var state = NewState();
+        try
+        {
+            var storage = new ClientStorage(state);
+            storage.SaveSettings(new() { RootPath = Path.Combine(state, "Root"), StartAtSignIn = false,
+                KeyId = "fixture-key", AccountId = "fixture-account", BucketId = "fixture-bucket", BucketName = "fixture" });
+            // A broken vault enters Attention before any provider request or native root mutation.
+            File.WriteAllBytes(Path.Combine(state, "credentials.dpapi"), new byte[64]);
+            var source = Path.Combine(state, "Source");
+            var destination = Path.Combine(state, "Destination");
+            Directory.CreateDirectory(source);
+            await File.WriteAllTextAsync(Path.Combine(source, "report.txt"), "resume independently");
+            var plan = new TransferJobPlan(Guid.NewGuid().ToString("N"), LocalTransferEndpoint.ForFolder(source),
+                LocalTransferEndpoint.ForFolder(destination), TransferOperation.Copy, TransferConflictPolicy.Fail, [], DateTimeOffset.UtcNow);
+            using (var journal = new TransferJobJournal(Path.Combine(state, "CloudTransfers", "jobs.sqlite"), new TestProtector()))
+                journal.Create(plan);
+            await using var controller = new ClientController(storage, _ => Assert.Fail(), manageStartup: false, cloudPauseReason: _ => null);
+            controller.Pause();
+            await controller.StartAsync();
+            Assert.AreEqual(ClientState.Attention, controller.Snapshot.State);
+            Assert.AreEqual(TransferJobState.Paused, controller.CloudTransferJobs.Single().State);
+            Assert.IsTrue(controller.IsTransferPauseActive, "Attention must not hide the user's global pause or its Resume action.");
+            controller.Resume();
+            await controller.WaitForCloudTransferAsync(plan.Id).WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.AreEqual("resume independently", await File.ReadAllTextAsync(Path.Combine(destination, "report.txt")));
+            Assert.AreEqual(ClientState.Attention, controller.Snapshot.State, "Resume must retain the unrelated account diagnostic.");
+            Assert.IsFalse(controller.IsTransferPauseActive);
+            Assert.IsFalse(Directory.Exists(controller.Settings.RootPath));
+        }
+        finally { SqliteConnection.ClearAllPools(); Directory.Delete(state, true); }
+    }
+
+    [TestMethod]
+    public async Task IndependentTransfersExposePauseAndResumeUntilTheyFinishWithoutB2()
+    {
+        var state = NewState();
+        try
+        {
+            var storage = new ClientStorage(state);
+            storage.SaveSettings(new() { RootPath = Path.Combine(state, "Root"), StartAtSignIn = false });
+            var source = Path.Combine(state, "Source");
+            var destination = Path.Combine(state, "Destination");
+            Directory.CreateDirectory(source);
+            await File.WriteAllTextAsync(Path.Combine(source, "report.txt"), "independent transfer");
+            var plan = new TransferJobPlan(Guid.NewGuid().ToString("N"), LocalTransferEndpoint.ForFolder(source),
+                LocalTransferEndpoint.ForFolder(destination), TransferOperation.Copy, TransferConflictPolicy.Fail, [], DateTimeOffset.UtcNow);
+            using (var journal = new TransferJobJournal(Path.Combine(state, "CloudTransfers", "jobs.sqlite"), new TestProtector()))
+                journal.Create(plan);
+            await using var controller = new ClientController(storage, _ => Assert.Fail(), manageStartup: false, cloudPauseReason: _ => null);
+
+            Assert.IsFalse(controller.Settings.IsConfigured);
+            Assert.IsTrue(controller.CanPauseTransfers, "Independent jobs must expose the same controls as native B2 sync.");
+            controller.Pause();
+            await controller.StartAsync();
+            Assert.AreEqual(TransferJobState.Paused, controller.CloudTransferJobs.Single().State);
+            Assert.IsFalse(Directory.Exists(destination));
+            Assert.IsTrue(controller.CanPauseTransfers, "Resume must remain accessible after pausing an independent job.");
+            controller.Resume();
+            var timeout = DateTimeOffset.UtcNow.AddSeconds(10);
+            while (controller.CloudTransferJobs.Single().State != TransferJobState.Completed && DateTimeOffset.UtcNow < timeout)
+                await Task.Delay(20);
+            Assert.AreEqual(TransferJobState.Completed, controller.CloudTransferJobs.Single().State);
+            Assert.AreEqual("independent transfer", await File.ReadAllTextAsync(Path.Combine(destination, "report.txt")));
+            Assert.IsFalse(controller.CanPauseTransfers, "Completed history alone does not need pause controls.");
+        }
+        finally { SqliteConnection.ClearAllPools(); Directory.Delete(state, true); }
+    }
+
+    [TestMethod]
     public async Task IndependentRecoveryDoesNotRequireB2OrNativeSyncAndContinuesPastAnUnavailableAccount()
     {
         var state = NewState();

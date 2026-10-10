@@ -7,7 +7,7 @@ using CloudInlet.Core.Transfers;
 
 namespace CloudInlet.Application;
 
-public sealed class ClientStorage
+public sealed partial class ClientStorage
 {
     public sealed record OneDriveConnection(string Id, string Name, string ClientId, string Tenant, OneDriveTokenSet Tokens);
     public sealed record CloudBackupStopIntent(string Name, string RestorePath, TransferJobPlan Plan);
@@ -24,17 +24,24 @@ public sealed class ClientStorage
     {
         DirectoryPath = path ?? BuildInfo.DefaultDataDirectory;
         Directory.CreateDirectory(DirectoryPath);
-        if (File.Exists(DiagnosticsPath))
+        try
         {
+            if (!File.Exists(DiagnosticsPath)) return;
             foreach (var line in File.ReadLines(DiagnosticsPath).TakeLast(300))
             {
                 try
                 {
-                    if (JsonSerializer.Deserialize<ActivityEvent>(line) is { } value)
+                    if (JsonSerializer.Deserialize<ActivityEvent>(line) is { Path: not null, Message: not null } value &&
+                        Enum.IsDefined(value.Kind))
                     { _activity.Add(value); TrackError(value); }
                 }
                 catch (JsonException) { /* An interrupted final line does not invalidate earlier events. */ }
             }
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            // Diagnostics are optional. A locked or unreadable history must not prevent startup,
+            // account recovery, or transfers; leave the original file available for inspection.
         }
     }
     public AppSettings LoadSettings()

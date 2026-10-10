@@ -1,26 +1,49 @@
 <Application
     x:Class="CloudInlet.App"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:views="using:CloudInlet.Views"
+    xmlns:settings="using:CommunityToolkit.WinUI.Controls">
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources
                     xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
+            <views:FluentGlyphConverter x:Key="FluentGlyphConverter" />
             <!-- Native controls own their Windows 11 geometry, typography,
                  strokes, high contrast states, focus and reduced motion. -->
             <Thickness
-                x:Key="CloudInletPageInset">24,12,24,40</Thickness>
+                x:Key="CloudInletPageInset">28,8,28,32</Thickness>
+            <Style TargetType="settings:SettingsCard">
+                <Setter Property="MinHeight" Value="68" />
+                <Setter Property="Padding" Value="20,14" />
+                <Setter Property="CornerRadius" Value="8" />
+            </Style>
+            <Style TargetType="settings:SettingsExpander">
+                <Setter Property="MinHeight" Value="68" />
+                <Setter Property="Padding" Value="20,14" />
+                <Setter Property="CornerRadius" Value="8" />
+            </Style>
+            <Style x:Key="CloudInletNavigationItemStyle" TargetType="NavigationViewItem">
+                <Setter Property="MinHeight" Value="36" />
+                <Setter Property="Margin" Value="0" />
+            </Style>
+            <Style x:Key="CloudInletCategoryStyle" TargetType="settings:SettingsCard">
+                <Setter Property="MinHeight" Value="72" />
+                <Setter Property="Padding" Value="20,14" />
+                <Setter Property="CornerRadius" Value="8" />
+                <Setter Property="IsClickEnabled" Value="True" />
+            </Style>
             <!-- Native card surfaces group tasks inside the continuous body.
                  The sidebar exposes the commanding layer over Mica Alt.
                  In-page cards retain the Windows ControlCornerRadius. -->
             <Style x:Key="CloudInletSurfaceStyle" TargetType="Border">
-                <Setter Property="CornerRadius" Value="{ThemeResource ControlCornerRadius}" />
+                <Setter Property="CornerRadius" Value="8" />
                 <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
                 <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
                 <Setter Property="BorderThickness" Value="1" />
-                <Setter Property="Padding" Value="28" />
+                <Setter Property="Padding" Value="20" />
             </Style>
             <Style x:Key="CloudInletSectionHeadingStyle" TargetType="TextBlock" BasedOn="{StaticResource BodyStrongTextBlockStyle}">
                 <Setter Property="FontSize" Value="16" />
@@ -31,13 +54,13 @@
                 TargetType="StackPanel">
                 <Setter
                     Property="MaxWidth"
-                    Value="1120" />
+                    Value="1240" />
                 <Setter
                     Property="Padding"
                     Value="{StaticResource CloudInletPageInset}" />
                 <Setter
                     Property="Spacing"
-                    Value="28" />
+                    Value="24" />
                 <Setter
                     Property="HorizontalAlignment"
                     Value="Center" />
@@ -98,12 +121,10 @@
                         <ColumnDefinition
                             Width="*" />
                     </Grid.ColumnDefinitions>
-                    <FontIcon
-                        Glyph="{Binding Glyph}"
-                        FontSize="20"
+                    <FontIcon Glyph="{Binding Glyph}" FontSize="20"
                         VerticalAlignment="Top"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Margin="0,2,0,0" />
+                        Margin="0,2,0,0"  Width="20" Height="20" />
                     <StackPanel
                         Grid.Column="1"
                         Spacing="4">
@@ -139,12 +160,10 @@
                         <ColumnDefinition
                             Width="*" />
                     </Grid.ColumnDefinitions>
-                    <FontIcon
-                        Glyph="{Binding Glyph}"
-                        FontSize="16"
+                    <FontIcon Glyph="{Binding Glyph}" FontSize="16"
                         VerticalAlignment="Top"
                         Margin="0,2,0,0"
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"  Width="16" Height="16" />
                     <StackPanel
                         Grid.Column="1"
                         Spacing="4">
@@ -195,28 +214,28 @@
             </DataTemplate>
             <Style
                 x:Key="CloudInletStatusSuccessIconStyle"
-                TargetType="FontIcon">
+                TargetType="IconSourceElement">
                 <Setter
                     Property="Foreground"
                     Value="{ThemeResource SystemFillColorSuccessBrush}" />
             </Style>
             <Style
                 x:Key="CloudInletStatusCautionIconStyle"
-                TargetType="FontIcon">
+                TargetType="IconSourceElement">
                 <Setter
                     Property="Foreground"
                     Value="{ThemeResource SystemFillColorCautionBrush}" />
             </Style>
             <Style
                 x:Key="CloudInletStatusNeutralIconStyle"
-                TargetType="FontIcon">
+                TargetType="IconSourceElement">
                 <Setter
                     Property="Foreground"
                     Value="{ThemeResource TextFillColorSecondaryBrush}" />
             </Style>
             <Style
                 x:Key="CloudInletStatusAccentIconStyle"
-                TargetType="FontIcon">
+                TargetType="IconSourceElement">
                 <Setter
                     Property="Foreground"
                     Value="{ThemeResource AccentTextFillColorPrimaryBrush}" />

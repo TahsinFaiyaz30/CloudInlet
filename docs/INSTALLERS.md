@@ -22,6 +22,80 @@ an installation owned by the other kind; uninstall the old kind before switching
 Uninstalling removes installed application files and shortcuts, while preserving
 client settings, credentials, activity, backup data and Windows folder mappings.
 Use the app to stop backup or disconnect an account before removing it if desired.
+See [uninstall, disconnect and retained data](UNINSTALL.md) for online-only files,
+account vaults, recovery and explicit data removal.
+
+Upgrades retain the registered installation directory, even when it is named
+CloudBay. Original CloudBay installations first take the frozen 1.1.2 bridge;
+future CloudInlet packages contain no CloudBay launcher or legacy asset aliases.
+This lets the published 1.1.2 worker reopen the updated executable at its known
+path without permanent forwarding executables. See [REBRANDING.md](REBRANDING.md).
+
+## Store, EXE and MSI feature parity
+
+Store MSIX, EXE and MSI must provide the same CloudInlet features and data-safety
+guarantees. Store certification must not be resolved by removing folder backup,
+Files On-Demand, providers, transfers or recovery from the Store edition.
+Store packaging wraps the same published Release application used by the other
+Release distributions; packaging differences are not feature tiers.
+
+Parity includes account connections, Windows known-folder backup, custom backup
+roots, Explorer integration, cloud-to-cloud transfers through bounded RAM,
+pause/resume, restart recovery, disconnect choices and preservation of user data.
+Existing state paths, credentials, journals and Windows identities retain the
+contracts in [REBRANDING.md](REBRANDING.md). Cross-distribution recovery must be
+verified; sharing source code or successfully launching a package is not proof.
+
+Platform mechanisms differ: Store updates are managed by Microsoft Store, while
+EXE/MSI use the matching installer updater. Packaged startup and notifications
+use package registrations; unpackaged builds use their Windows registrations.
+Preserve these supported mechanisms while keeping the same user-facing controls
+and feature outcomes. Installer switching remains an explicit operation.
+
+The 2026-10-09 Store certification report rejected `unvirtualizedResources`
+under policy 10.6.3 and requested, among other details, the uninstall policy for
+unvirtualized files. Version 1.2.0 narrows Windows 11 exclusions to the shared
+`%LOCALAPPDATA%\CloudBay\Client` state directory and the two Explorer registry keys
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders`
+and `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders`.
+Windows 10 retains the earlier broad switches because it does not support the
+scoped schema; the minimum supported version remains build 19041. These exclusions
+still require approval for `unvirtualizedResources`.
+See [Microsoft's virtualization guidance](https://learn.microsoft.com/en-us/windows/msix/desktop/flexible-virtualization).
+
+Uninstall is distinct from the app's explicit disconnect workflow. Current
+EXE/MSI removal stops the app and removes its installed components; the Store
+manifest declares no custom uninstall cleanup. Neither is evidence that files
+were downloaded, Windows folder locations restored or sync roots safely detached.
+Do not silently hydrate all cloud data or delete user files as an uninstall side
+effect. Any lifecycle changes must preserve recoverability, document retained
+credentials and journals, and use the same data-safety policy in all editions.
+
+The Store manifest also declares `windows.cloudFiles`: without it, registering a
+packaged Files On-Demand root fails even when virtualization is disabled. Store
+removal can delete online-only placeholder entries. Version 1.2.0 durably marks the
+existing sync baseline before registering a missing root, so reconciliation restores
+those entries instead of hiding their cloud versions. The guard survives failed
+listing/restarts and is cleared for restored entries; subsequent user deletions
+continue to synchronize normally. See [UNINSTALL.md](UNINSTALL.md).
+
+`scripts/test-store-parity.ps1` compares default MSIX virtualization, the former
+broad policy, the scoped candidate and the unpackaged runtime. Its GUID-owned
+fixtures verify native registration/hydration, removal/reinstallation, encrypted
+credential/checkpoint reopening, retained journals, explicit placeholder detachment
+and external registry visibility. It never redirects the user's actual known folders
+or connects real cloud accounts. Default virtualization hides the mapping-key
+writes from the external Windows view; the scoped candidate exposes the two
+required keys while retaining virtualization for an unrelated control key.
+
+Before claiming complete parity, use isolated accounts, roots and package
+identity to verify fresh setup, upgrade, restart recovery, each disconnect mode,
+and removal/reinstallation with configured backup. Include online-only files,
+offline operation and interrupted cleanup. Inspect folder mappings from outside
+the app, retained state and file integrity. Existing installer fixture and Store
+activation tests do not establish configured-backup uninstall safety. Record
+unrun provider-dependent cases explicitly; never use real account data for these
+acceptance tests.
 
 ## Build
 

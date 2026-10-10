@@ -27,6 +27,8 @@ public sealed partial class ClientController
     private string[] _interruptedCloudTransfers = [];
     private int _recoveringCloudTransfers;
     public IReadOnlyList<TransferJobSnapshot> CloudTransferJobs => _cloudTransferEngine?.Snapshots() ?? [];
+    public bool CanPauseTransfers => Settings.IsConfigured || CloudTransferJobs.Any(job =>
+        job.State is not (TransferJobState.Completed or TransferJobState.Cancelled));
 
     private void InitializeCloudTransfers()
     {

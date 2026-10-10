@@ -11,16 +11,21 @@ public sealed partial class MainWindow
 {
     private readonly Dictionary<string, CloudJobRow> _cloudJobRows = new(StringComparer.Ordinal);
     private IReadOnlyList<TransferJobSnapshot>? _cloudTransferJobsPreview;
+    private readonly SemaphoreSlim _transferChoiceQueue = new(1, 1);
+    private TaskCompletionSource<bool>? _returnToTransfer;
+    private bool CanPauseDisplayedTransfers => _viewModel.Preview is null ? _controller.CanPauseTransfers :
+        DisplaySettings.IsConfigured || _viewModel.HasTransferSummary ||
+        _cloudTransferJobsPreview?.Any(job => job.State is not (TransferJobState.Completed or TransferJobState.Cancelled)) == true;
     private sealed record CloudJobRow(SettingsCard Card, TextBlock Detail, ProgressBar Progress, TextBlock ProgressDetail, Button Pause, Button Resume, Button Cancel);
 
     private async void CloudTransfer_Click(object sender, RoutedEventArgs args) => await OpenCloudTransferAsync();
-    private async Task<string?> OpenCloudTransferAsync(TransferLocation? source = null, TransferLocation? destination = null)
+    private async Task<string?> OpenCloudTransferAsync(TransferLocation? source = null, TransferLocation? destination = null, bool preferOneDrive = false)
     {
         if (_closed || _busy || _viewModel.Preview is not null) return null;
-        var dialog = await PickCloudTransferAsync(source, destination);
-        if (dialog?.Source is null || dialog.Destination is null) return null;
         try
         {
+            var dialog = await PickCloudTransferAsync(source, destination, preferOneDrive);
+            if (dialog?.Source is null || dialog.Destination is null) return null;
             var id = await _controller.StartCloudTransferAsync(dialog.Source, dialog.Destination, dialog.Operation,
                 dialog.Conflicts, dialog.Exclusions, _backupUiLifetime.Token);
             ShowInfo("Cloud transfer started. View Activity to pause, resume, or cancel it.");
@@ -31,12 +36,48 @@ public sealed partial class MainWindow
         catch (Exception error) { if (!_closed) ShowError(error); return null; }
     }
 
-    private async Task<CloudTransferDialog?> PickCloudTransferAsync(TransferLocation? source = null, TransferLocation? destination = null)
+    private async Task<CloudTransferDialog?> PickCloudTransferAsync(TransferLocation? source = null, TransferLocation? destination = null, bool preferOneDrive = false)
     {
-        var dialog = new CloudTransferDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this), source, destination)
-        { XamlRoot = RootGrid.XamlRoot, RequestedTheme = RootGrid.RequestedTheme };
-        return await ShowModalAsync(dialog) == ContentDialogResult.Primary && dialog.Source is not null && dialog.Destination is not null ? dialog : null;
+        await _transferChoiceQueue.WaitAsync(_backupUiLifetime.Token);
+        try
+        {
+            CloudTransferDraft? draft = null;
+            var origin = CurrentRoute;
+            while (!_closed)
+            {
+                var dialog = new CloudTransferDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this), source, destination, preferOneDrive, draft)
+                { XamlRoot = RootGrid.XamlRoot, RequestedTheme = RootGrid.RequestedTheme };
+                var result = await ShowModalAsync(dialog);
+                if (dialog.RequestedConnectionProvider is not { } provider)
+                    return result == ContentDialogResult.Primary && dialog.Source is not null && dialog.Destination is not null ? dialog : null;
+
+                // Keep the original caller alive: backup import/restore workflows
+                // must resume their own reviewed operation after connecting.
+                draft = dialog.CaptureDraft();
+                _returnToTransfer = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                TransferConnectionBanner.Visibility = Visibility.Visible;
+                TransferConnectionBanner.IsOpen = true;
+                RequestNavigationRoute(provider == "b2" ? "settings/account" : "settings/onedrive");
+                var resume = await _returnToTransfer.Task.WaitAsync(_backupUiLifetime.Token);
+                _returnToTransfer = null;
+                TransferConnectionBanner.IsOpen = false;
+                TransferConnectionBanner.Visibility = Visibility.Collapsed;
+                if (!resume) return null;
+                RequestNavigationRoute(origin);
+            }
+            return null;
+        }
+        finally
+        {
+            _returnToTransfer = null;
+            TransferConnectionBanner.IsOpen = false;
+            TransferConnectionBanner.Visibility = Visibility.Collapsed;
+            _transferChoiceQueue.Release();
+        }
     }
+
+    private void ReturnToTransfer_Click(object sender, RoutedEventArgs args) => _returnToTransfer?.TrySetResult(true);
+    private void CancelTransferSetup_Click(object sender, RoutedEventArgs args) => _returnToTransfer?.TrySetResult(false);
 
     private void RefreshCloudTransferJobs()
     {
@@ -61,7 +102,7 @@ public sealed partial class MainWindow
                 actions.Children.Add(pause); actions.Children.Add(resume); actions.Children.Add(cancel);
                 var content = new StackPanel { Spacing = 8 }; content.Children.Add(detail); content.Children.Add(progress);
                 content.Children.Add(progressDetail); content.Children.Add(actions);
-                var card = new SettingsCard { HeaderIcon = new FontIcon { Glyph = "\uE753" }, Content = content,
+                var card = new SettingsCard { HeaderIcon = Views.FluentIcons.Create("cloud"), Content = content,
                     ContentAlignment = CommunityToolkit.WinUI.Controls.ContentAlignment.Vertical,
                     HorizontalContentAlignment = HorizontalAlignment.Stretch };
                 row = new(card, detail, progress, progressDetail, pause, resume, cancel); _cloudJobRows[id] = row;

@@ -60,12 +60,10 @@ internal sealed class BackupReviewDialog : ContentDialog
     private StackPanel Begin()
     {
         CloseButtonText = "Cancel"; DefaultButton = ContentDialogButton.Close;
-        Resources["ContentDialogMaxWidth"] = 680d;
+        SourceImportDialog.ConfigureLayout(this);
         return new() { Spacing = 16 };
     }
-    private void Finish(StackPanel body) => Content = new ScrollViewer { Content = body,
-        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-        MaxHeight = 580, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+    private void Finish(StackPanel body) => Content = SourceImportDialog.ScrollContent(body);
     private static InfoBar Notice(string message) => new() { IsOpen = true, IsClosable = false,
         Severity = InfoBarSeverity.Warning, Message = message };
     private static void AddPlan(StackPanel body, string title, FolderImportPlan plan)

@@ -1,29 +1,31 @@
-# CloudInlet 1.1.2 upgrade compatibility
+# CloudBay to CloudInlet: one-time upgrade bridge
 
-CloudInlet is the new product name for CloudBay. Version 1.1.2 is a patch release for the rename. The published 1.0.0, 1.1.0 and 1.1.1 releases and their tags remain unchanged in the renamed [CloudInlet repository](https://github.com/TahsinFaiyaz30/CloudInlet).
+CloudBay users upgrade through the immutable **1.1.2** bridge before taking later CloudInlet releases. Published releases and tags are never rebuilt or replaced.
 
-## Existing installations
+## Upgrade sequence
 
-Use **Settings → About → Check for updates** in the existing app. The 1.1.2 update retains the installed EXE/MSI format and Debug/Release flavor. It upgrades the same Windows product, changes its display name and shortcuts to CloudInlet, and reopens CloudInlet. Existing installations retain their installation directory; fresh installations default to `Programs\CloudInlet` or `Programs\CloudInlet Debug`.
+1. An original CloudBay installation uses its existing `TahsinFaiyaz30/CloudBay` schema-1 feed to install the frozen 1.1.2 package.
+2. That package changes the product/executable to CloudInlet and retains the user's accounts, backup roots, Windows folder mappings, checkpoints, installer kind and build flavor.
+3. Its CloudInlet updater reads `TahsinFaiyaz30/CloudInlet` and `updates-v2.json`. Subsequent releases use only canonical `CloudInlet-*` assets and schema 2.
 
-Accounts, backup locations, exclusion rules, transfer plans, acknowledged checkpoints, completion receipts and update preferences remain in place. Existing local backup directories and B2 prefixes are not renamed or moved: renaming a configured directory would invalidate Windows folder mappings and source identities. Fresh defaults use the CloudInlet name.
+The archived CloudBay repository keeps its seven existing bridge assets, including the byte-identical 1.1.2 aliases and schema-1 manifest. It needs no new releases or synchronization. The original source history remains in the canonical CloudInlet repository.
 
-The established `%LOCALAPPDATA%\CloudBay` private state directory, Windows DPAPI entropy, Cloud Files registration IDs, instance pipe, EXE AppIds, MSI UpgradeCodes and distribution registry keys remain stable compatibility identifiers. They are not product display names. Renaming these would strand encrypted credentials, recovery records, native placeholders or old updater handoffs. The Store startup task and manifest application ID also remain stable, preserving the Windows application identity; Store production package identity continues to come from the existing reserved Partner Center identity.
+## Compatibility retirement in the next release
 
-Startup registration changes to CloudInlet while preserving the user's enabled or disabled Windows startup choice. The migration applies only to an owned legacy command in the current installation directory. A small legacy `CloudBay.exe` compatibility launcher remains in the installed payload because published update workers verify and reopen that exact executable. It launches the actual `CloudInlet.exe`, preserving the new Windows process name and WinUI resource lookup. CloudInlet shares the existing instance identity.
+The working tree removes schema-1 update selection/downloads, legacy release-alias generation, the `CloudBay.exe` compatibility-launcher project, and obsolete executable/helper fallbacks from future installer payloads. Packaging rejects stale CloudBay binaries and legacy feed assets instead of silently shipping them. The bridge remains available as already-published bytes; it is not built by the new release pipeline.
 
-## Legacy update bridge
+Existing EXE/MSI installations are upgraded **in their registered directory**, including a directory historically named `CloudBay` or `CloudBay Debug`. Fresh installs use `Programs\CloudInlet` or `Programs\CloudInlet Debug`. The frozen CloudInlet 1.1.2 worker verifies and reopens `CloudInlet.exe` at that original directory; relocating it would require keeping forwarding executables indefinitely for clients that skip intermediate versions. The unreleased directory-relocation implementation has therefore been retired. Its prior working-tree patch is retained locally at `artifacts/full-audit/pre-retirement-packaging.patch`.
 
-Published CloudBay updaters strictly trust `TahsinFaiyaz30/CloudBay`, `updates-v1.json`, and `CloudBay-X.Y.Z-...` package filenames. They reject a redirect to a differently named GitHub repository. A repository rename alone therefore cannot deliver this upgrade.
+Portable script installations also retain their validated registered directory. They refuse to take over managed EXE/MSI installations. An original CloudBay installation must take the published bridge first. Installers do not recursively remove historical directories or unknown files. An old EXE installation can retain an already-installed historical launcher until its normal uninstaller removes its owned files; future packages contain no such launcher.
 
-The main source repository is renamed to **CloudInlet**. The old **CloudBay** repository name hosts a small, static update bridge containing the verified 1.1.2 legacy package aliases and schema-1 manifest. Those aliases contain the identical CloudInlet installers and portable payloads. After upgrading to 1.1.2, the new updater uses the canonical CloudInlet `updates-v2.json` feed and CloudInlet package names. The bridge must remain available for installations that have not yet upgraded; it needs no ongoing synchronization to later releases.
+These are unreleased source changes. `version.json` has not been bumped and published 1.1.2 bytes have not changed. Publishing requires a new version and successful installer acceptance. `scripts/test-installers.ps1` exercises the frozen 1.1.2 installer/worker to a synthetic newer version, then a second update using the current worker, for both EXE and MSI.
 
-Reusing the old repository name deliberately replaces GitHub's repository-name redirect. The bridge README points to the canonical source, issues and historical releases. Canonical release packaging retains both manifests and verifies matching alias lengths and SHA-256 digests; existing published release bytes are never replaced.
+## Durable identity and user data
 
-## Provider and recovery compatibility
+The following remain stable data/Windows identities, rather than a second product implementation: `%LOCALAPPDATA%\CloudBay`, DPAPI entropy, SQLite journals, `.cloudbay` recovery metadata, Cloud Files root IDs, pipes/mutexes, EXE AppIds, MSI UpgradeCodes, `Software\CloudBay\Distribution`, Store application ID `CloudBay` and startup task `CloudBayStartup`.
 
-The registered OneDrive public client ID is unchanged, so saved personal/work accounts retain their refresh tokens. New environment overrides use `CLOUDINLET_ONEDRIVE_CLIENT_ID` and `CLOUDINLET_ONEDRIVE_TENANT_ID`; legacy `CLOUDBAY_...` overrides remain supported when the new values are absent. Microsoft account-consent screens may show the app registration's independently managed display name until its owner updates it in Entra.
+Accounts, backup paths and cloud prefixes are not renamed. These identities cannot be changed cosmetically without risking encrypted accounts, online-only files, Windows registrations or restart recovery. Any future identity migration needs its own transactional migration and recovery acceptance. Existing deterministic keep-both receipts remain readable; new names use CloudInlet. Updater-cache ownership and safe cleanup of historical cached packages also remain stable.
 
-B2 upload intent metadata, existing internal backup namespaces, local recovery partials and acknowledged keep-both filenames retain their original identities. New keep-both filenames use CloudInlet; recovery accepts only the exact deterministic legacy alternate name as well. Completed files are not copied again merely because the product name changed.
+The OneDrive public application registration and legacy environment fallbacks remain unchanged so existing deployments and saved refresh tokens continue working. The small startup-record recovery routine also remains part of Windows-state preservation: it recognizes only this installation's old Run entry and carries Windows' disabled-startup choice forward without shipping an old executable. The rename does not change transfer scheduling, integrity checks or bounded-RAM cloud-to-cloud payload handling.
 
-The rename does not change transfer scheduling, integrity checks or RAM-only cloud payload handling. Live provider tests remain an explicit opt-in acceptance gate; ordinary release builds exclude that category rather than reporting a skipped test as passed.
+Live provider tests require explicitly provisioned isolated credentials and destinations. Ordinary release validation excludes that category and does not count it as passed.

@@ -2,6 +2,7 @@
     x:Class="CloudInlet.Views.TrayWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:views="using:CloudInlet.Views"
     xmlns:animated="using:Microsoft.UI.Xaml.Controls.AnimatedVisuals">
     <Window.SystemBackdrop>
         <MicaBackdrop Kind="BaseAlt" />
@@ -10,32 +11,30 @@
         x:Name="TrayRoot"
         Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}">
         <Grid.Resources>
-            <Style x:Key="TraySuccessIconStyle" TargetType="FontIcon">
+            <Style x:Key="TraySuccessIconStyle" TargetType="IconSourceElement">
                 <Setter Property="Foreground" Value="{ThemeResource SystemFillColorSuccessBrush}" />
             </Style>
-            <Style x:Key="TrayCautionIconStyle" TargetType="FontIcon">
+            <Style x:Key="TrayCautionIconStyle" TargetType="IconSourceElement">
                 <Setter Property="Foreground" Value="{ThemeResource SystemFillColorCautionBrush}" />
             </Style>
-            <Style x:Key="TrayNeutralIconStyle" TargetType="FontIcon">
+            <Style x:Key="TrayNeutralIconStyle" TargetType="IconSourceElement">
                 <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
             </Style>
-            <Style x:Key="TrayAccentIconStyle" TargetType="FontIcon">
+            <Style x:Key="TrayAccentIconStyle" TargetType="IconSourceElement">
                 <Setter Property="Foreground" Value="{ThemeResource AccentTextFillColorPrimaryBrush}" />
             </Style>
             <DataTemplate x:Key="TrayRecentActivityTemplate">
-                <Grid Padding="0,12" ColumnSpacing="12" Loaded="ActivityRow_Loaded">
+                <Grid Padding="0,16" ColumnSpacing="12" Loaded="ActivityRow_Loaded">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <FontIcon
-                        Glyph="{Binding Glyph}"
-                        FontSize="20"
+                    <FontIcon Glyph="{Binding Glyph}" FontSize="20"
                         Margin="0,2,0,0"
                         VerticalAlignment="Top"
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    <StackPanel Grid.Column="1" Spacing="4">
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"  Width="20" Height="20" />
+                    <StackPanel Grid.Column="1" Spacing="6">
                         <TextBlock
                             Text="{Binding FileName}"
                             Style="{StaticResource BodyStrongTextBlockStyle}"
@@ -54,31 +53,31 @@
                         <Button x:Name="TrayActivityOpenFolder" Width="32" Height="32" Padding="6" Style="{StaticResource SubtleButtonStyle}"
                                 Visibility="{Binding Actions.OpenFolderVisibility}" ToolTipService.ToolTip="{Binding Actions.OpenFolderToolTip}"
                                 AutomationProperties.Name="Open activity folder" Click="ActivityOpenFolder_Click">
-                            <FontIcon Glyph="&#xE8B7;" FontSize="16" />
+                            <FontIcon Glyph="&#xE8B7;" FontSize="16" Width="16" Height="16" />
                         </Button>
                         <Button x:Name="TrayActivityViewCloud" Width="32" Height="32" Padding="6" Style="{StaticResource SubtleButtonStyle}"
                                 Visibility="{Binding Actions.CloudVisibility}" ToolTipService.ToolTip="{Binding Actions.CloudToolTip}"
                                 AutomationProperties.Name="View activity file versions in Backblaze B2" Click="ActivityViewCloud_Click">
-                            <FontIcon Glyph="&#xE753;" FontSize="16" />
+                            <FontIcon Glyph="&#xE753;" FontSize="16" Width="16" Height="16" />
                         </Button>
                     </StackPanel>
                 </Grid>
             </DataTemplate>
             <DataTemplate x:Key="TrayTransferTemplate">
-                <Grid Padding="0,8" ColumnSpacing="12" Loaded="ActivityRow_Loaded">
+                <Grid Padding="0,14" ColumnSpacing="12" Loaded="ActivityRow_Loaded">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <FontIcon Glyph="{Binding Glyph}" FontSize="18" Margin="0,2,0,0" VerticalAlignment="Top"
-                              Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    <StackPanel Grid.Column="1" Spacing="4">
+                              Foreground="{ThemeResource TextFillColorSecondaryBrush}"  Width="18" Height="18" />
+                    <StackPanel Grid.Column="1" Spacing="6">
                         <TextBlock Text="{Binding FileName}" Style="{StaticResource BodyStrongTextBlockStyle}"
                                    TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Location}" />
                         <TextBlock Text="{Binding Location}" Style="{StaticResource CloudInletSecondaryTextStyle}"
                                    TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" ToolTipService.ToolTip="{Binding Location}" />
-                        <TextBlock Text="{Binding Summary}" Style="{StaticResource CloudInletSecondaryTextStyle}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                        <TextBlock Text="{Binding Summary}" Style="{StaticResource CloudInletSecondaryTextStyle}" TextWrapping="Wrap"
                                    ToolTipService.ToolTip="{Binding Summary}" />
                         <TextBlock x:Name="TrayFileSpeed" Text="{Binding SpeedText}" Visibility="{Binding SpeedVisibility}"
                                    Style="{StaticResource CloudInletSecondaryTextStyle}" />
@@ -91,12 +90,12 @@
                         <Button x:Name="TrayActivityOpenFolder" Width="32" Height="32" Padding="6" Style="{StaticResource SubtleButtonStyle}"
                                 Visibility="{Binding Actions.OpenFolderVisibility}" ToolTipService.ToolTip="{Binding Actions.OpenFolderToolTip}"
                                 AutomationProperties.Name="Open activity folder" Click="ActivityOpenFolder_Click">
-                            <FontIcon Glyph="&#xE8B7;" FontSize="16" />
+                            <FontIcon Glyph="&#xE8B7;" FontSize="16" Width="16" Height="16" />
                         </Button>
                         <Button x:Name="TrayActivityViewCloud" Width="32" Height="32" Padding="6" Style="{StaticResource SubtleButtonStyle}"
                                 Visibility="{Binding Actions.CloudVisibility}" ToolTipService.ToolTip="{Binding Actions.CloudToolTip}"
                                 AutomationProperties.Name="View activity file versions in Backblaze B2" Click="ActivityViewCloud_Click">
-                            <FontIcon Glyph="&#xE753;" FontSize="16" />
+                            <FontIcon Glyph="&#xE753;" FontSize="16" Width="16" Height="16" />
                         </Button>
                     </StackPanel>
                 </Grid>
@@ -108,16 +107,19 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <!-- The identity stays on Mica; the activity uses one distinct content layer. -->
-        <Grid Padding="24,20,20,20" ColumnSpacing="12">
+        <!-- A quiet Mica header, a readable activity surface and persistent actions. -->
+        <Grid Padding="24,24,20,24" ColumnSpacing="12">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <Image Source="/Assets/CloudInlet-32.png" Width="32" Height="32" />
-            <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
-                <TextBlock x:Name="TrayProductName" Text="CloudInlet" Style="{StaticResource BodyStrongTextBlockStyle}" />
+            <Border Width="44" Height="44" CornerRadius="8"
+                    Background="{ThemeResource SubtleFillColorSecondaryBrush}">
+                <Image Source="/Assets/CloudInlet-32.png" Width="32" Height="32" />
+            </Border>
+            <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
+                <TextBlock x:Name="TrayProductName" Text="CloudInlet" Style="{StaticResource BodyStrongTextBlockStyle}" FontSize="16" />
                 <TextBlock
                     x:Name="TrayBucket"
                     Text="{Binding BucketLabel}"
@@ -132,18 +134,10 @@
                 Padding="10"
                 Style="{StaticResource SubtleButtonStyle}"
                 AutomationProperties.Name="Quick settings"
-                ToolTipService.ToolTip="Quick settings"
-                PointerEntered="QuickSettings_PointerEntered"
-                PointerExited="QuickSettings_PointerExited"
-                GotFocus="QuickSettings_GotFocus"
-                LostFocus="QuickSettings_LostFocus">
+                ToolTipService.ToolTip="Quick settings">
                 <AnimatedIcon x:Name="QuickSettingsIcon" Width="20" Height="20">
-                    <AnimatedIcon.Source>
-                        <animated:AnimatedSettingsVisualSource />
-                    </AnimatedIcon.Source>
-                    <AnimatedIcon.FallbackIconSource>
-                        <FontIconSource FontFamily="{ThemeResource SymbolThemeFontFamily}" Glyph="&#xE713;" />
-                    </AnimatedIcon.FallbackIconSource>
+                    <AnimatedIcon.Source><animated:AnimatedSettingsVisualSource /></AnimatedIcon.Source>
+                    <AnimatedIcon.FallbackIconSource><FontIconSource Glyph="&#xE713;" FontSize="20" /></AnimatedIcon.FallbackIconSource>
                 </AnimatedIcon>
                 <Button.Flyout>
                     <MenuFlyout
@@ -152,7 +146,7 @@
                         Opening="QuickSettings_Opening"
                         Closed="QuickSettings_Closed">
                         <MenuFlyoutItem x:Name="QuickSyncNow" Text="Sync now" Click="SyncNow_Click">
-                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE895;" /></MenuFlyoutItem.Icon>
+                            <MenuFlyoutItem.Icon><IconSourceElement IconSource="{views:FluentIcon Kind=sync, Size=24}"  Width="24" Height="24" Tag="sync" /></MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
                         <MenuFlyoutSubItem x:Name="PauseMenu" Text="Pause syncing">
                             <MenuFlyoutSubItem.Icon><FontIcon Glyph="&#xE769;" /></MenuFlyoutSubItem.Icon>
@@ -169,24 +163,29 @@
                             x:Name="MeteredQuickSetting"
                             Text="Pause on metered connections"
                             Click="MeteredQuickSetting_Click">
-                            <ToggleMenuFlyoutItem.Icon><FontIcon Glyph="&#xE701;" /></ToggleMenuFlyoutItem.Icon>
+                            <ToggleMenuFlyoutItem.Icon><IconSourceElement IconSource="{views:FluentIcon Kind=globe, Size=24}"  Width="24" Height="24" Tag="globe" /></ToggleMenuFlyoutItem.Icon>
                         </ToggleMenuFlyoutItem>
                         <ToggleMenuFlyoutItem
                             x:Name="BatteryQuickSetting"
                             Text="Pause with Battery Saver"
                             Click="BatteryQuickSetting_Click">
-                            <ToggleMenuFlyoutItem.Icon><FontIcon Glyph="&#xE850;" /></ToggleMenuFlyoutItem.Icon>
+                            <ToggleMenuFlyoutItem.Icon><IconSourceElement IconSource="{views:FluentIcon Kind=battery, Size=24}"  Width="24" Height="24" Tag="battery" /></ToggleMenuFlyoutItem.Icon>
                         </ToggleMenuFlyoutItem>
                         <MenuFlyoutSeparator />
                         <MenuFlyoutItem x:Name="QuickOpenFolder" Text="Open CloudInlet folder" Click="OpenFolder_Click">
-                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8B7;" /></MenuFlyoutItem.Icon>
+                            <MenuFlyoutItem.Icon><IconSourceElement IconSource="{views:FluentIcon Kind=folder, Size=24}"  Width="24" Height="24" Tag="folder" /></MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
                         <MenuFlyoutItem Text="All settings" Click="AllSettings_Click">
-                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE713;" /></MenuFlyoutItem.Icon>
+                            <MenuFlyoutItem.Icon>
+                                <AnimatedIcon Width="24" Height="24">
+                                    <AnimatedIcon.Source><animated:AnimatedSettingsVisualSource /></AnimatedIcon.Source>
+                                    <AnimatedIcon.FallbackIconSource><FontIconSource Glyph="&#xE713;" /></AnimatedIcon.FallbackIconSource>
+                                </AnimatedIcon>
+                            </MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
                         <MenuFlyoutSeparator />
                         <MenuFlyoutItem Text="Quit CloudInlet" Click="Quit_Click">
-                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE7E8;" /></MenuFlyoutItem.Icon>
+                            <MenuFlyoutItem.Icon><IconSourceElement IconSource="{views:FluentIcon Kind=power, Size=24}"  Width="24" Height="24" Tag="power" /></MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
                     </MenuFlyout>
                 </Button.Flyout>
@@ -196,8 +195,10 @@
         <Border
             x:Name="TrayContentSurface"
             Grid.Row="1"
-            Margin="12,0,12,0"
+            Margin="16,0,16,0"
             CornerRadius="8"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
             Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
             <!-- This viewport can shrink on a small monitor without hiding the footer. -->
             <ScrollViewer
@@ -207,23 +208,21 @@
                 VerticalScrollBarVisibility="Auto"
                 HorizontalScrollBarVisibility="Disabled"
                 HorizontalScrollMode="Disabled">
-                <StackPanel Spacing="20">
+                <StackPanel Spacing="24">
                     <Grid ColumnSpacing="16">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <FontIcon
-                            x:Name="TrayStatusGlyph"
-                            Glyph="{Binding StatusGlyph}"
-                            FontSize="32"
-                            VerticalAlignment="Top"
-                            Margin="0,2,0,0" />
-                        <StackPanel Grid.Column="1" Spacing="8">
+                        <Border Width="48" Height="48" CornerRadius="24" VerticalAlignment="Top"
+                                Background="{ThemeResource SubtleFillColorSecondaryBrush}">
+                            <IconSourceElement x:Name="TrayStatusGlyph" IconSource="{Binding StatusGlyph, Converter={StaticResource FluentGlyphConverter}, ConverterParameter=28}"   Width="28" Height="28" />
+                        </Border>
+                        <StackPanel Grid.Column="1" Spacing="8" Margin="0,2,0,0">
                             <TextBlock
                                 x:Name="TrayStatusTitle"
                                 Text="{Binding StatusTitle}"
-                                Style="{StaticResource SubtitleTextBlockStyle}"
+                                Style="{StaticResource SubtitleTextBlockStyle}" FontSize="20"
                                 TextWrapping="Wrap" />
                             <TextBlock
                                 x:Name="TrayStatusDetail"
@@ -238,7 +237,7 @@
                                 Style="{StaticResource CloudInletSecondaryTextStyle}" />
                         </StackPanel>
                     </Grid>
-                    <StackPanel x:Name="TrayTransferPanel" Visibility="Collapsed" Spacing="8">
+                    <StackPanel x:Name="TrayTransferPanel" Visibility="Collapsed" Spacing="12">
                         <ProgressBar x:Name="TrayProgress" Value="{Binding Progress}" Maximum="100" AutomationProperties.Name="{Binding ProgressLabel}" />
                         <TextBlock
                             x:Name="TrayProgressDetail"
@@ -246,7 +245,7 @@
                             Style="{StaticResource CloudInletSecondaryTextStyle}" TextWrapping="Wrap" />
                     </StackPanel>
                     <StackPanel x:Name="TrayLiveTransfers" Visibility="Collapsed" Spacing="8">
-                        <TextBlock Text="In progress" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                        <TextBlock Text="In progress" Style="{StaticResource BodyStrongTextBlockStyle}" AutomationProperties.HeadingLevel="Level2" />
                         <TextBlock x:Name="TrayTransferSpeed" Text="{Binding TransferSpeedSummary}"
                                    Style="{StaticResource CloudInletSecondaryTextStyle}" Visibility="Collapsed"
                                    AutomationProperties.Name="Measured transfer speed" />
@@ -270,7 +269,7 @@
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
-                        <TextBlock Grid.Row="1" Text="Recent activity" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                        <TextBlock Grid.Row="1" Text="Recent activity" Style="{StaticResource BodyStrongTextBlockStyle}" AutomationProperties.HeadingLevel="Level2" />
                     </Grid>
                     <ListView
                         x:Name="TrayActivitySection"
@@ -293,7 +292,7 @@
             </ScrollViewer>
         </Border>
 
-        <Grid x:Name="TrayFooter" Grid.Row="2" Padding="20,16,20,20" ColumnSpacing="12">
+        <Grid x:Name="TrayFooter" Grid.Row="2" Padding="24,20,24,24" ColumnSpacing="12">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
@@ -309,7 +308,9 @@
                 HorizontalAlignment="Stretch"
                 Click="TrayPrimary_Click">
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                    <FontIcon x:Name="TrayPrimaryGlyph" Glyph="&#xE8B7;" FontSize="16" />
+                    <IconSourceElement x:Name="TrayPrimaryGlyph" Width="16" Height="16">
+                        <IconSourceElement.IconSource><FontIconSource Glyph="&#xE8B7;" FontSize="16" /></IconSourceElement.IconSource>
+                    </IconSourceElement>
                     <TextBlock x:Name="TrayPrimaryLabel" Text="Open folder" />
                 </StackPanel>
             </Button>
@@ -321,7 +322,7 @@
                 HorizontalAlignment="Stretch"
                 Click="ViewActivity_Click">
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                    <FontIcon Glyph="&#xE81C;" FontSize="16" />
+                    <FontIcon Glyph="&#xE81C;" FontSize="16" Width="16" Height="16" />
                     <TextBlock x:Name="TrayActivityLabel" Text="Activity" />
                 </StackPanel>
             </Button>

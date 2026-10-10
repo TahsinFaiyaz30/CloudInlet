@@ -54,7 +54,7 @@ internal static class UpdateWorker
                     code = installer.ExitCode;
                 }
             }
-            if (code != 0 && code != 3010) throw new IOException("The installer did not complete (code " + code + "). Your current installation was preserved.");
+            if (code != 0 && code != 3010) throw new IOException("The installer did not complete (code " + code + "). Open CloudInlet or run the installer again to repair the installation.");
             CheckNormalPath(root, true);
             var installed = Read<Distribution>(Path.Combine(root, "distribution.json"));
             if (installed.Version != request.TargetVersion || installed.InstallerKind != request.InstallerKind || installed.BuildFlavor != request.BuildFlavor)
@@ -105,7 +105,7 @@ internal static class UpdateWorker
         if (ParseVersion(request.TargetVersion) <= installedVersion) throw new IOException("An automatic update must be newer than the installed version.");
         var cache = CacheRoot(request.BuildFlavor);
         CheckNormalPath(cache, true);
-        // Cache ownership is durable state shared with installed CloudBay helpers.
+        // The cache marker is a durable ownership identity, not a release format.
         var owner = Path.Combine(cache, ".cloudbay-update-cache-v1");
         CheckNormalPath(owner, false);
         const string marker = "CloudBay update cache v1\n";
@@ -117,7 +117,7 @@ internal static class UpdateWorker
         var suffix = request.TargetVersion + "-win-x64-" + request.BuildFlavor.ToLowerInvariant() + "-setup." + request.InstallerKind.ToLowerInvariant();
         var packageName = Path.GetFileName(request.PackagePath);
         if (!string.Equals(Path.GetDirectoryName(Path.GetFullPath(request.PackagePath)), cache, StringComparison.OrdinalIgnoreCase) ||
-            (packageName != "pending-CloudInlet-" + suffix && packageName != "pending-CloudBay-" + suffix))
+            packageName != "pending-CloudInlet-" + suffix)
             throw new IOException("The update package does not match this installation.");
         var root = Path.GetFullPath(request.InstallDirectory).TrimEnd('\\');
         if (!Path.IsPathRooted(request.InstallDirectory) || root.Length < 8 || root.StartsWith("\\\\", StringComparison.Ordinal) || root.IndexOf('"') >= 0)
@@ -150,8 +150,7 @@ internal static class UpdateWorker
             var image = process.MainModule?.FileName;
             var directory = Path.GetFullPath(request.InstallDirectory);
             if (process.StartTime.ToUniversalTime().Ticks != request.ParentStartUtcTicks ||
-                (!string.Equals(image, Path.Combine(directory, "CloudInlet.exe"), StringComparison.OrdinalIgnoreCase) &&
-                 !string.Equals(image, Path.Combine(directory, "CloudBay.exe"), StringComparison.OrdinalIgnoreCase)))
+                !string.Equals(image, Path.Combine(directory, "CloudInlet.exe"), StringComparison.OrdinalIgnoreCase))
                 throw new IOException("The process waiting for an update is not this CloudInlet installation.");
             ready();
             if (!process.WaitForExit(90000)) throw new IOException("CloudInlet is still safely finishing transfers. Try the update again when syncing is idle.");
@@ -167,11 +166,7 @@ internal static class UpdateWorker
     }
 
     private static string CacheRoot(string flavor) => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CloudBay", flavor == "Debug" ? @"Debug\Client\Updates" : @"Client\Updates");
-    private static string ApplicationImage(string directory)
-    {
-        var current = Path.Combine(Path.GetFullPath(directory), "CloudInlet.exe");
-        return File.Exists(current) ? current : Path.Combine(Path.GetFullPath(directory), "CloudBay.exe");
-    }
+    private static string ApplicationImage(string directory) => Path.Combine(Path.GetFullPath(directory), "CloudInlet.exe");
     private static void CheckOwned(string path, string cache)
     {
         var absolute = Path.GetFullPath(path);

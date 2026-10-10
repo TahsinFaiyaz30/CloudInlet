@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using CloudInlet.Application;
 using CloudInlet.Core;
@@ -25,7 +26,7 @@ namespace CloudInlet;
 public sealed partial class MainWindow : Window
 {
     private readonly ClientController _controller;
-    private const double PageColumnWidth = 1120;
+    private const double PageColumnWidth = 1240;
     private string _statusStyleKey = "";
     private readonly ClientViewModel _viewModel;
     private readonly Dictionary<string, ToggleSwitch> _backupSwitches = new(StringComparer.OrdinalIgnoreCase);
@@ -65,12 +66,13 @@ public sealed partial class MainWindow : Window
     private bool _closed;
     private int _refreshPending;
     private int _activityViewRevision;
+    private readonly ConditionalWeakTable<DependencyObject, object> _activityActionVisibilityRegistrations = new();
     private AppSettings? _loadedSettings;
     private string _versionPath = "";
     private ActivityLocation? _versionLocation;
     private int _activityCloudRevision;
     private string? _activityActionValidationPath;
-    private bool? _compactLayout;
+    private string? _navigationValidationPath;
     private string _currentPage = "overview";
     private string _settingsRoute = "home";
     private string _pendingInitialRoute = "overview";
@@ -90,6 +92,7 @@ public sealed partial class MainWindow : Window
     public string CurrentPageTitle => PageTitle.Text;
     public string CurrentRoute => SettingsPage.Visibility == Visibility.Visible
         ? _settingsRoute == "home" ? "settings" : $"settings/{_settingsRoute}"
+        : ServicesPage.Visibility == Visibility.Visible ? "services"
         : ActivityPage.Visibility == Visibility.Visible ? "activity"
         : BackupPage.Visibility == Visibility.Visible ? "backup"
         : FilesPage.Visibility == Visibility.Visible ? "files" : "overview";
@@ -101,6 +104,10 @@ public sealed partial class MainWindow : Window
         // events. Its SettingsItem is created when the native template loads.
         _pendingInitialRoute = ReadInitialNavigationRoute();
         InitializeComponent();
+        Views.FluentIconMotion.Attach(RootGrid);
+        NavigationSearch.QueryIcon = FluentIcons.Create("search", 20);
+        InitializeNavigationSearch();
+        AccountCredentialFields.SizeChanged += (_, _) => UpdateResponsiveLayout();
         _openFolderAccentStyle = OpenFolderButton.Style;
         _viewModel = new ClientViewModel(controller);
         ExclusionsEditor.OwnerWindowHandle = WinRT.Interop.WindowNative.GetWindowHandle(this);
@@ -110,8 +117,11 @@ public sealed partial class MainWindow : Window
             await _controller.UpdatePreferencesAsync(update);
         };
         RootGrid.DataContext = _viewModel;
+        InitializeCloudServices();
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
+        RootGrid.ActualThemeChanged += (_, _) => UpdateCaptionTheme();
+        UpdateCaptionTheme();
         AppWindow.Title = BuildInfo.ProductName;
         AppTitleBar.Title = BuildInfo.ProductName;
         VersionCard.Description = $"Version {BuildInfo.Version} · {BuildInfo.Flavor}";
@@ -119,10 +129,11 @@ public sealed partial class MainWindow : Window
         var dpiScale = GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this)) / 96d;
         if (dpiScale <= 0) dpiScale = 1;
         var margin = (int)Math.Round(32 * dpiScale);
-        var initialWidth = Math.Min((int)Math.Round(1360 * dpiScale), workArea.Width - margin);
-        var initialHeight = Math.Min((int)Math.Round(900 * dpiScale), workArea.Height - margin);
+        var initialWidth = Math.Min((int)Math.Round(1080 * dpiScale), Math.Max(1, workArea.Width - margin));
+        var initialHeight = Math.Min((int)Math.Round(720 * dpiScale), Math.Max(1, workArea.Height - margin));
         AppWindow.MoveAndResize(new RectInt32(workArea.X + (workArea.Width - initialWidth) / 2,
             workArea.Y + (workArea.Height - initialHeight) / 2, initialWidth, initialHeight));
+        InitializeWindowSizeConstraints();
         var icon = Path.Combine(AppContext.BaseDirectory, "Assets", "CloudInlet.ico");
         if (File.Exists(icon)) AppWindow.SetIcon(icon);
         AppWindow.Closing += (_, args) =>
@@ -139,6 +150,7 @@ public sealed partial class MainWindow : Window
         Closed += (_, _) =>
         {
             _closed = true;
+            DisposeWindowSizeConstraints();
             _backupUiLifetime.Cancel();
             _activeDialog?.Hide();
             DisposeBackupUiWhenIdle();
@@ -154,23 +166,28 @@ public sealed partial class MainWindow : Window
         if (Navigation.SelectedItem is NavigationViewItem { Tag: "backup" }) RefreshBackups(refreshMetadata: true);
         _controller.Changed += Controller_Changed;
         Navigation.Loaded += Navigation_Loaded;
-        Navigation.ItemInvoked += (_, args) => { if (args.IsSettingsInvoked) OpenSettingsRoute("home"); };
         RootGrid.KeyDown += (_, args) =>
         {
             if (args.Key == global::Windows.System.VirtualKey.GoBack ||
                 (args.Key == global::Windows.System.VirtualKey.Left &&
                  Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(global::Windows.System.VirtualKey.Menu).HasFlag(global::Windows.UI.Core.CoreVirtualKeyStates.Down)))
             {
-                if (SettingsPage.Visibility == Visibility.Visible && _settingsRoute != "home") { ReturnToSettingsHome(); args.Handled = true; }
+                if (CanNavigateToParent) { NavigateToParent(); args.Handled = true; }
             }
         };
         RootGrid.SizeChanged += (_, _) => UpdateResponsiveLayout();
+        ContentLayoutGrid.SizeChanged += (_, _) => UpdateResponsiveLayout();
+        ForegroundLayout.SizeChanged += (_, _) => UpdateResponsiveLayout();
         OverviewPage.SizeChanged += (_, _) => UpdateResponsiveLayout();
         BackupPage.SizeChanged += (_, _) => UpdateResponsiveLayout();
+        BackupRows.SizeChanged += (_, _) => UpdateFolderCardLayouts();
+        MoreBackupRows.SizeChanged += (_, _) => UpdateFolderCardLayouts();
         FilesPage.SizeChanged += (_, _) => UpdateResponsiveLayout();
         SettingsPage.SizeChanged += (_, _) => UpdateResponsiveLayout();
         ActivityPage.SizeChanged += (_, _) => UpdateResponsiveLayout();
         Navigation.DisplayModeChanged += (_, _) => UpdateResponsiveLayout();
+        Navigation.PaneOpened += (_, _) => UpdateResponsiveLayout();
+        Navigation.PaneClosed += (_, _) => UpdateResponsiveLayout();
         _uiSettings.TextScaleFactorChanged += TextScaleFactor_Changed;
         RootGrid.Loaded += (_, _) => { MeasureNavigationPane(); RefreshFolderIconSources(); };
     }
@@ -233,8 +250,8 @@ public sealed partial class MainWindow : Window
 
     private static string NormalizeNavigationRoute(string? route) => route?.Trim() switch
     {
-        "activity" => "activity", "backup" => "backup", "files" => "files", "settings" or "settings/home" => "settings",
-        "settings/account" => "settings/account", "settings/sync" => "settings/sync",
+        "activity" => "activity", "backup" => "backup", "files" => "files", "services" => "services", "settings" or "settings/home" => "settings",
+        "settings/account" => "settings/account", "settings/onedrive" => "settings/onedrive", "settings/sync" => "settings/sync",
         "settings/network" => "settings/network", "settings/appearance" => "settings/appearance",
         "settings/general" => "settings/general", "settings/about" => "settings/about",
         "settings/notifications" => "settings/notifications",
@@ -247,6 +264,11 @@ public sealed partial class MainWindow : Window
         try
         {
             Navigation.ApplyTemplate();
+            if (Navigation.SettingsItem is NavigationViewItem settingsItem)
+            {
+                settingsItem.Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudInletNavigationItemStyle"];
+                settingsItem.Icon = FluentIcons.Create("settings");
+            }
             _navigationTemplateReady = true;
             ApplyNavigationRoute(_pendingInitialRoute);
             AssertNavigationPresentation(_pendingInitialRoute);
@@ -264,11 +286,13 @@ public sealed partial class MainWindow : Window
     private void RequestNavigationRoute(string route)
     {
         route = NormalizeNavigationRoute(route);
+        RecordNavigationValidation("request-before", route);
         // A tray or activation action may arrive before Loaded. It takes
         // precedence over the captured startup route when restoration runs.
         if (!_initialNavigationReady.Task.IsCompletedSuccessfully) _pendingInitialRoute = route;
         ApplyNavigationRoute(route);
         PersistNavigationRoute();
+        RecordNavigationValidation("request-after", route);
     }
 
     private void ApplyNavigationRoute(string route)
@@ -282,10 +306,9 @@ public sealed partial class MainWindow : Window
             ShowPage(page);
             if (_navigationTemplateReady)
             {
-                var selectedItem = isSettings ? Navigation.SettingsItem
-                    : Navigation.MenuItems.Cast<NavigationViewItem>().First(item => (string)item.Tag == page);
+                var selectedItem = NavigationItemForRoute(route);
                 if (selectedItem is null) throw new InvalidOperationException("The loaded navigation template did not create its Settings item.");
-                Navigation.SelectedItem = selectedItem;
+                SelectNavigationSection(selectedItem);
             }
         }
         finally { _applyingNavigationRoute = false; }
@@ -310,18 +333,43 @@ public sealed partial class MainWindow : Window
         FrameworkElement expectedPage = page switch
         {
             "activity" => ActivityPage, "backup" => BackupPage, "files" => FilesPage,
-            "settings" => SettingsPage, _ => OverviewPage
+            "settings" => SettingsPage, "services" => ServicesPage, _ => OverviewPage
         };
-        FrameworkElement[] pages = [OverviewPage, ActivityPage, BackupPage, FilesPage, SettingsPage];
-        var expectedSelection = settings ? Navigation.SettingsItem
-            : Navigation.MenuItems.Cast<NavigationViewItem>().First(item => (string)item.Tag == page);
+        FrameworkElement[] pages = [OverviewPage, ActivityPage, BackupPage, FilesPage, SettingsPage, ServicesPage];
+        var expectedSelection = NavigationItemForRoute(route);
         if (CurrentRoute != route || expectedSelection is null || !ReferenceEquals(Navigation.SelectedItem, expectedSelection) ||
             pages.Any(item => (item.Visibility == Visibility.Visible) != ReferenceEquals(item, expectedPage)) ||
             string.IsNullOrWhiteSpace(PageTitle.Text) || (settings && PageTitle.Text == "Overview"))
+        {
+            RecordNavigationValidation("assert-failed", route);
             throw new InvalidOperationException("Restored navigation must select the requested native item and display its actual page and header.");
+        }
         if (route == "settings/account" && (AccountSettingsDetail.Visibility != Visibility.Visible ||
             SettingsHub.Visibility != Visibility.Collapsed || SettingsDetail.Visibility != Visibility.Visible || PageTitle.Text != "Account"))
             throw new InvalidOperationException("Restoring Account must display the Account editor and its page header.");
+    }
+
+    private void RecordNavigationValidation(string stage, string? requestedRoute = null, object? eventSelection = null)
+    {
+        if (_navigationValidationPath is null || !Environment.GetCommandLineArgs().Contains("--ui-smoke")) return;
+        // Only fixed navigation identifiers and geometry are recorded. Never
+        // include row content, account settings, file paths, or credentials.
+        string Item(object? item) => item is null ? "none" : ReferenceEquals(item, Navigation.SettingsItem) ? "settings" :
+            item is NavigationViewItem { Tag: string tag } ? NormalizeNavigationRoute(tag) : "unknown";
+        var pages = new (string Name, FrameworkElement Element)[]
+        {
+            ("overview", OverviewPage), ("activity", ActivityPage), ("backup", BackupPage),
+            ("files", FilesPage), ("settings", SettingsPage), ("services", ServicesPage)
+        };
+        var selectedFlags = string.Join(",", Navigation.MenuItems.Concat(Navigation.FooterMenuItems)
+            .OfType<NavigationViewItem>().Select(item => $"{Item(item)}:{item.IsSelected}"));
+        File.AppendAllText(_navigationValidationPath,
+            $"{DateTimeOffset.UtcNow:O} stage={stage}; requested={requestedRoute ?? "none"}; current={CurrentRoute}; page={_currentPage}; settings={_settingsRoute}; " +
+            $"selected={Item(Navigation.SelectedItem)}; expected={Item(NavigationItemForRoute(requestedRoute ?? CurrentRoute))}; event={Item(eventSelection)}; " +
+            $"flags={selectedFlags}; settings-flag={(Navigation.SettingsItem as NavigationViewItem)?.IsSelected}; " +
+            $"visible={string.Join(",", pages.Where(page => page.Element.Visibility == Visibility.Visible).Select(page => page.Name))}; " +
+            $"title={PageTitle.Text}; applying={_applyingNavigationRoute}; template={_navigationTemplateReady}; ready={_initialNavigationReady.Task.IsCompletedSuccessfully}; " +
+            $"mode={Navigation.DisplayMode}; state={DisplaySnapshot.State}{Environment.NewLine}");
     }
 
     private void Controller_Changed(object? sender, EventArgs e)
@@ -340,6 +388,7 @@ public sealed partial class MainWindow : Window
         _viewModel.Refresh();
         var settings = DisplaySettings;
         var snapshot = DisplaySnapshot;
+        var canPauseTransfers = CanPauseDisplayedTransfers;
         var badgeStyle = snapshot.State switch
         {
             ClientState.UpToDate => "CloudInletStatusSuccessIconStyle",
@@ -352,9 +401,11 @@ public sealed partial class MainWindow : Window
             _statusStyleKey = badgeStyle;
             OverviewStatusIcon.Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources[badgeStyle];
         }
-        WelcomePanel.Visibility = FilesConnectPanel.Visibility = settings.IsConfigured ? Visibility.Collapsed : Visibility.Visible;
-        ConnectedOverview.Visibility = FilesConnectedPanel.Visibility = settings.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
-        RecentActivitySection.Visibility = settings.IsConfigured && _viewModel.HasActivity ? Visibility.Visible : Visibility.Collapsed;
+        WelcomePanel.Visibility = canPauseTransfers ? Visibility.Collapsed : Visibility.Visible;
+        ConnectedOverview.Visibility = canPauseTransfers ? Visibility.Visible : Visibility.Collapsed;
+        FilesConnectPanel.Visibility = settings.IsConfigured ? Visibility.Collapsed : Visibility.Visible;
+        FilesConnectedPanel.Visibility = settings.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
+        RecentActivitySection.Visibility = canPauseTransfers && _viewModel.HasActivity ? Visibility.Visible : Visibility.Collapsed;
         ActivityEmpty.Visibility = _viewModel.HasActivityRows ? Visibility.Collapsed : Visibility.Visible;
         ActivityQueueCoverage.Visibility = _viewModel.HasQueueCoverage ? Visibility.Visible : Visibility.Collapsed;
         RefreshCloudTransferJobs();
@@ -370,18 +421,18 @@ public sealed partial class MainWindow : Window
         OpenFolderButton.Style = snapshot.State == ClientState.Attention ? null : _openFolderAccentStyle;
         DisconnectButton.Visibility = settings.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
         DisconnectAccountCard.Visibility = settings.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
-        StartAtSignInBox.IsEnabled = settings.IsConfigured && !_busy;
-        StartupSettingsCard.Description = settings.IsConfigured ? "Start CloudInlet automatically when you sign in." : "Connect an account to use automatic startup.";
-        SettingsAccountHeading.Text = settings.IsConfigured ? settings.BucketName : "Backblaze B2";
-        SettingsAccountAction.Content = settings.IsConfigured ? "Manage account" : "Connect account";
-        SettingsAccountCard.Description = settings.IsConfigured ? "Backblaze B2 · Native backup" : "Connect a private bucket to start protecting your files.";
+        RefreshStartupAvailability(settings.IsConfigured || (_viewModel.Preview?.ConnectedOneDriveAccounts ?? _connectedOneDriveAccounts) > 0);
+        SettingsAccountHeading.Text = "Cloud services";
+        SettingsAccountAction.Content = settings.IsConfigured ? "Manage services" : "Choose service";
+        SettingsAccountCard.Description = settings.IsConfigured ? $"Backblaze B2 · {settings.BucketName} · Explore more services" : "Choose a provider for backup and cloud transfers.";
         SyncCategory.Description = settings.FilesOnDemand ? "Files on demand is on · Windows manages downloaded files." : "Keep your files downloaded on this PC.";
         AppearanceCategory.Description = settings.Theme == "System" ? "Use your Windows theme." : $"{settings.Theme} theme";
         OpenFolderButton.IsEnabled = _viewModel.IsConfigured;
-        OpenFolderButton.Visibility = SyncNowButton.Visibility = DashboardPauseButton.Visibility = _viewModel.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
+        OpenFolderButton.Visibility = _viewModel.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
         SyncNowButton.Visibility = _viewModel.IsConfigured && snapshot.State is not (ClientState.Syncing or ClientState.Connecting or ClientState.Attention) ? Visibility.Visible : Visibility.Collapsed;
-        DashboardPauseButton.Visibility = _viewModel.IsConfigured && snapshot.State != ClientState.Attention ? Visibility.Visible : Visibility.Collapsed;
-        SyncNowButton.IsEnabled = DashboardPauseButton.IsEnabled = _viewModel.IsConfigured && !_busy;
+        DashboardPauseButton.Visibility = canPauseTransfers && (snapshot.State != ClientState.Attention || _viewModel.IsTransferPauseActive) ? Visibility.Visible : Visibility.Collapsed;
+        SyncNowButton.IsEnabled = _viewModel.IsConfigured && !_busy;
+        DashboardPauseButton.IsEnabled = canPauseTransfers && !_busy;
         RefreshBackups();
         RefreshCustomBackups();
         RefreshFileScopes();
@@ -395,11 +446,13 @@ public sealed partial class MainWindow : Window
         RestoreVersionButton.IsEnabled = !_busy && CanRestoreSelectedVersion();
         RefreshProtectedFolders();
         ApplyTheme(settings.Theme);
+        UpdateFluentLayout();
         if (!ReferenceEquals(_loadedSettings, settings) && !_busy) LoadSettings();
     }
 
     private void Navigation_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
+        RecordNavigationValidation(args.IsSettingsSelected ? "selection-settings" : "selection", eventSelection: args.SelectedItem);
         // NavigationView can raise SelectionChanged while InitializeComponent is
         // still wiring the named content panels.
         if (OverviewPage is null || !_navigationTemplateReady || _applyingNavigationRoute ||
@@ -407,13 +460,42 @@ public sealed partial class MainWindow : Window
         // WinUI can defer SelectionChanged until a container lays out. A
         // superseded notification must not replace a newer user/tray route.
         if (!ReferenceEquals(args.SelectedItem, sender.SelectedItem)) return;
-        ShowPage(args.IsSettingsSelected ? "settings" : (args.SelectedItem as NavigationViewItem)?.Tag as string ?? "overview");
+        if (args.SelectedItem is null)
+        {
+            // Retemplating may clear native selection without a navigation
+            // command. Restore the current section without reloading its page.
+            _applyingNavigationRoute = true;
+            try { SelectNavigationSection(NavigationItemForRoute(CurrentRoute)); }
+            finally { _applyingNavigationRoute = false; }
+            return;
+        }
+        var route = args.IsSettingsSelected ? "settings" : (args.SelectedItem as NavigationViewItem)?.Tag as string ?? "overview";
+        // Programmatic selection identifies the current section; it must not
+        // replace a nested route with that section's home when WinUI defers it.
+        if (ReferenceEquals(args.SelectedItem, NavigationItemForRoute(CurrentRoute))) return;
+        RequestNavigationRoute(route);
+    }
+
+    private void Navigation_ItemInvoked(NavigationView sender, NavigationViewItemInvokedEventArgs args)
+    {
+        // Invoking the already selected section does not raise SelectionChanged.
+        // Its explicit action still returns from a nested page to that section.
+        var route = args.IsSettingsInvoked ? "settings" : (args.InvokedItemContainer as NavigationViewItem)?.Tag as string;
+        InvokeNavigationSection(route);
+        if (Navigation.DisplayMode != NavigationViewDisplayMode.Expanded) Navigation.IsPaneOpen = false;
+    }
+
+    private void InvokeNavigationSection(string? route)
+    {
+        if (_closed || !_navigationTemplateReady || route is null || route == CurrentRoute) return;
+        RequestNavigationRoute(route);
     }
 
     private void ShowPage(string page)
     {
+        if (page != "settings") OneDriveSettingsDetail.Content = null;
         _currentPage = page;
-        FrameworkElement[] pages = [OverviewPage, ActivityPage, BackupPage, FilesPage, SettingsPage];
+        FrameworkElement[] pages = [OverviewPage, ActivityPage, BackupPage, FilesPage, SettingsPage, ServicesPage];
         foreach (var item in pages) item.Visibility = Visibility.Collapsed;
         var selected = page switch
         {
@@ -421,11 +503,13 @@ public sealed partial class MainWindow : Window
             "backup" => BackupPage,
             "files" => FilesPage,
             "settings" => SettingsPage,
+            "services" => ServicesPage,
             _ => OverviewPage
         };
         selected.Visibility = Visibility.Visible;
         UpdatePageHeader();
         if (page == "backup") RefreshBackups(refreshMetadata: true);
+        if (page is "services" or "overview") RefreshCloudServices();
         if (selected is ScrollViewer viewer) viewer.ChangeView(null, 0, null, true);
         PersistNavigationRoute();
     }
@@ -438,24 +522,26 @@ public sealed partial class MainWindow : Window
             "activity" => "Activity",
             "backup" => "Folder backup",
             "files" => "Files",
+            "services" => "Cloud services",
             "settings" => _settingsRoute switch
             {
                 "account" => "Account",
+                "onedrive" => "OneDrive",
                 "sync" => "Files and storage",
                 "network" => "Transfers and power",
                 "appearance" => "Appearance",
                 "general" => "Startup",
                 "notifications" => "Notifications",
-                "about" => "About CloudInlet",
+                "about" => "Updates and about",
                 _ => "Settings"
             },
-            _ => "Overview"
+            _ => "Home"
         };
-        SettingsBackButton.Visibility = SettingsContextLabel.Visibility = settingsDetail ? Visibility.Visible : Visibility.Collapsed;
-        PageDescription.Text = _currentPage == "backup" ? "Keep your Windows folders backed up and available in File Explorer." : "";
+        PageTitle.Visibility = settingsDetail ? Visibility.Collapsed : Visibility.Visible;
+        UpdateBreadcrumbNavigation();
+        PageDescription.Text = PageDescriptionForRoute();
         PageDescription.Visibility = PageDescription.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         ActivityPending.Visibility = _currentPage == "activity" && _viewModel.HasTransferSummary ? Visibility.Visible : Visibility.Collapsed;
-        ActivityTransferSpeed.Visibility = _currentPage == "activity" && _viewModel.HasTransferSpeed && _viewModel.HasTransfers ? Visibility.Visible : Visibility.Collapsed;
         StorageSummary.Visibility = _currentPage == "files" && _viewModel.HasStorageSummary ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -517,13 +603,16 @@ public sealed partial class MainWindow : Window
         if (headerWidth > 0) PageHeader.Width = Math.Min(PageColumnWidth, headerWidth);
         if (ForegroundLayout.ActualWidth > 0) ActivityPage.Width = Math.Min(PageColumnWidth, ForegroundLayout.ActualWidth);
         var settingsWidth = SettingsContent.Width - SettingsContent.Padding.Left - SettingsContent.Padding.Right;
-        ArrangeTiles(SettingsCategories, settingsWidth >= 660 * _uiSettings.TextScaleFactor ? 2 : 1);
+        ArrangeTiles(SettingsCategories, settingsWidth >= 576 * Math.Max(1, _uiSettings.TextScaleFactor) ? 2 : 1);
+        UpdateSettingsDetailGrids();
+        var noticeWidth = Math.Min(PageColumnWidth, headerWidth) - PageHeader.Padding.Left - PageHeader.Padding.Right;
+        if (noticeWidth > 0) StatusInfoBar.Width = noticeWidth;
         if (settingsWidth > 0)
         {
-            ConnectionPanel.Width = Math.Min(720, settingsWidth);
+            ConnectionPanel.Width = settingsWidth;
             // Keep the secret full width. The shorter account identifiers share
             // a row only when their labels and inputs have comfortable space.
-            var paired = ConnectionPanel.Width - ConnectionPanel.Padding.Left - ConnectionPanel.Padding.Right >= 560 * _uiSettings.TextScaleFactor;
+            var paired = AccountCredentialFields.ActualWidth >= 560 * _uiSettings.TextScaleFactor;
             AccountCredentialFields.ColumnSpacing = paired ? 16 : 0;
             AccountCredentialFields.ColumnDefinitions[1].Width = paired ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
             Grid.SetColumn(KeyIdBox, paired ? 1 : 0);
@@ -533,28 +622,25 @@ public sealed partial class MainWindow : Window
             while (AccountCredentialFields.RowDefinitions.Count < (paired ? 2 : 3)) AccountCredentialFields.RowDefinitions.Add(new() { Height = GridLength.Auto });
             while (AccountCredentialFields.RowDefinitions.Count > (paired ? 2 : 3)) AccountCredentialFields.RowDefinitions.RemoveAt(AccountCredentialFields.RowDefinitions.Count - 1);
         }
-        var pane = Navigation.DisplayMode == NavigationViewDisplayMode.Expanded ? Navigation.OpenPaneLength :
-            Navigation.DisplayMode == NavigationViewDisplayMode.Compact ? Navigation.CompactPaneLength : 0;
-        var compact = Navigation.ActualWidth - pane < 670;
         var backupWidth = BackupContent.Width - BackupContent.Padding.Left - BackupContent.Padding.Right;
-        var backupColumns = backupWidth >= 660 * _uiSettings.TextScaleFactor ? 2 : 1;
-        ArrangeTiles(BackupRows, backupColumns);
-        ArrangeTiles(MoreBackupRows, backupColumns);
-        ArrangeTiles(CustomBackupRows, backupWidth >= 760 * _uiSettings.TextScaleFactor ? 2 : 1);
-        ArrangeTiles(CloudImportRows, backupWidth >= 760 * _uiSettings.TextScaleFactor ? 2 : 1);
+        var folderColumns = backupWidth >= 600 * Math.Max(1, _uiSettings.TextScaleFactor) ? 2 : 1;
+        ArrangeTiles(BackupRows, folderColumns);
+        ArrangeTiles(MoreBackupRows, folderColumns);
+        ArrangeTiles(CustomBackupRows, backupWidth >= 1040 * Math.Max(1, _uiSettings.TextScaleFactor) ? 2 : 1);
+        ArrangeTiles(BackupRelatedActions, backupWidth >= 1040 * Math.Max(1, _uiSettings.TextScaleFactor) ? 3 : folderColumns);
+        ArrangeTiles(CloudImportRows, backupWidth >= 600 * Math.Max(1, _uiSettings.TextScaleFactor) ? 2 : 1);
+        UpdateFolderCardLayouts();
         UpdateOverviewLayout();
-        if (_compactLayout == compact) return;
-        _compactLayout = compact;
-        DashboardActions.Orientation = FileActions.Orientation = compact ? Orientation.Vertical : Orientation.Horizontal;
+        UpdateFluentLayout();
     }
 
     private void TextScaleFactor_Changed(UISettings sender, object args) =>
-        DispatcherQueue.TryEnqueue(() => { MeasureNavigationPane(); _compactLayout = null; UpdateResponsiveLayout(); });
+        DispatcherQueue.TryEnqueue(() => { MeasureNavigationPane(); UpdateResponsiveLayout(); });
 
     private void MeasureNavigationPane()
     {
-        var width = 240d;
-        foreach (var item in Navigation.MenuItems.OfType<NavigationViewItem>())
+        var width = 272d;
+        foreach (var item in Navigation.MenuItems.Concat(Navigation.FooterMenuItems).OfType<NavigationViewItem>())
         {
             var text = new TextBlock { Text = item.Content?.ToString(), FontFamily = Navigation.FontFamily, FontSize = 14 };
             text.Measure(new global::Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
@@ -575,35 +661,39 @@ public sealed partial class MainWindow : Window
                 "Favorites" => "\uE734", "Contacts" => "\uE77B", "Saved Games" => "\uE7FC",
                 "Links" => "\uE71B", "Searches" => "\uE721", _ => "\uE8B7"
             };
-            var description = _backupMetadataPaths[name];
-            var path = new TextBlock { Text = description, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudInletSecondaryTextStyle"],
-                TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis };
-            ToolTipService.SetToolTip(path, description);
+            var path = new TextBlock { Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudInletBodySecondaryTextStyle"],
+                TextWrapping = TextWrapping.Wrap };
+            var location = CreateFolderLocation(_backupMetadataPaths[name]);
+            var details = new StackPanel { Spacing = 4, Margin = new Thickness(0, 4, 0, 0) };
+            details.Children.Add(path);
+            details.Children.Add(location);
             var toggle = new ToggleSwitch { Tag = name, OnContent = "", OffContent = "", Width = 44, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["CloudInletToggleStyle"] };
             AutomationProperties.SetName(toggle, $"Back up {name}");
             toggle.Toggled += Backup_Toggled;
-            var pendingRing = new ProgressRing { Width = 16, Height = 16, IsActive = false, Visibility = Visibility.Collapsed };
-            var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, VerticalAlignment = VerticalAlignment.Center };
+            var pendingRing = new ProgressRing { Width = 20, Height = 20, IsActive = false, Visibility = Visibility.Collapsed };
+            AutomationProperties.SetName(pendingRing, $"Updating {name} backup");
+            var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 16, VerticalAlignment = VerticalAlignment.Center };
             actions.Children.Add(pendingRing);
             actions.Children.Add(toggle);
             var folderIcon = GetKnownFolderVisual(name, IconPixels(40));
             var card = new SettingsCard
             {
-                Header = new TextBlock { Text = name, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["BodyStrongTextBlockStyle"], TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis },
-                Description = path,
-                HeaderIcon = folderIcon is not null ? new ImageIcon { Source = folderIcon, Width = 40, Height = 40 } : new FontIcon { Glyph = glyph, FontSize = 32 },
+                Header = CreateFolderTitle(name),
+                Description = details,
+                HeaderIcon = folderIcon is not null ? new ImageIcon { Source = folderIcon, Width = 40, Height = 40, Tag = "folder" } : FluentIcons.FromGlyph(glyph, 40),
                 Content = actions,
-                MinHeight = 112,
-                CornerRadius = new CornerRadius(4),
-                Padding = new Thickness(20)
+                MinHeight = 88,
+                Padding = new Thickness(20, 14, 20, 14)
             };
             card.Resources["SettingsCardHeaderIconMaxSize"] = 40d;
             card.Resources["SettingsCardWrapThreshold"] = 0d;
+            card.Resources["SettingsCardWrapNoIconThreshold"] = 0d;
             if (CommonBackups.Contains(name)) BackupRows.Children.Add(card);
             else MoreBackupRows.Children.Add(card);
             _backupCards.Add(name, card);
             _backupSwitches.Add(name, toggle);
             _backupPaths.Add(name, path);
+            _backupLocations.Add(name, location);
             _backupRings.Add(name, pendingRing);
         }
     }
@@ -654,9 +744,8 @@ public sealed partial class MainWindow : Window
                 var primary = CommonBackups.Contains(name) || backup is not null;
                 if (primary != BackupRows.Children.Contains(card))
                 {
-                    // An unexpanded Expander's content has no visual Parent,
-                    // but its collection still owns the card. Remove from the
-                    // owning collection before promoting an enabled folder.
+                    // Remove from the owning collection before promoting an
+                    // enabled folder out of the optional Windows folders grid.
                     BackupRows.Children.Remove(card);
                     MoreBackupRows.Children.Remove(card);
                     if (primary) BackupRows.Children.Add(card);
@@ -676,9 +765,11 @@ public sealed partial class MainWindow : Window
                 _backupRings[name].IsActive = pending is not null;
                 var caption = _backupPaths[name];
                 var resultWarning = _backupResultWarnings.GetValueOrDefault(name);
-                caption.Text = pending?.Status ?? (changedMapping ? "Windows folder location changed" : externalMapping ? "Review current Windows location" : notice is not null ? "Unavailable for backup" : resultWarning ?? "");
-                caption.Visibility = caption.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
-                caption.Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources[pending is null ? "CloudInletAttentionTextStyle" : "CloudInletSecondaryTextStyle"];
+                caption.Text = pending?.Status ?? (changedMapping ? "Windows folder location changed" : externalMapping ? "Review current Windows location" : notice is not null ? "Unavailable for backup" : resultWarning ?? (ownsMapping ? "Backup on" : "Backup off"));
+                var needsAttention = pending is null && (changedMapping || externalMapping || notice is not null || resultWarning is not null);
+                caption.Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources[needsAttention ? "CloudInletAttentionTextStyle" : "CloudInletBodySecondaryTextStyle"];
+                _backupLocations[name].Text = currentPath;
+                ToolTipService.SetToolTip(_backupLocations[name], currentPath);
                 var tooltip = currentPath + (notice is not null ? Environment.NewLine + notice : externalMapping
                     ? Environment.NewLine + "This Windows folder is redirected. Review its current files and new CloudInlet location before enabling backup." : "");
                 if (pending is not null) tooltip += Environment.NewLine + pending.Status;
@@ -686,7 +777,7 @@ public sealed partial class MainWindow : Window
                 ToolTipService.SetToolTip(card, tooltip);
                 AutomationProperties.SetHelpText(toggle, tooltip);
                 if (GetKnownFolderVisual(name, IconPixels(40)) is { } folderIcon)
-                    card.HeaderIcon = new ImageIcon { Source = folderIcon, Width = 40, Height = 40 };
+                    card.HeaderIcon = new ImageIcon { Source = folderIcon, Width = 40, Height = 40, Tag = "folder" };
             }
         }
         finally { _refreshingBackups = false; }
@@ -747,13 +838,13 @@ public sealed partial class MainWindow : Window
             var source = candidate;
             var card = new SettingsCard
             {
-                Header = candidate.DisplayName,
-                Description = candidate.ProviderName,
-                HeaderIcon = new FontIcon { Glyph = "\uE753", FontSize = 28 },
+                Header = CreateFolderTitle(candidate.DisplayName),
+                Description = CreateFolderDescription(candidate.ProviderName, candidate.Path),
+                HeaderIcon = FluentIcons.Create("cloud", 28),
                 IsClickEnabled = true,
                 IsEnabled = DisplaySettings.IsConfigured && !_busy && !_importInProgress,
-                MinHeight = 96,
-                Padding = new Thickness(20),
+                MinHeight = 88,
+                Padding = new Thickness(20, 14, 20, 14),
                 Tag = candidate.Path
             };
             AutomationProperties.SetName(card, $"Import from {candidate.DisplayName}");
@@ -781,9 +872,15 @@ public sealed partial class MainWindow : Window
         foreach (var folder in settings.CustomBackups)
         {
             var pending = _backupJobs.GetValueOrDefault(CustomStopJobKey(folder.Name));
-            var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-            if (pending is not null) actions.Children.Add(new ProgressRing { Width = 16, Height = 16, IsActive = true });
-            var open = new Button { Content = "Open folder", Tag = folder.SourcePath };
+            var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, VerticalAlignment = VerticalAlignment.Center };
+            if (pending is not null)
+            {
+                var ring = new ProgressRing { Width = 20, Height = 20, IsActive = true };
+                AutomationProperties.SetName(ring, $"Updating {folder.Name} backup");
+                actions.Children.Add(ring);
+            }
+            var open = new Button { Content = "Open folder", Tag = folder.SourcePath, MinHeight = 36 };
+            AutomationProperties.SetName(open, $"Open {folder.Name} in File Explorer");
             open.Click += (_, _) =>
             {
                 if (_viewModel.Preview is not null) return;
@@ -794,24 +891,26 @@ public sealed partial class MainWindow : Window
             var stop = new MenuFlyoutItem { Text = "Stop backup", Tag = folder.Name, IsEnabled = !_busy && pending is null, Icon = new FontIcon { Glyph = "\uE711" } };
             stop.Click += RemoveCustomBackup_Click;
             var menu = new MenuFlyout();
+            FluentIconMotion.Attach(menu);
             menu.Items.Add(stop);
-            var more = new Button { Content = new FontIcon { Glyph = "\uE712" }, Flyout = menu, IsEnabled = !_busy && pending is null };
+            var more = new Button { Content = new FontIcon { Glyph = "\uE712" }, Flyout = menu, IsEnabled = !_busy && pending is null, MinHeight = 36, MinWidth = 36 };
             AutomationProperties.SetName(more, $"More options for {folder.Name}");
             ToolTipService.SetToolTip(more, "More options");
             actions.Children.Add(more);
             CustomBackupRows.Children.Add(new SettingsCard
             {
-                Header = new TextBlock { Text = folder.Name, Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["BodyStrongTextBlockStyle"] },
+                Header = CreateFolderTitle(folder.Name),
                 HeaderIcon = GetFolderVisual(folder.SourcePath, IconPixels(40)) is { } folderIcon
-                    ? new ImageIcon { Source = folderIcon, Width = 40, Height = 40 } : new FontIcon { Glyph = "\uE8B7" },
+                    ? new ImageIcon { Source = folderIcon, Width = 40, Height = 40, Tag = "folder" } : FluentIcons.Create("folder", 40),
                 Tag = folder.SourcePath,
-                Description = pending is null ? string.Empty : (object)SourceImportDialog.Text(pending.Status, true),
+                Description = CreateFolderDescription(pending?.Status ?? "Backup on · Original location", folder.SourcePath),
                 Content = actions,
-                MinHeight = 112,
-                Padding = new Thickness(20)
+                MinHeight = 88,
+                Padding = new Thickness(20, 14, 20, 14)
             });
             ToolTipService.SetToolTip(CustomBackupRows.Children[^1], folder.SourcePath + (pending is null ? "" : Environment.NewLine + pending.Status));
             ((SettingsCard)CustomBackupRows.Children[^1]).Resources["SettingsCardHeaderIconMaxSize"] = 40d;
+            ((SettingsCard)CustomBackupRows.Children[^1]).Resources["SettingsCardWrapThreshold"] = 0d;
         }
         UpdateResponsiveLayout();
     }
@@ -829,14 +928,16 @@ public sealed partial class MainWindow : Window
             .Concat(settings.CustomBackups.Select(folder => new ProtectedFolderLink(folder.Name, true))).Take(6);
         foreach (var folder in folders)
         {
-            var contents = new StackPanel { Spacing = 8, HorizontalAlignment = HorizontalAlignment.Center };
+            var contents = new StackPanel { Spacing = 12, HorizontalAlignment = HorizontalAlignment.Center };
             var customSource = settings.CustomBackups.FirstOrDefault(item => item.Name == folder.Name)?.SourcePath;
             var source = folder.Custom ? GetFolderVisual(customSource, IconPixels(40)) : GetKnownFolderVisual(folder.Name, IconPixels(40));
-            contents.Children.Add(source is not null ? new Image { Source = source, Width = 40, Height = 40 } : new FontIcon { Glyph = "\uE8B7", FontSize = 32 });
-            contents.Children.Add(new TextBlock { Text = folder.Name, TextTrimming = TextTrimming.CharacterEllipsis, HorizontalAlignment = HorizontalAlignment.Center });
+            contents.Children.Add(source is not null ? new ImageIcon { Source = source, Width = 40, Height = 40, Tag = "folder" } : FluentIcons.Create("folder", 40));
+            contents.Children.Add(new TextBlock { Text = folder.Name, TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.Wrap,
+                MaxLines = 2, TextAlignment = TextAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center,
+                Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources["BodyStrongTextBlockStyle"] });
             var button = new Button
             {
-                Content = contents, Tag = folder, Padding = new Thickness(12), MinHeight = 104, IsEnabled = !_busy,
+                Content = contents, Tag = folder, Padding = new Thickness(20), MinHeight = 100, IsEnabled = !_busy,
                 HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch,
                 Background = new SolidColorBrush(Colors.Transparent), BorderThickness = new Thickness(0)
             };
@@ -870,7 +971,7 @@ public sealed partial class MainWindow : Window
         var protectedVisible = ProtectedFoldersSection.Visibility == Visibility.Visible;
         var recentVisible = RecentActivitySection.Visibility == Visibility.Visible;
         var wide = innerWidth >= 820 * _uiSettings.TextScaleFactor && protectedVisible && recentVisible;
-        OverviewSections.ColumnSpacing = wide ? 24 : 0;
+        OverviewSections.ColumnSpacing = wide ? 16 : 0;
         OverviewSections.ColumnDefinitions[0].Width = new GridLength(wide ? 3 : 1, GridUnitType.Star);
         OverviewSections.ColumnDefinitions[1].Width = wide ? new GridLength(2, GridUnitType.Star) : new GridLength(0);
         Grid.SetColumn(RecentActivitySection, wide ? 1 : 0);
@@ -906,11 +1007,11 @@ public sealed partial class MainWindow : Window
         if (_folderIconPixels == pixels) return;
         _folderIconPixels = pixels;
         foreach (var (name, card) in _backupCards)
-            if (GetKnownFolderVisual(name, pixels) is { } source) card.HeaderIcon = new ImageIcon { Source = source, Width = 40, Height = 40 };
+            if (GetKnownFolderVisual(name, pixels) is { } source) card.HeaderIcon = new ImageIcon { Source = source, Width = 40, Height = 40, Tag = "folder" };
         foreach (var card in CustomBackupRows.Children.OfType<SettingsCard>())
-            if (GetFolderVisual(card.Tag as string, pixels) is { } source) card.HeaderIcon = new ImageIcon { Source = source, Width = 40, Height = 40 };
+            if (GetFolderVisual(card.Tag as string, pixels) is { } source) card.HeaderIcon = new ImageIcon { Source = source, Width = 40, Height = 40, Tag = "folder" };
         foreach (var button in ProtectedFolderRows.Children.OfType<Button>())
-            if (button.Tag is ProtectedFolderLink folder && button.Content is StackPanel panel && panel.Children[0] is Image image)
+            if (button.Tag is ProtectedFolderLink folder && button.Content is StackPanel panel && panel.Children[0] is ImageIcon image)
                 image.Source = folder.Custom ? GetFolderVisual(DisplaySettings.CustomBackups.FirstOrDefault(item => item.Name == folder.Name)?.SourcePath, pixels)
                     : GetKnownFolderVisual(folder.Name, pixels);
         UpdateFileScopeLabels();
@@ -981,7 +1082,7 @@ public sealed partial class MainWindow : Window
         FileFolderPath.Text = scope.RootPath;
         var knownFolderName = DisplaySettings.Backups.FirstOrDefault(folder => SameFolderPath(folder.DestinationPath, scope.RootPath))?.Name;
         FileLocationCard.HeaderIcon = GetFolderVisual(scope.RootPath, IconPixels(48), knownFolderName) is { } folderIcon
-            ? new ImageIcon { Source = folderIcon, Width = 48, Height = 48 } : new FontIcon { Glyph = "\uE8B7", FontSize = 40 };
+            ? new ImageIcon { Source = folderIcon, Width = 48, Height = 48, Tag = "folder" } : FluentIcons.Create("folder", 48);
     }
 
     private void OpenFileFolder_Click(object sender, RoutedEventArgs args)
@@ -1044,6 +1145,7 @@ public sealed partial class MainWindow : Window
         RefreshBackups();
         RefreshCustomBackups();
         UpdateBackupBusyFooter();
+        UpdateFluentLayout();
         try { await operation(_backupUiLifetime.Token); }
         catch (OperationCanceledException) { }
         catch (Exception error) { if (!_closed) ShowError(error); }
@@ -1199,6 +1301,7 @@ public sealed partial class MainWindow : Window
             _backupUiLifetime.Token.ThrowIfCancellationRequested();
             _activeDialog = dialog;
             opening?.Invoke();
+            Views.FluentIconMotion.Attach(dialog);
             return await dialog.ShowAsync();
         }
         finally
@@ -1228,6 +1331,7 @@ public sealed partial class MainWindow : Window
         RefreshCustomBackups();
         UpdateBackupBusyFooter();
         var token = _backupUiLifetime.Token;
+        var directCloudTransferRequested = false;
         try
         {
             var dialog = new SourceImportDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this), initialSourcePath: sourcePath)
@@ -1240,16 +1344,18 @@ public sealed partial class MainWindow : Window
             token.ThrowIfCancellationRequested();
             if (dialog.DirectCloudTransferRequested)
             {
-                await OpenCloudTransferAsync();
-                return;
+                directCloudTransferRequested = true;
             }
-            _importStatus = "Import in progress; transfers start when ready.";
-            UpdateBackupBusyFooter();
-            if (dialog.ResumeCloudId is { } id) await _controller.ResumeCloudImportAsync(id, token);
-            else if (dialog.CloudPlan is { } cloud) await _controller.ImportCloudAsync(cloud, token);
-            else if (dialog.FolderPlan is { } folder) await _controller.ImportFolderAsync(folder, token);
-            else return;
-            if (!_closed) ShowInfo("Import completed. The original source files were retained.");
+            else
+            {
+                _importStatus = "Import in progress; transfers start when ready.";
+                UpdateBackupBusyFooter();
+                if (dialog.ResumeCloudId is { } id) await _controller.ResumeCloudImportAsync(id, token);
+                else if (dialog.CloudPlan is { } cloud) await _controller.ImportCloudAsync(cloud, token);
+                else if (dialog.FolderPlan is { } folder) await _controller.ImportFolderAsync(folder, token);
+                else return;
+                if (!_closed) ShowInfo("Import completed. The original source files were retained.");
+            }
         }
         catch (OperationCanceledException) { }
         catch (Exception error) { if (!_closed) ShowError(error); }
@@ -1266,6 +1372,9 @@ public sealed partial class MainWindow : Window
             }
             DisposeBackupUiWhenIdle();
         }
+        // Release the source import's connection guard before the independent
+        // transfer workflow can wait on its B2 or OneDrive connection page.
+        if (directCloudTransferRequested) await OpenCloudTransferAsync();
     }
 
     private async void Connect_Click(object sender, RoutedEventArgs args)
@@ -1333,11 +1442,13 @@ public sealed partial class MainWindow : Window
         if (ManualConcurrencyCard is null || ManualDownloadConcurrencyCard is null || UploadPerformanceCard is null) return;
         var mode = SelectedUploadMode;
         ManualConcurrencyCard.Visibility = ManualDownloadConcurrencyCard.Visibility = mode == UploadMode.Manual ? Visibility.Visible : Visibility.Collapsed;
+        if (NetworkCapacityGrid is not null) NetworkCapacityGrid.Visibility = ManualConcurrencyCard.Visibility;
+        UpdateSettingsDetailGrids();
         UploadPerformanceCard.Description = mode switch
         {
-            UploadMode.MaximumThroughput => "Uses more parallel uploads and downloads across local and cloud transfers. Can use more system resources.",
-            UploadMode.Manual => "Choose separate upload and download limits shared across connected accounts.",
-            _ => "Balances uploads and downloads with available system resources. Applies to local and cloud transfers."
+            UploadMode.MaximumThroughput => "Prioritizes speed with more parallel transfers. Uses more system resources.",
+            UploadMode.Manual => "Set upload and download slots below. Shared across your connected accounts.",
+            _ => "Recommended · Automatically balances speed and system resources."
         };
     }
 
@@ -1426,7 +1537,7 @@ public sealed partial class MainWindow : Window
         if (_busy || _viewModel.Preview is not null) return;
         try
         {
-            if (_controller.Snapshot.State == ClientState.Paused) _controller.Resume();
+            if (_controller.IsTransferPauseActive) _controller.Resume();
             else _controller.Pause();
             Refresh();
         }
@@ -1442,14 +1553,59 @@ public sealed partial class MainWindow : Window
 
     private async void ActivityRow_Loaded(object sender, RoutedEventArgs args)
     {
-        if (sender is FrameworkElement { DataContext: IActivityActionRow row })
+        if (sender is not Grid grid) return;
+        ReflowActivityRow(grid);
+        if (grid.DataContext is IActivityActionRow row)
+        {
             await row.Actions.RefreshLocalAvailabilityAsync(_viewModel.Preview is not null);
+            if (!_closed && grid.IsLoaded) ReflowActivityRow(grid);
+        }
     }
 
     private void ActivityRow_SizeChanged(object sender, SizeChangedEventArgs args)
     {
-        if (sender is DependencyObject element && FindDescendant<StackPanel>(element, panel => panel.Name == "ActivityActions") is { } actions)
-            actions.Orientation = args.NewSize.Width < 740 ? Orientation.Vertical : Orientation.Horizontal;
+        if (sender is Grid grid) ReflowActivityRow(grid);
+    }
+
+    private void ActivityActions_SizeChanged(object sender, SizeChangedEventArgs args)
+    {
+        if (sender is DependencyObject actions && VisualTreeHelper.GetParent(actions) is Grid grid)
+            ReflowActivityRow(grid);
+    }
+
+    private void ActivityActionVisibilityChanged(DependencyObject sender, DependencyProperty property)
+    {
+        if (VisualTreeHelper.GetParent(sender) is ActionWrapPanel actions && VisualTreeHelper.GetParent(actions) is Grid grid)
+            ReflowActivityRow(grid);
+    }
+
+    private void ReflowActivityRow(Grid grid)
+    {
+        if (grid.ActualWidth > 0 && grid.Children.OfType<ActionWrapPanel>().FirstOrDefault() is { } actions)
+        {
+            foreach (var button in actions.Children)
+                _activityActionVisibilityRegistrations.GetValue(button, element =>
+                {
+                    // A stretched action panel may keep its size when an action
+                    // disappears. Observe availability directly, once per recycled
+                    // button, without retaining its previous row or data context.
+                    element.RegisterPropertyChangedCallback(UIElement.VisibilityProperty, ActivityActionVisibilityChanged);
+                    return new object();
+                });
+            var buttons = actions.Children.Where(child => child.Visibility == Visibility.Visible).ToArray();
+            foreach (var button in buttons)
+                button.Measure(new global::Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+            var actionWidth = buttons.Sum(child => child.DesiredSize.Width) + Math.Max(0, buttons.Length - 1) * actions.Spacing;
+            // Reserve readable file/progress text, then use the actual action
+            // labels. Availability can change after a local-folder probe.
+            var narrow = grid.ActualWidth < 20 + 2 * grid.ColumnSpacing + 240 * Math.Max(1, _uiSettings.TextScaleFactor) + actionWidth;
+            Grid.SetColumn(actions, narrow ? 1 : 2);
+            Grid.SetRow(actions, narrow ? 1 : 0);
+            Grid.SetColumnSpan(actions, narrow ? 2 : 1);
+            if (grid.Children.OfType<StackPanel>().FirstOrDefault() is { } details)
+                Grid.SetColumnSpan(details, narrow ? 2 : 1);
+            actions.Margin = narrow && buttons.Length > 0 ? new Thickness(0, 12, 0, 0) : new Thickness(0);
+        }
     }
 
     private async void ActivityOpenFolder_Click(object sender, RoutedEventArgs args)
@@ -1528,28 +1684,27 @@ public sealed partial class MainWindow : Window
             VersionPathLabel.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = true });
         });
 
-    private void ManageBackup_Click(object sender, RoutedEventArgs args) => Navigation.SelectedItem = Navigation.MenuItems[2];
+    private void ManageBackup_Click(object sender, RoutedEventArgs args) => RequestNavigationRoute("backup");
     private void ViewActivity_Click(object sender, RoutedEventArgs args) => ShowActivity();
     private void Settings_Click(object sender, RoutedEventArgs args) => ShowAccount();
 
-    private void SettingsAccount_Click(object sender, RoutedEventArgs args) => Settings_Click(sender, args);
+    private void SettingsAccount_Click(object sender, RoutedEventArgs args) => RequestNavigationRoute("services");
 
     private void SyncSettings_Click(object sender, RoutedEventArgs args)
     {
         ShowSettings();
         _settingsOrigin = SyncCategory;
         OpenSettingsRoute("sync");
-        FocusSettingsAfterLayout(SettingsBackButton, "sync");
+        FocusSettingsAfterLayout(PageBreadcrumb, "sync");
     }
 
     private void ExclusionsSettings_Click(object sender, RoutedEventArgs args)
     {
         SyncSettings_Click(sender, args);
-        ExclusionsExpander.IsExpanded = true;
         DispatcherQueue.TryEnqueue(() =>
         {
             if (_closed || CurrentRoute != "settings/sync") return;
-            ExclusionsExpander.StartBringIntoView();
+            ExclusionsEditor.StartBringIntoView();
         });
     }
 
@@ -1559,10 +1714,8 @@ public sealed partial class MainWindow : Window
         if (route == "catalog") { await OpenCatalogAsync(); return; }
         _settingsOrigin = element as Control;
         OpenSettingsRoute(route);
-        FocusSettingsAfterLayout(SettingsBackButton, route);
+        FocusSettingsAfterLayout(PageBreadcrumb, route);
     }
-
-    private void SettingsBack_Click(object sender, RoutedEventArgs args) => ReturnToSettingsHome();
 
     private void ReturnToSettingsHome()
     {
@@ -1585,9 +1738,18 @@ public sealed partial class MainWindow : Window
 
     private void OpenSettingsRoute(string route)
     {
+        // Remove the view on navigation so a device-code poll is cancelled by
+        // Unloaded. Visibility.Collapsed alone does not unload a WinUI element.
+        if (route != "onedrive") OneDriveSettingsDetail.Content = null;
+        else if (OneDriveSettingsDetail.Content is null)
+        {
+            var connection = new OneDriveConnectionView(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            connection.ConnectionChanged += (_, _) => RefreshCloudServices();
+            OneDriveSettingsDetail.Content = connection;
+        }
         var routes = new Dictionary<string, FrameworkElement>(StringComparer.Ordinal)
         {
-            ["account"] = AccountSettingsDetail, ["sync"] = SyncSettingsDetail,
+            ["account"] = AccountSettingsDetail, ["onedrive"] = OneDriveSettingsDetail, ["sync"] = SyncSettingsDetail,
             ["network"] = NetworkSettingsDetail, ["appearance"] = AppearanceSettingsDetail,
             ["general"] = GeneralSettingsDetail, ["notifications"] = NotificationSettingsDetail, ["about"] = AboutSettingsDetail
         };
@@ -1599,6 +1761,7 @@ public sealed partial class MainWindow : Window
         {
             detail.Visibility = Visibility.Visible;
         }
+        SynchronizeSettingsNavigation();
         if (SettingsPage.Visibility == Visibility.Visible) ShowPage("settings");
     }
 
@@ -1607,7 +1770,7 @@ public sealed partial class MainWindow : Window
         ApplicationKeyBox.Password = "";
         LoadSettings(reloadAccount: true);
         Refresh();
-        ReturnToSettingsHome();
+        NavigateToParent();
     }
 
     private async void ChooseRoot_Click(object sender, RoutedEventArgs args)
@@ -1790,10 +1953,13 @@ public sealed partial class MainWindow : Window
         FooterStatus.Text = message;
         SettingsPage.IsEnabled = FilesPage.IsEnabled = !busy;
         CustomBackupSourceBox.IsEnabled = CustomBackupNameBox.IsEnabled = !busy;
-        SyncNowButton.IsEnabled = DashboardPauseButton.IsEnabled = !busy && _controller.Settings.IsConfigured;
+        SyncNowButton.IsEnabled = !busy && _controller.Settings.IsConfigured;
+        DashboardPauseButton.IsEnabled = !busy && CanPauseDisplayedTransfers;
+        RefreshStartupAvailability(DisplaySettings.IsConfigured || (_viewModel.Preview?.ConnectedOneDriveAccounts ?? _connectedOneDriveAccounts) > 0);
         RefreshBackups();
         RefreshCustomBackups();
         UpdateBackupBusyFooter();
+        UpdateFluentLayout();
     }
 
 
@@ -1895,6 +2061,7 @@ public sealed partial class MainWindow : Window
     {
         _activityActionValidationPath = Path.Combine(outputDirectory, "activity-action-assertions.txt");
         Directory.CreateDirectory(outputDirectory);
+        _navigationValidationPath = Path.Combine(outputDirectory, "navigation-state-validation.txt");
         var themeArgument = Environment.GetCommandLineArgs().FirstOrDefault(arg => arg.StartsWith("--ui-smoke-theme=", StringComparison.Ordinal))?[17..];
         if (themeArgument != "Light")
         {
@@ -1996,6 +2163,8 @@ public sealed partial class MainWindow : Window
         LoadSettings(reloadAccount: true, reloadPreferences: true);
         Refresh();
 
+        await RunAuditRegressionValidationAsync(outputDirectory, themeArgument == "Light" ? ElementTheme.Light : ElementTheme.Dark);
+
         var states = new[] { ClientState.NotConnected, ClientState.Connecting, ClientState.UpToDate, ClientState.Syncing,
             ClientState.Paused, ClientState.Offline, ClientState.Attention };
         var themes = themeArgument == "Light" ? new[] { ElementTheme.Light } : new[] { ElementTheme.Dark };
@@ -2074,24 +2243,27 @@ public sealed partial class MainWindow : Window
             AssertVisibleActivityRow(_viewModel.ActiveTransfers[0]);
             AssertActivityActions(_viewModel.ActiveTransfers[0], openFolder: true, cloud: false);
             AssertActivityActions(_viewModel.ActiveTransfers[1], openFolder: true, cloud: true);
-            if (ActivityTransferSpeed.Visibility != Visibility.Visible ||
-                !ActivityTransferSpeed.Text.Contains("MiB/s", StringComparison.Ordinal) ||
-                !ActivityTransferSpeed.Text.Contains("KiB/s", StringComparison.Ordinal) ||
+            if (ActivityPending.Visibility != Visibility.Visible ||
+                ActivityPending.Text != _viewModel.ActivityStatusSummary ||
+                !ActivityPending.Text.Contains("MiB/s", StringComparison.Ordinal) ||
+                !ActivityPending.Text.Contains("KiB/s", StringComparison.Ordinal) ||
                 FindDescendant<TextBlock>((DependencyObject)ActivityList.ContainerFromItem(_viewModel.ActiveTransfers[0]),
-                    label => label.Name == "ActivityFileSpeed") is not { ActualHeight: > 0, Visibility: Visibility.Visible } uploadSpeed ||
-                uploadSpeed.Text != _viewModel.ActiveTransfers[0].SpeedText ||
+                    label => label.Name == "ActivityFileStatus") is not { ActualHeight: > 0, Visibility: Visibility.Visible } uploadStatus ||
+                uploadStatus.Text != _viewModel.ActiveTransfers[0].StatusLine ||
+                !uploadStatus.Text.Contains(_viewModel.ActiveTransfers[0].SpeedText, StringComparison.Ordinal) ||
                 FindDescendant<TextBlock>((DependencyObject)ActivityList.ContainerFromItem(_viewModel.ActiveTransfers[1]),
-                    label => label.Name == "ActivityFileSpeed") is not { ActualHeight: > 0, Visibility: Visibility.Visible } downloadSpeed ||
-                downloadSpeed.Text != _viewModel.ActiveTransfers[1].SpeedText)
+                    label => label.Name == "ActivityFileStatus") is not { ActualHeight: > 0, Visibility: Visibility.Visible } downloadStatus ||
+                downloadStatus.Text != _viewModel.ActiveTransfers[1].StatusLine ||
+                !downloadStatus.Text.Contains(_viewModel.ActiveTransfers[1].SpeedText, StringComparison.Ordinal))
                 throw new InvalidOperationException("Activity must render measured upload and download speed for each transferring file and their aggregate directions.");
             foreach (var transfer in _viewModel.ActiveTransfers)
             {
                 var label = FindDescendant<TextBlock>((DependencyObject)ActivityList.ContainerFromItem(transfer),
-                    item => item.Name == "ActivityFileProgress");
+                    item => item.Name == "ActivityFileStatus");
                 if (transfer.ProgressLabel.Length > 0 && (label is not { ActualHeight: > 0, Visibility: Visibility.Visible } ||
-                    label.Text != transfer.ProgressLabel || !label.Text.Contains('%') || !label.Text.Contains(" of ", StringComparison.Ordinal)))
+                    !label.Text.Contains(transfer.ProgressLabel, StringComparison.Ordinal) || !label.Text.Contains('%') || !label.Text.Contains(" of ", StringComparison.Ordinal)))
                     throw new InvalidOperationException("Activity must visibly show measured percentage and both sizes beside each determinate progress bar.");
-                if (transfer.IsIndeterminate && label?.Visibility == Visibility.Visible)
+                if (transfer.IsIndeterminate && label?.Text.Contains('%') == true)
                     throw new InvalidOperationException("Unmeasured preparation must not claim a completion percentage.");
             }
             foreach (var mixedState in new[] { ClientState.Attention, ClientState.Offline })
@@ -2102,13 +2274,14 @@ public sealed partial class MainWindow : Window
                     Message = "Another sync folder needs attention while these files continue transferring."
                 } }, theme);
                 await CapturePageAsync("activity", $"activity-transferring-{mixedState.ToString().ToLowerInvariant()}{suffix}");
-                if (ActivityTransferSpeed.Visibility != Visibility.Visible ||
+                if (ActivityPending.Visibility != Visibility.Visible || ActivityPending.Text != _viewModel.ActivityStatusSummary ||
+                    !ActivityPending.Text.Contains("MiB/s", StringComparison.Ordinal) || !ActivityPending.Text.Contains("KiB/s", StringComparison.Ordinal) ||
                     _viewModel.ActiveTransfers.Count(row => row.SpeedVisibility == Visibility.Visible) != 2)
                     throw new InvalidOperationException("A root needing attention or waiting for a connection must not hide another root's measured live transfer rates.");
             }
             SetPresentation(transferPreview with { Snapshot = transferPreview.Snapshot with { State = ClientState.Paused } }, theme);
-            if (ActivityTransferSpeed.Visibility != Visibility.Collapsed ||
-                _viewModel.ActiveTransfers.Any(row => row.SpeedVisibility == Visibility.Visible))
+            if (ActivityPending.Text.Contains("/s", StringComparison.Ordinal) ||
+                _viewModel.ActiveTransfers.Any(row => row.SpeedVisibility == Visibility.Visible || row.StatusLine.Contains("/s", StringComparison.Ordinal)))
                 throw new InvalidOperationException("Global pause must suppress both aggregate and per-file wire rates even if a native request still retains its transfer phase.");
             SetPresentation(transferPreview, theme);
             ActivityFilterBox.SelectedIndex = 2;
@@ -2144,8 +2317,8 @@ public sealed partial class MainWindow : Window
             if (_viewModel.QueuedTransfers.Count != 256 || !_viewModel.QueueCoverage.Contains("363", StringComparison.Ordinal))
                 throw new InvalidOperationException("Paused files must retain their pending status and honest queue count.");
             await CapturePageAsync("activity", $"activity-paused{suffix}");
-            if (ActivityTransferSpeed.Visibility != Visibility.Collapsed ||
-                _viewModel.QueuedTransfers.Any(row => row.SpeedVisibility != Visibility.Collapsed))
+            if (ActivityPending.Text.Contains("/s", StringComparison.Ordinal) ||
+                _viewModel.QueuedTransfers.Any(row => row.SpeedVisibility != Visibility.Collapsed || row.StatusLine.Contains("/s", StringComparison.Ordinal)))
                 throw new InvalidOperationException("Paused files and the paused Activity header must not display stale transfer speeds.");
             SetPresentation(transferPreview, theme);
             ActivityFilterBox.SelectedIndex = 0;
@@ -2196,12 +2369,12 @@ public sealed partial class MainWindow : Window
                 await UiSmokeCapture.SaveAsync(RootGrid, bottomCapture);
                 await AssertCapturedActivityInkAsync(bottomCapture);
                 SetPresentation(ClientPreview.Connected(), theme);
-                MoreWindowsFolders.IsExpanded = true;
+                MoreWindowsFolders.IsChecked = true;
                 await CapturePageAsync("backup", $"backup-all-folders-{width}{suffix}");
                 BackupPage.ChangeView(null, BackupPage.ScrollableHeight, null, true);
                 await Task.Delay(180);
                 await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"backup-bottom-{width}{suffix}.png"));
-                MoreWindowsFolders.IsExpanded = false;
+                MoreWindowsFolders.IsChecked = false;
                 CustomBackupExpander.IsExpanded = true;
                 await CapturePageAsync("backup", $"backup-custom-{width}{suffix}");
                 BackupPage.ChangeView(null, BackupPage.ScrollableHeight, null, true);
@@ -2210,7 +2383,6 @@ public sealed partial class MainWindow : Window
                 CustomBackupExpander.IsExpanded = false;
                 foreach (var route in new[] { "account", "sync", "network", "appearance", "general", "about" })
                     await CapturePageAsync("settings", $"settings-{route}-{width}{suffix}", route);
-                NetworkSettingsExpander.IsExpanded = ExclusionsExpander.IsExpanded = true;
                 await CapturePageAsync("settings", $"settings-sync-expanded-{width}{suffix}", "sync");
                 SettingsPage.ChangeView(null, SettingsPage.ScrollableHeight, null, true);
                 await Task.Delay(180);
@@ -2219,7 +2391,6 @@ public sealed partial class MainWindow : Window
                 SettingsPage.ChangeView(null, SettingsPage.ScrollableHeight, null, true);
                 await Task.Delay(180);
                 await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"settings-network-bottom-{width}{suffix}.png"));
-                NetworkSettingsExpander.IsExpanded = ExclusionsExpander.IsExpanded = false;
                 SetPresentation(ClientPreview.ForState(ClientState.NotConnected), theme);
                 await CapturePageAsync("settings", $"settings-connect-{width}{suffix}", "account");
                 await CapturePageAsync("settings", $"settings-home-disconnected-{width}{suffix}");
@@ -2229,12 +2400,11 @@ public sealed partial class MainWindow : Window
             await CapturePageAsync("settings", $"settings-home-1600{suffix}");
             AppWindow.Resize(new SizeInt32(1100, 840));
             SetPresentation(ClientPreview.Connected(), theme);
-            ExclusionsExpander.IsExpanded = true;
             Navigation.SelectedItem = Navigation.SettingsItem;
             ShowPage("settings");
             OpenSettingsRoute("sync");
             await Task.Delay(100);
-            ExclusionsExpander.StartBringIntoView();
+            ExclusionsEditor.StartBringIntoView();
             await ExclusionsEditor.RunUiValidationAsync(outputDirectory, async name =>
             {
                 await Task.Delay(100);
@@ -2243,7 +2413,6 @@ public sealed partial class MainWindow : Window
                 await Task.Delay(100);
                 await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, name + ".png"));
             });
-            ExclusionsExpander.IsExpanded = false;
             AppWindow.Resize(new SizeInt32(800, 840));
             var externalPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Another provider", "Desktop");
             SetPresentation(ClientPreview.Connected() with { WindowsFolderPaths = new Dictionary<string, string>
@@ -2656,9 +2825,11 @@ public sealed partial class MainWindow : Window
         async Task CapturePageAsync(string page, string fileName, string settingsRoute = "home")
         {
             var requestedRoute = page == "settings" && settingsRoute != "home" ? "settings/" + settingsRoute : page;
+            RecordNavigationValidation("capture-before:" + fileName, requestedRoute);
             RequestNavigationRoute(requestedRoute);
             await Task.Delay(500);
             RootGrid.UpdateLayout();
+            RecordNavigationValidation("capture-after:" + fileName, requestedRoute);
             AssertNavigationPresentation(requestedRoute);
             // Verify the native NavigationView content layer at runtime. Its
             // rounded surface contains both the fixed header and task content;
@@ -2708,8 +2879,8 @@ public sealed partial class MainWindow : Window
                 ForegroundLayout.Background is SolidColorBrush { Color.A: > 0 } ||
                 ConnectionPanel.Background is not null || !ConnectionPanel.BorderThickness.Equals(new Thickness(0)))
                 throw new InvalidOperationException("The fixed header and scrolling pages must share the native foreground layer without a second shell around the content or account form.");
-            if ((SettingsBackButton.Visibility == Visibility.Visible) != (page == "settings" && _settingsRoute != "home"))
-                throw new InvalidOperationException("Only a settings detail may expose the shared header's Back action.");
+            if ((PageBreadcrumb.Visibility == Visibility.Visible) != (page == "settings" && _settingsRoute != "home"))
+                throw new InvalidOperationException("Nested settings pages must expose their breadcrumb path.");
             await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"),
                 $"{fileName}: page header y={headerPosition.Y}, height={PageHeader.ActualHeight}, content host y={contentPosition.Y}, task content y={pagePosition.Y}, title={PageTitle.Text}{Environment.NewLine}");
             if (page != "activity")
@@ -2871,6 +3042,7 @@ public sealed partial class MainWindow : Window
         while (grid.RowDefinitions.Count < rows) grid.RowDefinitions.Add(new() { Height = GridLength.Auto });
         for (var index = 0; index < grid.Children.Count; index++)
         {
+            ((FrameworkElement)grid.Children[index]).VerticalAlignment = VerticalAlignment.Stretch;
             Grid.SetRow((FrameworkElement)grid.Children[index], index / columns);
             Grid.SetColumn((FrameworkElement)grid.Children[index], index % columns);
         }

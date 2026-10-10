@@ -51,6 +51,7 @@ public sealed partial class ExclusionEditor : UserControl
     private readonly List<(RuleReference Reference, ToggleSwitch Toggle, Button More)> _rowActions = [];
     private int _builderGeneration;
     private string _lastTestedPath = "";
+    private readonly global::Windows.UI.ViewManagement.UISettings _textSettings = new();
 
     public nint OwnerWindowHandle { get; set; }
     public Func<PreferenceUpdate, Task>? SaveChangesAsync { get; set; }
@@ -58,6 +59,7 @@ public sealed partial class ExclusionEditor : UserControl
     public ExclusionEditor()
     {
         InitializeComponent();
+        FluentIconMotion.Attach((MenuFlyout)AddButton.Flyout);
         // A chooser can outlive navigation away from this view. Its result must
         // never land in a subsequently reopened or different exclusion draft.
         Unloaded += (_, _) => _builderGeneration++;
@@ -91,6 +93,47 @@ public sealed partial class ExclusionEditor : UserControl
         SelectedExclusions = [.. settings.SelectedExclusions], GuidedExclusions = [.. settings.GuidedExclusions]
     };
 
+    private void ExclusionHeader_SizeChanged(object sender, SizeChangedEventArgs args)
+    {
+        if (AddButton is null || ExclusionIntroduction is null) return;
+        AddButton.Measure(new global::Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+        var stacked = args.NewSize.Width < 360 * _textSettings.TextScaleFactor + AddButton.DesiredSize.Width + ExclusionHeader.ColumnSpacing;
+        ExclusionHeader.RowSpacing = stacked ? 16 : 0;
+        Grid.SetColumnSpan(ExclusionIntroduction, stacked ? 2 : 1);
+        Grid.SetRow(AddButton, stacked ? 1 : 0);
+        Grid.SetColumn(AddButton, stacked ? 0 : 1);
+        Grid.SetColumnSpan(AddButton, stacked ? 2 : 1);
+        AddButton.HorizontalAlignment = stacked ? HorizontalAlignment.Left : HorizontalAlignment.Right;
+    }
+
+    private void FieldPair_SizeChanged(object sender, SizeChangedEventArgs args)
+    {
+        if (sender is not Grid grid || grid.Children.Count != 2) return;
+        var stacked = args.NewSize.Width < 680 * _textSettings.TextScaleFactor;
+        grid.RowSpacing = stacked ? 16 : 0;
+        var first = (FrameworkElement)grid.Children[0];
+        var second = (FrameworkElement)grid.Children[1];
+        Grid.SetColumnSpan(first, stacked ? 2 : 1);
+        Grid.SetColumnSpan(second, stacked ? 2 : 1);
+        Grid.SetColumn(second, stacked ? 0 : 1);
+        Grid.SetRow(second, stacked ? 1 : 0);
+    }
+
+    private void BuilderActions_SizeChanged(object sender, SizeChangedEventArgs args)
+    {
+        if (SaveButton is null || CancelButton is null || BusyRing is null) return;
+        // Keep both actions available inside a narrow settings pane or at large text sizes.
+        var unconstrained = new global::Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity);
+        SaveButton.Measure(unconstrained);
+        CancelButton.Measure(unconstrained);
+        var required = SaveButton.DesiredSize.Width + CancelButton.DesiredSize.Width + BuilderActions.Spacing;
+        if (BusyRing.Visibility == Visibility.Visible) required += BusyRing.Width + BuilderActions.Spacing;
+        var stacked = required > args.NewSize.Width;
+        BuilderActions.Orientation = stacked ? Orientation.Vertical : Orientation.Horizontal;
+        SaveButton.HorizontalAlignment = CancelButton.HorizontalAlignment = stacked ? HorizontalAlignment.Stretch : HorizontalAlignment.Left;
+        BusyRing.HorizontalAlignment = stacked ? HorizontalAlignment.Left : HorizontalAlignment.Center;
+    }
+
     private void RenderRows()
     {
         if (RulesPanel is null) return;
@@ -114,14 +157,15 @@ public sealed partial class ExclusionEditor : UserControl
 
     private void AddRow(RuleReference reference, string title, string detail, string glyph, bool enabled)
     {
-        var row = new Grid { ColumnSpacing = 16 };
+        var row = new Grid { ColumnSpacing = 16, MinHeight = 40 };
         row.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
         row.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
         row.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
-        var icon = new FontIcon { Glyph = glyph, FontSize = 20, VerticalAlignment = VerticalAlignment.Center };
+        var icon = FluentIcons.FromGlyph(glyph);
+        icon.VerticalAlignment = VerticalAlignment.Center;
         row.Children.Add(icon);
         var copy = new StackPanel { Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
-        copy.Children.Add(new TextBlock { Text = title, TextWrapping = TextWrapping.Wrap, Style = (Style)global::Microsoft.UI.Xaml.Application.Current.Resources["BodyTextBlockStyle"] });
+        copy.Children.Add(new TextBlock { Text = title, TextWrapping = TextWrapping.Wrap, Style = (Style)global::Microsoft.UI.Xaml.Application.Current.Resources["BodyStrongTextBlockStyle"] });
         copy.Children.Add(new TextBlock { Text = detail, Style = (Style)Resources["ExclusionSecondary"] });
         Grid.SetColumn(copy, 1);
         row.Children.Add(copy);
@@ -135,12 +179,19 @@ public sealed partial class ExclusionEditor : UserControl
             await ChangeEnabledAsync(reference, toggle.IsOn);
         };
         actions.Children.Add(toggle);
-        var more = new Button { Content = new FontIcon { Glyph = "\uE712", FontSize = 16 }, IsEnabled = canChange };
+        var more = new Button
+        {
+            Content = new FontIcon { Glyph = "\uE712", FontSize = 16 }, IsEnabled = canChange,
+            Width = 36, Height = 36, Padding = new(8),
+            Style = (Style)global::Microsoft.UI.Xaml.Application.Current.Resources["SubtleButtonStyle"]
+        };
         AutomationProperties.SetName(more, $"Options for {title}");
+        ToolTipService.SetToolTip(more, $"Options for {title}");
         var menu = new MenuFlyout();
-        var edit = new MenuFlyoutItem { Text = "Edit exclusion", Icon = new FontIcon { Glyph = "\uE70F" } };
+        FluentIconMotion.Attach(menu);
+        var edit = new MenuFlyoutItem { Text = "Edit exclusion", Icon = FluentIcons.FromGlyph("\uE70F", 20) };
         edit.Click += (_, _) => OpenExisting(reference);
-        var remove = new MenuFlyoutItem { Text = "Remove exclusion", Icon = new FontIcon { Glyph = "\uE74D" } };
+        var remove = new MenuFlyoutItem { Text = "Remove exclusion", Icon = FluentIcons.FromGlyph("\uE74D", 20) };
         remove.Click += async (_, _) => await RemoveAsync(reference);
         menu.Items.Add(edit);
         menu.Items.Add(remove);
@@ -153,7 +204,7 @@ public sealed partial class ExclusionEditor : UserControl
         bool? previousStacked = null;
         row.SizeChanged += (_, args) =>
         {
-            var stacked = args.NewSize.Width < 440;
+            var stacked = args.NewSize.Width < 440 * _textSettings.TextScaleFactor;
             if (previousStacked == stacked) return;
             previousStacked = stacked;
             row.RowDefinitions.Clear();
@@ -161,6 +212,7 @@ public sealed partial class ExclusionEditor : UserControl
             if (stacked) row.RowDefinitions.Add(new() { Height = GridLength.Auto });
             Grid.SetRow(actions, stacked ? 1 : 0);
             Grid.SetColumn(actions, stacked ? 1 : 2);
+            Grid.SetColumnSpan(actions, stacked ? 2 : 1);
             Grid.SetColumnSpan(copy, stacked ? 2 : 1);
             actions.HorizontalAlignment = stacked ? HorizontalAlignment.Left : HorizontalAlignment.Right;
             actions.Margin = stacked ? new(0, 12, 0, 0) : new(0);
@@ -333,7 +385,10 @@ public sealed partial class ExclusionEditor : UserControl
             var grid = new Grid { ColumnSpacing = 12 };
             grid.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
             grid.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
-            grid.Children.Add(new TextBlock { Text = token.Description, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center });
+            grid.RowDefinitions.Add(new() { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new() { Height = GridLength.Auto });
+            var description = new TextBlock { Text = token.Description, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
+            grid.Children.Add(description);
             var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
             AddTokenAction(actions, "\uE70E", $"Move part {i + 1} earlier", i > 0, () => MoveToken(index, -1));
             AddTokenAction(actions, "\uE70D", $"Move part {i + 1} later", i < _tokens.Count - 1, () => MoveToken(index, 1));
@@ -347,6 +402,15 @@ public sealed partial class ExclusionEditor : UserControl
             _tokenActions.Add(actions);
             Grid.SetColumn(actions, 1);
             grid.Children.Add(actions);
+            grid.SizeChanged += (_, args) =>
+            {
+                var stacked = args.NewSize.Width < 400 * _textSettings.TextScaleFactor;
+                Grid.SetColumnSpan(description, stacked ? 2 : 1);
+                Grid.SetColumn(actions, stacked ? 0 : 1);
+                Grid.SetRow(actions, stacked ? 1 : 0);
+                grid.RowSpacing = stacked ? 8 : 0;
+                actions.HorizontalAlignment = stacked ? HorizontalAlignment.Left : HorizontalAlignment.Right;
+            };
             TokensPanel.Children.Add(new Border { Child = grid, Style = (Style)Resources["ExclusionTokenSurface"] });
         }
         if (_tokens.Count == 0) TokensPanel.Children.Add(new TextBlock { Text = "Add your first matching part below.", Style = (Style)Resources["ExclusionSecondary"] });
@@ -354,7 +418,12 @@ public sealed partial class ExclusionEditor : UserControl
 
     private static void AddTokenAction(Panel parent, string glyph, string label, bool enabled, Action action)
     {
-        var button = new Button { Content = new FontIcon { Glyph = glyph, FontSize = 12 }, IsEnabled = enabled };
+        var button = new Button
+        {
+            Content = new FontIcon { Glyph = glyph, FontSize = 14 }, IsEnabled = enabled,
+            Width = 36, Height = 36, Padding = new(8),
+            Style = (Style)global::Microsoft.UI.Xaml.Application.Current.Resources["SubtleButtonStyle"]
+        };
         AutomationProperties.SetName(button, label);
         ToolTipService.SetToolTip(button, label);
         button.Click += (_, _) => action();

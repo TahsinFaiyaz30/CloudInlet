@@ -25,8 +25,6 @@ public sealed partial class TrayWindow : Window
     private bool _closed;
     private int _refreshPending;
     private int _lastHeight;
-    private readonly PointerEventHandler _settingsPressedHandler;
-    private readonly PointerEventHandler _settingsReleasedHandler;
     private bool _anchorToTop;
     private bool _footerStacked;
     private bool _suppressAutoResize;
@@ -50,6 +48,8 @@ public sealed partial class TrayWindow : Window
         _openSettings = openSettings;
         _quit = quit;
         InitializeComponent();
+        FluentIconMotion.Attach(TrayRoot);
+        FluentIconMotion.Attach(QuickSettingsMenu);
         TrayRoot.ActualThemeChanged += TrayRoot_ActualThemeChanged;
         TrayRoot.KeyDown += (_, args) =>
         {
@@ -57,11 +57,6 @@ public sealed partial class TrayWindow : Window
             AppWindow.Hide();
             args.Handled = true;
         };
-        _settingsPressedHandler = QuickSettings_PointerPressed;
-        _settingsReleasedHandler = QuickSettings_PointerReleased;
-        QuickSettingsButton.AddHandler(UIElement.PointerPressedEvent, _settingsPressedHandler, handledEventsToo: true);
-        QuickSettingsButton.AddHandler(UIElement.PointerReleasedEvent, _settingsReleasedHandler, handledEventsToo: true);
-        AnimatedIcon.SetState(QuickSettingsIcon, "Normal");
         _viewModel = new ClientViewModel(controller);
         TrayRoot.DataContext = _viewModel;
         TrayRoot.SizeChanged += (_, _) => UpdateFooterLayout();
@@ -110,8 +105,6 @@ public sealed partial class TrayWindow : Window
             _controller.Changed -= Controller_Changed;
             TrayRoot.ActualThemeChanged -= TrayRoot_ActualThemeChanged;
             if (_frameHookInstalled) RemoveWindowSubclass(_frameWindow, _nativeFrameProc, 0xCB03);
-            QuickSettingsButton.RemoveHandler(UIElement.PointerPressedEvent, _settingsPressedHandler);
-            QuickSettingsButton.RemoveHandler(UIElement.PointerReleasedEvent, _settingsReleasedHandler);
         };
         _controller.Changed += Controller_Changed;
         Refresh();
@@ -215,13 +208,19 @@ public sealed partial class TrayWindow : Window
         TrayPrimaryLabel.Text = snapshot.State == ClientState.Attention
             ? snapshot.Message.StartsWith("Review required:", StringComparison.Ordinal) ? "Review changes" : "Open CloudInlet"
             : settings.IsConfigured ? "Open folder" : "Connect account";
-        TrayPrimaryGlyph.Glyph = snapshot.State == ClientState.Attention ? "\uE7BA" : settings.IsConfigured ? "\uE8B7" : "\uE753";
+        TrayPrimaryGlyph.IconSource = new FontIconSource
+        {
+            Glyph = snapshot.State == ClientState.Attention ? "\uE7BA" : settings.IsConfigured ? "\uE8B7" : "\uE753",
+            FontSize = 16
+        };
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(TrayOpenFolder, TrayPrimaryLabel.Text);
         QuickSyncNow.IsEnabled = settings.IsConfigured && !_busy;
         QuickOpenFolder.IsEnabled = settings.IsConfigured;
-        PauseMenu.Visibility = snapshot.State == ClientState.Paused ? Visibility.Collapsed : Visibility.Visible;
-        ResumeMenu.Visibility = snapshot.State == ClientState.Paused ? Visibility.Visible : Visibility.Collapsed;
-        PauseMenu.IsEnabled = ResumeMenu.IsEnabled = settings.IsConfigured && !_busy;
+        PauseMenu.Visibility = _viewModel.IsTransferPauseActive ? Visibility.Collapsed : Visibility.Visible;
+        ResumeMenu.Visibility = _viewModel.IsTransferPauseActive ? Visibility.Visible : Visibility.Collapsed;
+        var canPauseTransfers = _viewModel.Preview is null ? _controller.CanPauseTransfers :
+            settings.IsConfigured || _viewModel.HasTransferSummary;
+        PauseMenu.IsEnabled = ResumeMenu.IsEnabled = canPauseTransfers && !_busy;
         MeteredQuickSetting.IsChecked = settings.PauseOnMetered;
         BatteryQuickSetting.IsChecked = settings.PauseOnBatterySaver;
         MeteredQuickSetting.IsEnabled = BatteryQuickSetting.IsEnabled = !_busy;
@@ -388,13 +387,6 @@ public sealed partial class TrayWindow : Window
         finally { _busy = false; Refresh(); }
     }
 
-    private void QuickSettings_PointerEntered(object sender, PointerRoutedEventArgs args) => AnimatedIcon.SetState(QuickSettingsIcon, "PointerOver");
-    private void QuickSettings_PointerExited(object sender, PointerRoutedEventArgs args) => AnimatedIcon.SetState(QuickSettingsIcon, "Normal");
-    private void QuickSettings_PointerPressed(object sender, PointerRoutedEventArgs args) => AnimatedIcon.SetState(QuickSettingsIcon, "Pressed");
-    private void QuickSettings_PointerReleased(object sender, PointerRoutedEventArgs args) => AnimatedIcon.SetState(QuickSettingsIcon, "PointerOver");
-    private void QuickSettings_GotFocus(object sender, RoutedEventArgs args) => AnimatedIcon.SetState(QuickSettingsIcon, "PointerOver");
-    private void QuickSettings_LostFocus(object sender, RoutedEventArgs args) => AnimatedIcon.SetState(QuickSettingsIcon, "Normal");
-
     private void OpenFolder_Click(object sender, RoutedEventArgs args)
     {
         if (_viewModel.Preview is not null) return;
@@ -538,6 +530,27 @@ public sealed partial class TrayWindow : Window
             await UiSmokeCapture.SaveAsync(TrayRoot, Path.Combine(outputDirectory, $"tray-quiet{suffix}.png"));
 
             var live = ClientPreview.TransferQueue();
+            foreach (var cloudOnlyState in new[] { ClientState.Syncing, ClientState.Paused })
+            {
+                _viewModel.SetPreview(live with
+                {
+                    Settings = new AppSettings { Theme = theme.ToString() },
+                    ConnectedOneDriveAccounts = 1,
+                    Snapshot = live.Snapshot with { State = cloudOnlyState },
+                    Activity = []
+                });
+                ShowAtTray();
+                await Task.Delay(220);
+                ResizeToContent();
+                TrayRoot.UpdateLayout();
+                if (!PauseMenu.IsEnabled || !ResumeMenu.IsEnabled || QuickSyncNow.IsEnabled || QuickOpenFolder.IsEnabled ||
+                    (ResumeMenu.Visibility == Visibility.Visible) != (cloudOnlyState == ClientState.Paused))
+                    throw new InvalidOperationException("OneDrive-only transfer work must retain pause and resume without enabling B2 sync or Explorer actions.");
+                await UiSmokeCapture.SaveAsync(TrayRoot, Path.Combine(outputDirectory,
+                    $"tray-onedrive-only-{cloudOnlyState.ToString().ToLowerInvariant()}{suffix}.png"));
+            }
+            await File.AppendAllTextAsync(Path.Combine(outputDirectory, "tray-assertions.txt"),
+                $"PASS: OneDrive-only transfer pause/resume remains available without a configured B2 account{suffix}.{Environment.NewLine}");
             _viewModel.SetPreview(live with { Settings = live.Settings with { Theme = theme.ToString() } });
             ShowAtTray();
             await Task.Delay(220);
