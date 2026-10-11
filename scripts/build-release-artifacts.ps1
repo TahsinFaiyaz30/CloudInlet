@@ -55,6 +55,6 @@ try {
     if (Test-Path -LiteralPath $zip) { throw 'Portable release output already exists.' }
     [IO.Compression.ZipFile]::CreateFromDirectory($portableFolder, $zip, [IO.Compression.CompressionLevel]::Optimal, $false)
     $validation = [ordered]@{ configuration = $Configuration; version = $Version; sourceRevision = $SourceRevision; buildSucceeded = $true; testsPassed = $testsPassed; testsFailed = $testsFailed; testsSkipped = $testsSkipped; liveProviderTestsExcluded = $true; hostedTests = [bool]$HostedTests; signed = [bool]($env:CLOUDINLET_SIGNING_PFX_BASE64 -or $env:CLOUDBAY_SIGNING_PFX_BASE64) }
-    $validation | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output "$Configuration-validation.json") -Encoding utf8NoBOM
+    $validation | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output "$Configuration-build-validation.json") -Encoding utf8NoBOM
     Write-Output $app
 } finally { Pop-Location }

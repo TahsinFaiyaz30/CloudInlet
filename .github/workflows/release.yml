@@ -182,7 +182,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $configurations = @('Debug', 'Release') | ForEach-Object {
-            $path = Join-Path artifacts/release-assets "$_-validation.json"
+            $path = Join-Path artifacts/release-assets "$_-build-validation.json"
             $validation = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
             if ($validation.configuration -cne $_ -or $validation.version -cne $env:RELEASE_VERSION -or $validation.sourceRevision -cne $env:RELEASE_REVISION) { throw 'Release payload evidence does not match this build.' }
             $validation

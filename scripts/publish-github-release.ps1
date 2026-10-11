@@ -29,6 +29,13 @@ foreach ($flavor in @('Debug', 'Release')) {
 $files = @(Get-ChildItem -LiteralPath $assetsRoot -File | Where-Object { $_.Name -like "CloudInlet-$($source.version)-*" -or $_.Name -in @('updates-v2.json', 'SHA256SUMS.txt', 'release-validation.json') } | Sort-Object Name)
 $manifest = Get-Content -LiteralPath (Join-Path $assetsRoot 'updates-v2.json') -Raw | ConvertFrom-Json
 $expectedNames = @($manifest.assets.fileName) + @('updates-v2.json', 'SHA256SUMS.txt', 'release-validation.json')
+$installerAssets = @($manifest.assets | Where-Object { $_.installerKind -cin @('Exe', 'Msi') })
+$sidecarNames = @($installerAssets | ForEach-Object { $_.fileName + '.sha256' })
+$sidecarFiles = @($files | Where-Object { $_.Name -cin $sidecarNames })
+if ($sidecarFiles.Count) {
+    if ($sidecarFiles.Count -ne $sidecarNames.Count) { throw 'Installer checksum sidecars must include the complete four-file group.' }
+    $expectedNames += $sidecarNames
+}
 $storeBase = "CloudInlet-$($source.version)-win-x64-release-store"
 $storeNames = @("$storeBase.msix", "$storeBase.msixupload", "$storeBase-package-info.json")
 $storeFiles = @($files | Where-Object { $_.Name -cin $storeNames })
@@ -37,10 +44,19 @@ if ($storeFiles.Count -gt 0) {
     $expectedNames += $storeNames
 }
 if ($files.Count -ne $expectedNames.Count -or @($files | Where-Object { $_.Name -cnotin $expectedNames }).Count) {
-    throw 'The release contains an unexpected asset inventory. Require six canonical packages, schema 2, checksums, validation and optionally the complete Store group.'
+    $unexpected = @($files | Where-Object { $_.Name -cnotin $expectedNames } | ForEach-Object Name) -join ', '
+    throw "The release contains an unexpected asset inventory ($($files.Count) files, expected $($expectedNames.Count)). Unexpected files: $unexpected"
 }
 foreach ($file in $files) {
     if (($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $file.Length -le 0) { throw "Invalid release payload: $($file.Name). Require regular nonempty files." }
+}
+if ($sidecarFiles.Count) {
+    foreach ($installer in $installerAssets) {
+        $sidecar = Get-Content -LiteralPath (Join-Path $assetsRoot ($installer.fileName + '.sha256')) -Raw
+        if ($sidecar.TrimEnd([char[]]"`r`n") -cne ($installer.sha256 + '  ' + $installer.fileName)) {
+            throw "Installer checksum sidecar does not match its package: $($installer.fileName).sha256"
+        }
+    }
 }
 if ($storeFiles.Count) {
     $store = Get-Content -LiteralPath (Join-Path $assetsRoot "$storeBase-package-info.json") -Raw | ConvertFrom-Json

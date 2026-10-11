@@ -254,6 +254,88 @@ try {
     $publishedStore.digest = 'sha256:' + ('0' * 64)
     Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } 'Published Store package bytes are immutable too.' 'existing release asset differs'
     Assert-True ($global:CloudInletReleaseTestState.uploads -eq 12 -and $global:CloudInletReleaseTestState.starterDeletes -eq 0 -and $global:CloudInletReleaseTestState.publications -eq 1) 'A Store digest mismatch performs no upload, deletion or publication.'
+
+    # Mirror the actual merged workflow payload: each desktop job retains three
+    # packages, two installer checksum sidecars and its per-flavor validation.
+    # Store contributes its three-file group; the workflow creates the combined
+    # validation record before the publisher generates the feed and checksums.
+    $installerAssets = @($manifest.assets | Where-Object { $_.installerKind -cin @('Exe', 'Msi') })
+    $sidecarNames = @($installerAssets | ForEach-Object { $_.fileName + '.sha256' })
+    foreach ($installer in $installerAssets) {
+        ($installer.sha256 + '  ' + $installer.fileName) | Set-Content -LiteralPath (Join-Path $assets ($installer.fileName + '.sha256')) -Encoding ascii
+    }
+    foreach ($configuration in $evidence.configurations) {
+        $flavorEvidence = $configuration.Clone()
+        $flavorEvidence.version = '1.0.0'
+        $flavorEvidence.sourceRevision = $revision
+        $flavorEvidence | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $assets ($configuration.configuration + '-build-validation.json')) -Encoding utf8NoBOM
+    }
+    $combinedEvidence = Get-Content -LiteralPath (Join-Path $assets 'release-validation.json') -Raw | ConvertFrom-Json
+    $debugEvidence = Get-Content -LiteralPath (Join-Path $assets 'Debug-build-validation.json') -Raw | ConvertFrom-Json
+    $releaseEvidence = Get-Content -LiteralPath (Join-Path $assets 'Release-build-validation.json') -Raw | ConvertFrom-Json
+    Assert-True ($combinedEvidence.configurations.Count -eq 2 -and $debugEvidence.configuration -ceq 'Debug' -and $releaseEvidence.configuration -ceq 'Release') 'Combined release evidence remains distinct from both flavor records on case-insensitive Windows filesystems.'
+    & (Join-Path $PSScriptRoot 'generate-update-manifest.ps1') -Version '1.0.0' -AssetDirectory $assets | Out-Null
+    $manifest = Get-Content -LiteralPath (Join-Path $assets 'updates-v2.json') -Raw | ConvertFrom-Json
+    Assert-True ($installerAssets.Count -eq 4 -and $manifest.assets.Count -eq 6 -and @((Get-ChildItem -LiteralPath $assets -File)).Count -eq 18) 'The complete workflow fixture has six updater packages, four sidecars, three Store assets, two flavor records, combined validation, schema 2 and checksums.'
+    $checksumInventory = @(Get-Content -LiteralPath (Join-Path $assets 'SHA256SUMS.txt'))
+    Assert-True ($checksumInventory.Count -eq 14) 'Workflow checksums cover six desktop packages, four installer sidecars, three Store assets and schema 2.'
+    foreach ($name in $sidecarNames) {
+        $hashLine = (Get-FileHash -LiteralPath (Join-Path $assets $name) -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $name
+        Assert-True ($checksumInventory -ccontains $hashLine) 'Each installer sidecar is itself included in the release checksum inventory.'
+    }
+    $global:CloudInletReleaseTestState = @{ exists=$false; draft=$true; assets=[Collections.Generic.List[object]]::new(); uploads=0; publications=0; lookups=0; byId=0; creations=0; starterDeletes=0; blockFreshList=$true; interruptAfter=0; expectedRevision=$revision; expectedAssetCount=16 }
+    foreach ($name in $sidecarNames) {
+        $path = Join-Path $assets $name
+        $bytes = [IO.File]::ReadAllBytes($path)
+        Remove-Item -LiteralPath $path
+        try {
+            Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } "Missing installer checksum sidecar $name blocks publication." 'Installer checksum sidecars must include'
+        } finally { [IO.File]::WriteAllBytes($path, $bytes) }
+    }
+    $installer = $installerAssets[0]
+    $sidecarPath = Join-Path $assets ($installer.fileName + '.sha256')
+    $sidecarBytes = [IO.File]::ReadAllBytes($sidecarPath)
+    foreach ($invalidSidecar in @((('0' * 64) + '  ' + $installer.fileName), ($installer.sha256 + '  wrong-installer.exe'))) {
+        $invalidSidecar | Set-Content -LiteralPath $sidecarPath -Encoding ascii
+        try {
+            Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } 'An installer sidecar must contain the exact current package hash and filename.' 'Installer checksum sidecar does not match'
+        } finally { [IO.File]::WriteAllBytes($sidecarPath, $sidecarBytes) }
+    }
+    $installerPath = Join-Path $assets $installer.fileName
+    $installerBytes = [IO.File]::ReadAllBytes($installerPath)
+    [IO.File]::AppendAllText($installerPath, ' changed final installer bytes')
+    try {
+        Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } 'Changing installer bytes after creating sidecars cannot publish stale hashes, including after signing.' 'Installer checksum sidecar does not match'
+    } finally { [IO.File]::WriteAllBytes($installerPath, $installerBytes) }
+    $unknownSidecar = Join-Path $assets 'CloudInlet-1.0.0-win-x64-release-portable.zip.sha256'
+    [IO.File]::WriteAllText($unknownSidecar, 'unexpected checksum sidecar')
+    try {
+        Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } 'Allowing known installer sidecars does not admit extra checksum files.' 'unexpected asset inventory'
+    } finally { Remove-Item -LiteralPath $unknownSidecar }
+    Assert-True ($global:CloudInletReleaseTestState.creations -eq 0 -and $global:CloudInletReleaseTestState.uploads -eq 0 -and $global:CloudInletReleaseTestState.publications -eq 0) 'Malformed workflow sidecars are rejected before any GitHub release mutation.'
+    $url = & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision
+    Assert-True ($url -ceq 'https://github.com/TahsinFaiyaz30/CloudInlet/releases/tag/v1.0.0' -and $global:CloudInletReleaseTestState.uploads -eq 16 -and $global:CloudInletReleaseTestState.publications -eq 1) 'The actual Store-enabled workflow inventory publishes exactly sixteen immutable assets.'
+    Assert-True (@($global:CloudInletReleaseTestState.assets | Where-Object { $_.name -cin $sidecarNames }).Count -eq 4 -and @($global:CloudInletReleaseTestState.assets | Where-Object { $_.name -cin @('Debug-build-validation.json', 'Release-build-validation.json') }).Count -eq 0) 'All four verified installer sidecars publish while per-flavor build evidence remains internal.'
+    & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision | Out-Null
+    Assert-True ($global:CloudInletReleaseTestState.uploads -eq 16 -and $global:CloudInletReleaseTestState.publications -eq 1) 'Repeating the real workflow inventory never replaces or re-uploads published bytes.'
+    $publishedSidecar = @($global:CloudInletReleaseTestState.assets | Where-Object { $_.name -ceq $sidecarNames[0] })[0]
+    $publishedSidecar.digest = 'sha256:' + ('0' * 64)
+    Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } 'Published installer sidecars remain immutable.' 'existing release asset differs'
+    Assert-True ($global:CloudInletReleaseTestState.uploads -eq 16 -and $global:CloudInletReleaseTestState.starterDeletes -eq 0 -and $global:CloudInletReleaseTestState.publications -eq 1) 'A remote sidecar mismatch performs no upload, deletion or publication.'
+
+    $savedStoreFiles = @{}
+    foreach ($name in $storeNames) {
+        $path = Join-Path $assets $name
+        $savedStoreFiles[$name] = [IO.File]::ReadAllBytes($path)
+        Remove-Item -LiteralPath $path
+    }
+    try {
+        $global:CloudInletReleaseTestState = @{ exists=$false; draft=$true; assets=[Collections.Generic.List[object]]::new(); uploads=0; publications=0; lookups=0; byId=0; creations=0; starterDeletes=0; blockFreshList=$true; interruptAfter=0; expectedRevision=$revision; expectedAssetCount=13 }
+        $url = & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision
+        Assert-True ($url -ceq 'https://github.com/TahsinFaiyaz30/CloudInlet/releases/tag/v1.0.0' -and $global:CloudInletReleaseTestState.uploads -eq 13 -and $global:CloudInletReleaseTestState.publications -eq 1) 'The same desktop workflow without Store publishes thirteen verified assets.'
+    } finally {
+        foreach ($name in $storeNames) { [IO.File]::WriteAllBytes((Join-Path $assets $name), $savedStoreFiles[$name]) }
+    }
     Invoke-TestGit -Arguments @('-C', $fixture, 'commit', '--quiet', '--allow-empty', '-m', 'Simulate newer main while release is building')
     Invoke-TestGit -Arguments @('-C', $fixture, 'push', '--quiet', 'origin', 'main')
     Invoke-TestGit -Arguments @('-C', $fixture, 'checkout', '--quiet', '--detach', $revision)

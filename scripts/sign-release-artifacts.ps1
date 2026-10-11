@@ -33,6 +33,12 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Authenticode signing failed.' }
         & $signtool verify /pa $file.FullName
         if ($LASTEXITCODE -ne 0) { throw 'Authenticode verification failed.' }
+        if (!$ApplicationBinaries) {
+            $sidecar = $file.FullName + '.sha256'
+            if ((Test-Path -LiteralPath $sidecar) -and ((Get-Item -LiteralPath $sidecar).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Installer checksum sidecar cannot be a linked file.' }
+            $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($file.Name)" | Set-Content -LiteralPath $sidecar -Encoding ascii
+        }
     }
 } finally {
     if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary }
