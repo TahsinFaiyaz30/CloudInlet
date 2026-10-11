@@ -22,6 +22,14 @@ pwsh -NoProfile -File scripts/test-release-scripts.ps1
 
 Hosted CI additionally excludes test names containing `Native`; desktop native acceptance remains a separate gate. `LiveProvider` requires explicitly provisioned test credentials and destinations. Save logs/TRX/screenshots in ignored `artifacts/`; report failed or unrun gates accurately.
 
+## Release presentation and publication
+
+For any release task, follow `docs/RELEASE_STYLE.md` and `docs/RELEASING.md`. Prepare `docs/releases/<version>.json` from the complete previous-tag-to-source diff before bumping that version. Choose meaningful changelog categories for the actual release, cover all material changes, and link each item to its implementing commit(s); do not dump commit subjects or force a fixed category list. Make routine editorial decisions autonomously within this format.
+
+Use the release-note generator for download buttons, vertically stacked **Release (x64)** / **Debug (x64)** tables, metadata and full SHA-256 values with native Copy buttons. The File column contains full clickable filenames; Type contains plain file formats (EXE, MSI, ZIP, MSIX, JSON or TXT). GitHub supplies the title, so do not repeat it inside the notes. Architecture must match the actual artifacts. Keep all six Release/Debug desktop packages, `updates-v2.json`, `SHA256SUMS.txt`, and the current Store MSIX when built. Keep MSIXUPLOAD, Store identity records, validation reports and duplicate checksum sidecars in CI artifacts, outside the public asset list. Never omit Debug or invent certification, signing, platform support or test claims. A later verified Microsoft Store installer is a deliberate distribution-metadata update; follow the Store transition checks in `docs/RELEASE_STYLE.md`.
+
+Do not publish generic fallback notes when curated notes are missing. Preserve normal immutable tag/package guards. The user-authorized recreation of the 1.2.0 release object is a one-time presentation/inventory cleanup, not permission for future agents to recreate releases or replace app bytes.
+
 ## Preserve compatibility and user data
 
 Do not globally replace `CloudBay`. Existing state paths, DPAPI entropy, sync-root IDs, pipes/mutexes, installer identities, `Software\CloudBay\Distribution`, `.cloudbay` recovery metadata, Store application ID `CloudBay`, and startup task `CloudBayStartup` intentionally remain stable. Keep existing OneDrive application identity and legacy environment fallbacks. The legacy executable launcher belongs only to the frozen 1.1.2 bridge.

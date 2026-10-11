@@ -188,9 +188,23 @@ jobs:
             $validation
           }
           @{ version = $env:RELEASE_VERSION; sourceRevision = $env:RELEASE_REVISION; configurations = @($configurations); hostedNativeTestsExcluded = $true } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath artifacts/release-assets/release-validation.json -Encoding utf8NoBOM
-      - name: Tag and publish the complete immutable GitHub release
+      - name: Validate curated notes and publish the public release inventory
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REVISION: ${{ needs.prepare.outputs.revision }}
         run: .\scripts\publish-github-release.ps1 -AssetDirectory artifacts/release-assets -ExpectedRevision $env:RELEASE_REVISION
+      - name: Retain publication notes and internal package evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: CloudInlet-publication-evidence
+          path: |
+            artifacts/release-assets/*validation.json
+            artifacts/release-assets/*.sha256
+            artifacts/release-assets/*-store.msixupload
+            artifacts/release-assets/*-store-package-info.json
+            artifacts/release-assets/release-notes.md
+            artifacts/release-assets/updates-v2.json
+            artifacts/release-assets/SHA256SUMS.txt
+          if-no-files-found: ignore

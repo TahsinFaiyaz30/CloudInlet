@@ -25,31 +25,54 @@ foreach ($flavor in @('Debug', 'Release')) {
     $gate = @($evidence.configurations | Where-Object { $_.configuration -ceq $flavor })
     if ($gate.Count -ne 1 -or $gate[0].buildSucceeded -ne $true -or $gate[0].testsPassed -lt 1 -or $gate[0].testsFailed -ne 0 -or $gate[0].testsSkipped -ne 0) { throw "The $flavor build and test gates have not passed." }
 }
+$curatedNotesPath = "docs/releases/$($source.version).json"
+& git -C $root ls-files --error-unmatch -- $curatedNotesPath | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Curated release notes must be committed with the release source before publication.' }
 & (Join-Path $PSScriptRoot 'generate-update-manifest.ps1') -Version $source.version -AssetDirectory $assetsRoot -Repository $Repository | Out-Null
-$files = @(Get-ChildItem -LiteralPath $assetsRoot -File | Where-Object { $_.Name -like "CloudInlet-$($source.version)-*" -or $_.Name -in @('updates-v2.json', 'SHA256SUMS.txt', 'release-validation.json') } | Sort-Object Name)
+$inputFiles = @(Get-ChildItem -LiteralPath $assetsRoot -File | Sort-Object Name)
 $manifest = Get-Content -LiteralPath (Join-Path $assetsRoot 'updates-v2.json') -Raw | ConvertFrom-Json
-$expectedNames = @($manifest.assets.fileName) + @('updates-v2.json', 'SHA256SUMS.txt', 'release-validation.json')
+$publicNames = @($manifest.assets.fileName) + @('updates-v2.json', 'SHA256SUMS.txt')
+$expectedNames = $publicNames + @('release-validation.json')
+$notesPath = Join-Path $assetsRoot 'release-notes.md'
+if (Test-Path -LiteralPath $notesPath -PathType Leaf) { $expectedNames += 'release-notes.md' }
+$flavorNames = @('Debug-build-validation.json', 'Release-build-validation.json')
+$flavorFiles = @($inputFiles | Where-Object { $_.Name -cin $flavorNames })
+if ($flavorFiles.Count) {
+    if ($flavorFiles.Count -ne 2) { throw 'Build validation records must include both Debug and Release.' }
+    foreach ($flavorFile in $flavorFiles) {
+        $flavorEvidence = Get-Content -LiteralPath $flavorFile.FullName -Raw | ConvertFrom-Json
+        $flavor = $flavorFile.Name.Replace('-build-validation.json', '')
+        if ($flavorEvidence.version -cne $source.version -or $flavorEvidence.sourceRevision -cne $ExpectedRevision -or
+            $flavorEvidence.configuration -cne $flavor -or $flavorEvidence.buildSucceeded -ne $true -or
+            $flavorEvidence.testsPassed -lt 1 -or $flavorEvidence.testsFailed -ne 0 -or $flavorEvidence.testsSkipped -ne 0) {
+            throw 'Per-flavor release validation must describe passing gates for this exact source.'
+        }
+    }
+    $expectedNames += $flavorNames
+}
 $installerAssets = @($manifest.assets | Where-Object { $_.installerKind -cin @('Exe', 'Msi') })
 $sidecarNames = @($installerAssets | ForEach-Object { $_.fileName + '.sha256' })
-$sidecarFiles = @($files | Where-Object { $_.Name -cin $sidecarNames })
+$sidecarFiles = @($inputFiles | Where-Object { $_.Name -cin $sidecarNames })
 if ($sidecarFiles.Count) {
     if ($sidecarFiles.Count -ne $sidecarNames.Count) { throw 'Installer checksum sidecars must include the complete four-file group.' }
     $expectedNames += $sidecarNames
 }
 $storeBase = "CloudInlet-$($source.version)-win-x64-release-store"
 $storeNames = @("$storeBase.msix", "$storeBase.msixupload", "$storeBase-package-info.json")
-$storeFiles = @($files | Where-Object { $_.Name -cin $storeNames })
+$storeFiles = @($inputFiles | Where-Object { $_.Name -cin $storeNames })
 if ($storeFiles.Count -gt 0) {
     if ($storeFiles.Count -ne $storeNames.Count) { throw 'Store release assets must include the complete MSIX, MSIXUPLOAD and package-info group.' }
     $expectedNames += $storeNames
+    $publicNames += "$storeBase.msix"
 }
-if ($files.Count -ne $expectedNames.Count -or @($files | Where-Object { $_.Name -cnotin $expectedNames }).Count) {
-    $unexpected = @($files | Where-Object { $_.Name -cnotin $expectedNames } | ForEach-Object Name) -join ', '
-    throw "The release contains an unexpected asset inventory ($($files.Count) files, expected $($expectedNames.Count)). Unexpected files: $unexpected"
+if ($inputFiles.Count -ne $expectedNames.Count -or @($inputFiles | Where-Object { $_.Name -cnotin $expectedNames }).Count) {
+    $unexpected = @($inputFiles | Where-Object { $_.Name -cnotin $expectedNames } | ForEach-Object Name) -join ', '
+    throw "The release contains an unexpected asset inventory ($($inputFiles.Count) files, expected $($expectedNames.Count)). Unexpected files: $unexpected"
 }
-foreach ($file in $files) {
+foreach ($file in $inputFiles) {
     if (($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $file.Length -le 0) { throw "Invalid release payload: $($file.Name). Require regular nonempty files." }
 }
+
 if ($sidecarFiles.Count) {
     foreach ($installer in $installerAssets) {
         $sidecar = Get-Content -LiteralPath (Join-Path $assetsRoot ($installer.fileName + '.sha256')) -Raw
@@ -65,6 +88,12 @@ if ($storeFiles.Count) {
         throw 'Store package metadata must describe the production packages from this exact version and source revision.'
     }
 }
+
+# Rendering validates the curated version/range and public checksums before any
+# tag or GitHub mutation. Never fall back to generic or commit-by-commit notes.
+& (Join-Path $PSScriptRoot 'generate-release-notes.ps1') -Version $source.version -AssetDirectory $assetsRoot -RepositoryRoot $root -ExpectedRevision $ExpectedRevision -OutputPath $notesPath | Out-Null
+$notes = Get-Content -LiteralPath $notesPath -Raw
+$files = @($publicNames | ForEach-Object { Get-Item -LiteralPath (Join-Path $assetsRoot $_) } | Sort-Object Name)
 
 function Invoke-Gh([string[]]$Arguments) {
     $output = & gh @Arguments
@@ -93,15 +122,8 @@ else {
     if ($matching.Count -gt 1) { throw 'Duplicate release tags are not allowed.' }
     if ($matching.Count -eq 1) { $release = $matching[0] }
     else {
-    $notes = @"
-CloudInlet $($source.version) preserves existing accounts, backup settings, Files On-Demand roots, transfer recovery, and installation choices. Direct OneDrive and Backblaze B2 transfers remain available.
-
-Choose the CloudInlet asset with the same build flavor (Release or Debug) and installer type (EXE or MSI) already installed. Portable ZIP builds are also included. CloudBay users must first take the existing 1.1.2 bridge update; later releases use only CloudInlet packages. The application validates installer length and SHA-256 before applying a matching update.
-
-Signing status is recorded in release-validation.json. Unsigned installers can show a Windows security prompt. Microsoft Store packages, when configured, are submitted separately through Partner Center.
-"@
     $request = Join-Path $assetsRoot ('.release-create-' + [Guid]::NewGuid().ToString('N') + '.json')
-    @{ tag_name = $tag; target_commitish = $ExpectedRevision; name = "CloudInlet $($source.version)"; body = $notes; draft = $true; prerelease = $false; generate_release_notes = $true } | ConvertTo-Json | Set-Content -LiteralPath $request -Encoding utf8NoBOM
+    @{ tag_name = $tag; target_commitish = $ExpectedRevision; name = "CloudInlet $($source.version)"; body = $notes; draft = $true; prerelease = $false; generate_release_notes = $false } | ConvertTo-Json | Set-Content -LiteralPath $request -Encoding utf8NoBOM
     try {
         # Creation returns the authoritative release ID. A newly created draft
         # may not appear immediately in tag/list lookups on the hosted runner.
@@ -111,6 +133,7 @@ Signing status is recorded in release-validation.json. Unsigned installers can s
     }
 }
 if ($release.tag_name -cne $tag -or [long]$release.id -lt 1) { throw 'The release identity does not match its immutable tag.' }
+if ($release.body -cne $notes) { throw 'The existing release notes differ from the validated source. Investigate the draft or publish a new version; do not silently replace release content.' }
 $remoteNames = @($release.assets | ForEach-Object { $_.name })
 if (@($remoteNames | Where-Object { $_ -cnotin $files.Name }).Count -or (!$release.draft -and $remoteNames.Count -ne $files.Count)) { throw 'The existing release has a different immutable asset inventory.' }
 foreach ($file in $files) {
@@ -133,6 +156,7 @@ foreach ($file in $files) {
 }
 $ready = Invoke-Gh -Arguments @('api', "repos/$Repository/releases/$($release.id)") | ConvertFrom-Json
 if ($ready.tag_name -cne $tag -or $ready.id -ne $release.id) { throw 'The verified release identity changed.' }
+if ($ready.body -cne $notes) { throw 'The release notes changed before publication.' }
 if (@($ready.assets).Count -ne $files.Count -or @($ready.assets | Where-Object { $_.name -cnotin $files.Name }).Count) { throw 'Draft release inventory is incomplete or contains unexpected assets.' }
 foreach ($file in $files) {
     $remote = @($ready.assets | Where-Object { $_.name -ceq $file.Name })

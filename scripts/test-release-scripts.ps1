@@ -27,9 +27,27 @@ New-Item -ItemType Directory -Path $fixture, $assets | Out-Null
 Invoke-TestGit -Arguments @('init', '--quiet', '--initial-branch=main', $fixture)
 Invoke-TestGit -Arguments @('-C', $fixture, 'config', 'user.name', 'CloudInlet release tests')
 Invoke-TestGit -Arguments @('-C', $fixture, 'config', 'user.email', 'release-tests@example.invalid')
-Set-FixtureVersion '1.0.0'
+Set-FixtureVersion '0.9.0'
 Invoke-TestGit -Arguments @('-C', $fixture, 'add', 'version.json')
 Invoke-TestGit -Arguments @('-C', $fixture, 'commit', '--quiet', '-m', 'Create isolated version fixture')
+Invoke-TestGit -Arguments @('-C', $fixture, 'tag', 'v0.9.0')
+Set-FixtureVersion '1.0.0'
+Invoke-TestGit -Arguments @('-C', $fixture, 'add', 'version.json')
+Invoke-TestGit -Arguments @('-C', $fixture, 'commit', '--quiet', '-m', 'Add the release fixture feature')
+$featureRevision = (& git -C $fixture rev-parse HEAD).Trim()
+$notesDirectory = Join-Path $fixture 'docs/releases'
+New-Item -ItemType Directory -Path $notesDirectory -Force | Out-Null
+$notesSourcePath = Join-Path $notesDirectory '1.0.0.json'
+$notesSource = @{
+    schemaVersion=1; version='1.0.0'; previousTag='v0.9.0'; summary='Safer transfers and a more compact interface.'
+    categories=@(@{ title='Reliability'; items=@(@{ text='Recover interrupted transfers safely.'; commits=@($featureRevision) }) })
+    installationNotes=@('Extract the entire portable archive before opening the app.')
+    validation=@{ items=@('Isolated release fixture validation passed.') }
+    storeStatus='Certification pending.'
+}
+$notesSource | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $notesSourcePath -Encoding utf8NoBOM
+Invoke-TestGit -Arguments @('-C', $fixture, 'add', 'docs/releases/1.0.0.json')
+Invoke-TestGit -Arguments @('-C', $fixture, 'commit', '--quiet', '-m', 'Describe the curated release changes')
 $savedOutput = $env:GITHUB_OUTPUT
 $savedToken = $env:GH_TOKEN
 $savedStoreSecret = $env:CLOUDINLET_STORE_CLIENT_SECRET
@@ -128,7 +146,7 @@ try {
     $evidence = @{ version = '1.0.0'; sourceRevision = $revision; configurations = @(@{configuration='Debug';buildSucceeded=$true;testsPassed=1;testsFailed=0;testsSkipped=0}, @{configuration='Release';buildSucceeded=$true;testsPassed=1;testsFailed=0;testsSkipped=0}) }
     $evidence | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $assets 'release-validation.json') -Encoding utf8NoBOM
     $env:GH_TOKEN = 'isolated-test-no-network'
-    $global:CloudInletReleaseTestState = @{ exists=$false; draft=$true; assets=[Collections.Generic.List[object]]::new(); uploads=0; publications=0; lookups=0; byId=0; creations=0; starterDeletes=0; blockFreshList=$true; interruptAfter=2; expectedRevision=$revision; expectedAssetCount=9 }
+    $global:CloudInletReleaseTestState = @{ exists=$false; draft=$true; assets=[Collections.Generic.List[object]]::new(); uploads=0; publications=0; lookups=0; byId=0; creations=0; starterDeletes=0; blockFreshList=$true; interruptAfter=2; expectedRevision=$revision; expectedAssetCount=8 }
     function global:gh {
         $arguments = @($args)
         $state = $global:CloudInletReleaseTestState
@@ -136,25 +154,25 @@ try {
         if ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudInlet/releases/tags/v1.0.0') {
             $state.lookups++
             if (!$state.exists -or $state.draft) { $global:LASTEXITCODE = 1; return }
-            @{ id=42;tag_name='v1.0.0';draft=$state.draft;assets=@($state.assets) } | ConvertTo-Json -Depth 6 -Compress
+            @{ id=42;tag_name='v1.0.0';draft=$state.draft;body=$state.body;assets=@($state.assets) } | ConvertTo-Json -Depth 6 -Compress
         } elseif ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudInlet/releases/42' -and $arguments -contains 'PATCH') {
             Assert-True ($state.assets.Count -eq $state.expectedAssetCount -and $arguments -contains 'draft=false' -and $arguments -contains 'make_latest=true') 'Publication by release ID occurs only after the complete expected canonical inventory, including the optional Store group, has been uploaded.'
             $state.draft = $false; $state.publications++
-            @{ id=42;tag_name='v1.0.0';draft=$false;published_at='2026-10-05T00:00:00Z';assets=@($state.assets) } | ConvertTo-Json -Depth 6 -Compress
+            @{ id=42;tag_name='v1.0.0';draft=$false;body=$state.body;published_at='2026-10-05T00:00:00Z';assets=@($state.assets) } | ConvertTo-Json -Depth 6 -Compress
         } elseif ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudInlet/releases/42') {
             $state.byId++
-            @{ id=42;tag_name='v1.0.0';draft=$state.draft;assets=@($state.assets) } | ConvertTo-Json -Depth 6 -Compress
+            @{ id=42;tag_name='v1.0.0';draft=$state.draft;body=$state.body;assets=@($state.assets) } | ConvertTo-Json -Depth 6 -Compress
         } elseif ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudInlet/releases?per_page=100') {
             Assert-True ($arguments -contains '--slurp') 'Release lookup must parse all paginated JSON pages safely.'
             if ($state.exists -and $state.blockFreshList) { throw 'A fresh draft is not available through the release list yet.' }
-            if ($state.exists) { '[[' + (@{id=42;tag_name='v1.0.0';draft=$state.draft;assets=@($state.assets)} | ConvertTo-Json -Depth 6 -Compress) + ']]' }
+            if ($state.exists) { '[[' + (@{id=42;tag_name='v1.0.0';draft=$state.draft;body=$state.body;assets=@($state.assets)} | ConvertTo-Json -Depth 6 -Compress) + ']]' }
             else { '[[]]' }
         } elseif ($arguments[0] -ceq 'api' -and $arguments[1] -ceq 'repos/TahsinFaiyaz30/CloudInlet/releases' -and $arguments -contains 'POST') {
             $requestPath = $arguments[[Array]::IndexOf($arguments, '--input') + 1]
             $request = Get-Content -LiteralPath $requestPath -Raw | ConvertFrom-Json
-            Assert-True ($request.draft -and !$request.prerelease -and $request.tag_name -ceq 'v1.0.0' -and $request.target_commitish -ceq $state.expectedRevision -and $request.generate_release_notes -and $request.body -match 'SHA-256') 'Creation requests an unpublished exact-source release with generated notes and package guidance.'
-            $state.exists = $true; $state.creations++
-            @{ id=42;tag_name='v1.0.0';draft=$true;assets=@($state.assets) } | ConvertTo-Json -Depth 6 -Compress
+            Assert-True ($request.draft -and !$request.prerelease -and $request.tag_name -ceq 'v1.0.0' -and $request.target_commitish -ceq $state.expectedRevision -and !$request.generate_release_notes -and $request.body -match 'SHA-256' -and $request.body -match 'Reliability') 'Creation requests an unpublished exact-source release with curated categories, checksums and no appended generic notes.'
+            $state.exists = $true; $state.body = $request.body; $state.creations++
+            @{ id=42;tag_name='v1.0.0';draft=$true;body=$state.body;assets=@($state.assets) } | ConvertTo-Json -Depth 6 -Compress
         } elseif ($arguments[0] -ceq 'api' -and $arguments[1].StartsWith('https://uploads.github.com/repos/TahsinFaiyaz30/CloudInlet/releases/42/assets?name=', [StringComparison]::Ordinal)) {
             $file = Get-Item -LiteralPath $arguments[[Array]::IndexOf($arguments, '--input') + 1]
             if ($state.interruptAfter -gt 0 -and $state.uploads -eq $state.interruptAfter) {
@@ -170,6 +188,43 @@ try {
             [void]$state.assets.Remove($starter[0]); $state.starterDeletes++
         } else { throw 'Unexpected gh invocation in isolated tests. Network access is forbidden.' }
     }
+    $renderedNotesPath = Join-Path $assets 'release-notes.md'
+    $renderArguments = @{ Version='1.0.0'; AssetDirectory=$assets; RepositoryRoot=$fixture; ExpectedRevision=$revision; OutputPath=$renderedNotesPath }
+    & (Join-Path $PSScriptRoot 'generate-release-notes.ps1') @renderArguments | Out-Null
+    $renderedNotes = Get-Content -LiteralPath $renderedNotesPath -Raw
+    Assert-True ($renderedNotes.IndexOf('### Release (x64)') -ge 0 -and $renderedNotes.IndexOf('### Debug (x64)') -gt $renderedNotes.IndexOf('### Release (x64)') -and !$renderedNotes.Contains('| Architecture |')) 'Release and Debug use stacked architecture headings without a repeated architecture column.'
+    Assert-True ($renderedNotes.Contains('Reliability') -and $renderedNotes.Contains("/commit/$featureRevision") -and $renderedNotes.Contains('/compare/v0.9.0...v1.0.0')) 'Curated categories are chosen for actual changes and link the relevant commit plus the complete comparison.'
+    foreach ($asset in $manifest.assets) {
+        Assert-True ($renderedNotes.Contains($asset.sha256) -and $renderedNotes.Contains($asset.fileName)) 'Every Release and Debug package has its exact filename link and full copyable final SHA-256.'
+    }
+    Assert-True ($renderedNotes.Contains('Get-FileHash') -and $renderedNotes.Contains((Get-FileHash -LiteralPath (Join-Path $assets 'SHA256SUMS.txt') -Algorithm SHA256).Hash.ToLowerInvariant())) 'Verification instructions and the checksum index digest are included in the body.'
+    Assert-Rejected { & (Join-Path $PSScriptRoot 'generate-release-notes.ps1') @renderArguments -NotesPath (Join-Path $workspace 'missing-notes.json') } 'Missing curated notes cannot silently generate generic release text.' 'Curated release notes are missing'
+    $invalidNotesPath = Join-Path $workspace 'invalid-notes.json'
+    $baselineRevision = (& git -C $fixture rev-parse v0.9.0).Trim()
+    foreach ($scenario in @('WrongVersion', 'OutsideRange', 'NoCommit', 'EmptyCategory', 'UnfinishedText')) {
+        $invalidNotes = $notesSource | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+        switch ($scenario) {
+            'WrongVersion' { $invalidNotes.version = '1.0.1' }
+            'OutsideRange' { $invalidNotes.categories[0].items[0].commits = @($baselineRevision) }
+            'NoCommit' { $invalidNotes.categories[0].items[0].commits = @() }
+            'EmptyCategory' { $invalidNotes.categories[0].items = @() }
+            'UnfinishedText' { $invalidNotes.summary = 'TODO release summary' }
+        }
+        $invalidNotes | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $invalidNotesPath -Encoding utf8NoBOM
+        Assert-Rejected { & (Join-Path $PSScriptRoot 'generate-release-notes.ps1') @renderArguments -NotesPath $invalidNotesPath } "Invalid curated release notes $scenario are rejected."
+    }
+    $checksumPath = Join-Path $assets 'SHA256SUMS.txt'
+    $checksumBytes = [IO.File]::ReadAllBytes($checksumPath)
+    ('0' * 64) + '  unpublished-internal.json' | Add-Content -LiteralPath $checksumPath -Encoding ascii
+    try {
+        Assert-Rejected { & (Join-Path $PSScriptRoot 'generate-release-notes.ps1') @renderArguments } 'Rendered checksums reject internal or unknown public download entries.' 'SHA256SUMS.txt'
+    } finally { [IO.File]::WriteAllBytes($checksumPath, $checksumBytes) }
+    $sourceNotesBytes = [IO.File]::ReadAllBytes($notesSourcePath)
+    Remove-Item -LiteralPath $notesSourcePath
+    try {
+        Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } 'Removing required curated source notes blocks publication before tag creation.' 'clean tracked source tree'
+    } finally { [IO.File]::WriteAllBytes($notesSourcePath, $sourceNotesBytes) }
+    Assert-True ($global:CloudInletReleaseTestState.creations -eq 0 -and $global:CloudInletReleaseTestState.uploads -eq 0 -and @(& git -C $fixture tag --list v1.0.0).Count -eq 0 -and @(& git -C $fixture ls-remote --tags origin refs/tags/v1.0.0).Count -eq 0) 'Failed release-note validation has no local tag, remote tag or GitHub mutation.'
     Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } 'An interrupted upload leaves a private draft.' 'Simulated interrupted draft upload'
     Assert-True ($global:CloudInletReleaseTestState.draft -and $global:CloudInletReleaseTestState.uploads -eq 2 -and $global:CloudInletReleaseTestState.publications -eq 0) 'Incomplete assets remain unpublished.'
     Assert-True ($global:CloudInletReleaseTestState.creations -eq 1) 'A newly created draft uses the creation response without querying an unavailable list or tag endpoint.'
@@ -177,14 +232,19 @@ try {
     $global:CloudInletReleaseTestState.interruptAfter = 0
     $global:CloudInletReleaseTestState.blockFreshList = $false
     $url = & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision
-    Assert-True ($url -ceq 'https://github.com/TahsinFaiyaz30/CloudInlet/releases/tag/v1.0.0' -and $global:CloudInletReleaseTestState.uploads -eq 9 -and $global:CloudInletReleaseTestState.publications -eq 1) 'A complete release creates one draft, uploads the verified canonical inventory, and publishes once.'
+    Assert-True ($url -ceq 'https://github.com/TahsinFaiyaz30/CloudInlet/releases/tag/v1.0.0' -and $global:CloudInletReleaseTestState.uploads -eq 8 -and $global:CloudInletReleaseTestState.publications -eq 1) 'A complete release creates one draft, uploads the verified canonical inventory, and publishes once.'
     Assert-True ($global:CloudInletReleaseTestState.starterDeletes -eq 1) 'An interrupted starter asset is recovered before retrying its exact file.'
     Assert-True ($global:CloudInletReleaseTestState.byId -ge 1) 'Draft integrity uses the release ID when the tag endpoint returns 404.'
     & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision | Out-Null
-    Assert-True ($global:CloudInletReleaseTestState.uploads -eq 9 -and $global:CloudInletReleaseTestState.publications -eq 1) 'Re-running a published identical release never replaces or re-uploads bytes.'
+    Assert-True ($global:CloudInletReleaseTestState.uploads -eq 8 -and $global:CloudInletReleaseTestState.publications -eq 1) 'Re-running a published identical release never replaces or re-uploads bytes.'
+    $publishedBody = $global:CloudInletReleaseTestState.body
+    $global:CloudInletReleaseTestState.body += ' Unexpected manual edit.'
+    Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } 'A changed public release body is not silently overwritten.' 'existing release notes differ'
+    Assert-True ($global:CloudInletReleaseTestState.uploads -eq 8 -and $global:CloudInletReleaseTestState.publications -eq 1 -and $global:CloudInletReleaseTestState.body.EndsWith(' Unexpected manual edit.')) 'A notes mismatch makes no public release mutation.'
+    $global:CloudInletReleaseTestState.body = $publishedBody
     $global:CloudInletReleaseTestState.assets[0].digest = 'sha256:' + ('0' * 64)
     Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } 'Different remote bytes are rejected rather than clobbered.'
-    Assert-True ($global:CloudInletReleaseTestState.uploads -eq 9) 'Immutable mismatch performs no asset replacement.'
+    Assert-True ($global:CloudInletReleaseTestState.uploads -eq 8) 'Immutable mismatch performs no asset replacement.'
     Assert-True ($global:CloudInletReleaseTestState.starterDeletes -eq 1) 'Different uploaded bytes are never deleted during recovery.'
 
     # Exercise the same optional group emitted by the Store workflow and merged into
@@ -205,12 +265,12 @@ try {
     $manifest = Get-Content -LiteralPath (Join-Path $assets 'updates-v2.json') -Raw | ConvertFrom-Json
     Assert-True ($manifest.assets.Count -eq 6 -and !($manifest.assets.fileName -match 'store|msix')) 'Optional Store packages never become desktop updater choices.'
     $checksumInventory = @(Get-Content -LiteralPath (Join-Path $assets 'SHA256SUMS.txt'))
-    Assert-True ($checksumInventory.Count -eq 10) 'Checksums cover the six desktop packages, complete three-file Store group and schema 2.'
+    Assert-True ($checksumInventory.Count -eq 8) 'Checksums cover only the six desktop packages, public MSIX and schema 2.'
     foreach ($name in $storeNames) {
         $hashLine = (Get-FileHash -LiteralPath (Join-Path $assets $name) -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $name
-        Assert-True ($checksumInventory -ccontains $hashLine) 'Each optional Store asset has its exact length-independent SHA-256 checksum.'
+        Assert-True (($checksumInventory -ccontains $hashLine) -eq ($name -ceq "$storeBase.msix")) 'Only the public MSIX appears in checksums; Partner Center upload and metadata remain internal.'
     }
-    $global:CloudInletReleaseTestState = @{ exists=$false; draft=$true; assets=[Collections.Generic.List[object]]::new(); uploads=0; publications=0; lookups=0; byId=0; creations=0; starterDeletes=0; blockFreshList=$true; interruptAfter=0; expectedRevision=$revision; expectedAssetCount=12 }
+    $global:CloudInletReleaseTestState = @{ exists=$false; draft=$true; assets=[Collections.Generic.List[object]]::new(); uploads=0; publications=0; lookups=0; byId=0; creations=0; starterDeletes=0; blockFreshList=$true; interruptAfter=0; expectedRevision=$revision; expectedAssetCount=9 }
     foreach ($name in $storeNames) {
         $path = Join-Path $assets $name
         $bytes = [IO.File]::ReadAllBytes($path)
@@ -246,14 +306,14 @@ try {
     } finally { [IO.File]::WriteAllBytes($storePackagePath, $storePackageBytes) }
     Assert-True ($global:CloudInletReleaseTestState.creations -eq 0 -and $global:CloudInletReleaseTestState.uploads -eq 0 -and $global:CloudInletReleaseTestState.publications -eq 0) 'Invalid Store inventories are rejected before any GitHub release mutation.'
     $url = & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision
-    Assert-True ($url -ceq 'https://github.com/TahsinFaiyaz30/CloudInlet/releases/tag/v1.0.0' -and $global:CloudInletReleaseTestState.uploads -eq 12 -and $global:CloudInletReleaseTestState.publications -eq 1) 'A complete optional Store group publishes exactly twelve immutable release assets.'
-    Assert-True (@($global:CloudInletReleaseTestState.assets | Where-Object { $_.name -cin $storeNames }).Count -eq 3) 'The published release includes exactly the production MSIX, MSIXUPLOAD and package-info assets.'
+    Assert-True ($url -ceq 'https://github.com/TahsinFaiyaz30/CloudInlet/releases/tag/v1.0.0' -and $global:CloudInletReleaseTestState.uploads -eq 9 -and $global:CloudInletReleaseTestState.publications -eq 1) 'A complete optional Store group publishes exactly nine immutable public assets.'
+    Assert-True (@($global:CloudInletReleaseTestState.assets | Where-Object { $_.name -cin $storeNames }).Count -eq 1 -and @($global:CloudInletReleaseTestState.assets | Where-Object { $_.name -ceq "$storeBase.msix" }).Count -eq 1) 'Only production MSIX from the validated Store group becomes a public asset.'
     & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision | Out-Null
-    Assert-True ($global:CloudInletReleaseTestState.uploads -eq 12 -and $global:CloudInletReleaseTestState.publications -eq 1) 'Repeating an identical Store-enabled release does not replace or re-upload bytes.'
-    $publishedStore = @($global:CloudInletReleaseTestState.assets | Where-Object { $_.name -ceq "$storeBase.msixupload" })[0]
+    Assert-True ($global:CloudInletReleaseTestState.uploads -eq 9 -and $global:CloudInletReleaseTestState.publications -eq 1) 'Repeating an identical Store-enabled release does not replace or re-upload bytes.'
+    $publishedStore = @($global:CloudInletReleaseTestState.assets | Where-Object { $_.name -ceq "$storeBase.msix" })[0]
     $publishedStore.digest = 'sha256:' + ('0' * 64)
     Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } 'Published Store package bytes are immutable too.' 'existing release asset differs'
-    Assert-True ($global:CloudInletReleaseTestState.uploads -eq 12 -and $global:CloudInletReleaseTestState.starterDeletes -eq 0 -and $global:CloudInletReleaseTestState.publications -eq 1) 'A Store digest mismatch performs no upload, deletion or publication.'
+    Assert-True ($global:CloudInletReleaseTestState.uploads -eq 9 -and $global:CloudInletReleaseTestState.starterDeletes -eq 0 -and $global:CloudInletReleaseTestState.publications -eq 1) 'A Store digest mismatch performs no upload, deletion or publication.'
 
     # Mirror the actual merged workflow payload: each desktop job retains three
     # packages, two installer checksum sidecars and its per-flavor validation.
@@ -276,14 +336,26 @@ try {
     Assert-True ($combinedEvidence.configurations.Count -eq 2 -and $debugEvidence.configuration -ceq 'Debug' -and $releaseEvidence.configuration -ceq 'Release') 'Combined release evidence remains distinct from both flavor records on case-insensitive Windows filesystems.'
     & (Join-Path $PSScriptRoot 'generate-update-manifest.ps1') -Version '1.0.0' -AssetDirectory $assets | Out-Null
     $manifest = Get-Content -LiteralPath (Join-Path $assets 'updates-v2.json') -Raw | ConvertFrom-Json
-    Assert-True ($installerAssets.Count -eq 4 -and $manifest.assets.Count -eq 6 -and @((Get-ChildItem -LiteralPath $assets -File)).Count -eq 18) 'The complete workflow fixture has six updater packages, four sidecars, three Store assets, two flavor records, combined validation, schema 2 and checksums.'
+    Assert-True ($installerAssets.Count -eq 4 -and $manifest.assets.Count -eq 6 -and @((Get-ChildItem -LiteralPath $assets -File)).Count -eq 19) 'The complete workflow fixture retains packages, sidecars, Store group, validation, schema 2, checksums and rendered notes.'
     $checksumInventory = @(Get-Content -LiteralPath (Join-Path $assets 'SHA256SUMS.txt'))
-    Assert-True ($checksumInventory.Count -eq 14) 'Workflow checksums cover six desktop packages, four installer sidecars, three Store assets and schema 2.'
+    Assert-True ($checksumInventory.Count -eq 8) 'Workflow checksums contain only the public six desktop packages, Store MSIX and updater feed.'
     foreach ($name in $sidecarNames) {
         $hashLine = (Get-FileHash -LiteralPath (Join-Path $assets $name) -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $name
-        Assert-True ($checksumInventory -ccontains $hashLine) 'Each installer sidecar is itself included in the release checksum inventory.'
+        Assert-True ($checksumInventory -cnotcontains $hashLine) 'Installer sidecars are validated internally and excluded from the public checksum inventory.'
     }
-    $global:CloudInletReleaseTestState = @{ exists=$false; draft=$true; assets=[Collections.Generic.List[object]]::new(); uploads=0; publications=0; lookups=0; byId=0; creations=0; starterDeletes=0; blockFreshList=$true; interruptAfter=0; expectedRevision=$revision; expectedAssetCount=16 }
+    $global:CloudInletReleaseTestState = @{ exists=$false; draft=$true; assets=[Collections.Generic.List[object]]::new(); uploads=0; publications=0; lookups=0; byId=0; creations=0; starterDeletes=0; blockFreshList=$true; interruptAfter=0; expectedRevision=$revision; expectedAssetCount=9 }
+    $debugEvidencePath = Join-Path $assets 'Debug-build-validation.json'
+    $debugEvidenceBytes = [IO.File]::ReadAllBytes($debugEvidencePath)
+    Remove-Item -LiteralPath $debugEvidencePath
+    try {
+        Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } 'A partial per-flavor validation group blocks publication even though it is internal.' 'Build validation records must include both'
+    } finally { [IO.File]::WriteAllBytes($debugEvidencePath, $debugEvidenceBytes) }
+    $staleEvidence = [Text.Encoding]::UTF8.GetString($debugEvidenceBytes) | ConvertFrom-Json
+    $staleEvidence.sourceRevision = '0' * 40
+    $staleEvidence | ConvertTo-Json | Set-Content -LiteralPath $debugEvidencePath -Encoding utf8NoBOM
+    try {
+        Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } 'Internal build evidence from another revision cannot authorize publication.' 'Per-flavor release validation'
+    } finally { [IO.File]::WriteAllBytes($debugEvidencePath, $debugEvidenceBytes) }
     foreach ($name in $sidecarNames) {
         $path = Join-Path $assets $name
         $bytes = [IO.File]::ReadAllBytes($path)
@@ -314,14 +386,14 @@ try {
     } finally { Remove-Item -LiteralPath $unknownSidecar }
     Assert-True ($global:CloudInletReleaseTestState.creations -eq 0 -and $global:CloudInletReleaseTestState.uploads -eq 0 -and $global:CloudInletReleaseTestState.publications -eq 0) 'Malformed workflow sidecars are rejected before any GitHub release mutation.'
     $url = & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision
-    Assert-True ($url -ceq 'https://github.com/TahsinFaiyaz30/CloudInlet/releases/tag/v1.0.0' -and $global:CloudInletReleaseTestState.uploads -eq 16 -and $global:CloudInletReleaseTestState.publications -eq 1) 'The actual Store-enabled workflow inventory publishes exactly sixteen immutable assets.'
-    Assert-True (@($global:CloudInletReleaseTestState.assets | Where-Object { $_.name -cin $sidecarNames }).Count -eq 4 -and @($global:CloudInletReleaseTestState.assets | Where-Object { $_.name -cin @('Debug-build-validation.json', 'Release-build-validation.json') }).Count -eq 0) 'All four verified installer sidecars publish while per-flavor build evidence remains internal.'
+    Assert-True ($url -ceq 'https://github.com/TahsinFaiyaz30/CloudInlet/releases/tag/v1.0.0' -and $global:CloudInletReleaseTestState.uploads -eq 9 -and $global:CloudInletReleaseTestState.publications -eq 1) 'The actual Store-enabled workflow inventory publishes exactly nine immutable public assets.'
+    Assert-True (@($global:CloudInletReleaseTestState.assets | Where-Object { $_.name -cin $sidecarNames }).Count -eq 0 -and @($global:CloudInletReleaseTestState.assets | Where-Object { $_.name -cin @('release-validation.json', 'Debug-build-validation.json', 'Release-build-validation.json', 'release-notes.md') }).Count -eq 0) 'Installer sidecars, release notes and all validation records stay internal.'
     & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision | Out-Null
-    Assert-True ($global:CloudInletReleaseTestState.uploads -eq 16 -and $global:CloudInletReleaseTestState.publications -eq 1) 'Repeating the real workflow inventory never replaces or re-uploads published bytes.'
-    $publishedSidecar = @($global:CloudInletReleaseTestState.assets | Where-Object { $_.name -ceq $sidecarNames[0] })[0]
-    $publishedSidecar.digest = 'sha256:' + ('0' * 64)
-    Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } 'Published installer sidecars remain immutable.' 'existing release asset differs'
-    Assert-True ($global:CloudInletReleaseTestState.uploads -eq 16 -and $global:CloudInletReleaseTestState.starterDeletes -eq 0 -and $global:CloudInletReleaseTestState.publications -eq 1) 'A remote sidecar mismatch performs no upload, deletion or publication.'
+    Assert-True ($global:CloudInletReleaseTestState.uploads -eq 9 -and $global:CloudInletReleaseTestState.publications -eq 1) 'Repeating the real workflow inventory never replaces or re-uploads published bytes.'
+    $publishedChecksums = @($global:CloudInletReleaseTestState.assets | Where-Object { $_.name -ceq 'SHA256SUMS.txt' })[0]
+    $publishedChecksums.digest = 'sha256:' + ('0' * 64)
+    Assert-Rejected { & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision } 'The public checksum index remains immutable.' 'existing release asset differs'
+    Assert-True ($global:CloudInletReleaseTestState.uploads -eq 9 -and $global:CloudInletReleaseTestState.starterDeletes -eq 0 -and $global:CloudInletReleaseTestState.publications -eq 1) 'A remote checksum mismatch performs no upload, deletion or publication.'
 
     $savedStoreFiles = @{}
     foreach ($name in $storeNames) {
@@ -330,12 +402,33 @@ try {
         Remove-Item -LiteralPath $path
     }
     try {
-        $global:CloudInletReleaseTestState = @{ exists=$false; draft=$true; assets=[Collections.Generic.List[object]]::new(); uploads=0; publications=0; lookups=0; byId=0; creations=0; starterDeletes=0; blockFreshList=$true; interruptAfter=0; expectedRevision=$revision; expectedAssetCount=13 }
+        $global:CloudInletReleaseTestState = @{ exists=$false; draft=$true; assets=[Collections.Generic.List[object]]::new(); uploads=0; publications=0; lookups=0; byId=0; creations=0; starterDeletes=0; blockFreshList=$true; interruptAfter=0; expectedRevision=$revision; expectedAssetCount=8 }
         $url = & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -RepositoryRoot $fixture -AssetDirectory $assets -ExpectedRevision $revision
-        Assert-True ($url -ceq 'https://github.com/TahsinFaiyaz30/CloudInlet/releases/tag/v1.0.0' -and $global:CloudInletReleaseTestState.uploads -eq 13 -and $global:CloudInletReleaseTestState.publications -eq 1) 'The same desktop workflow without Store publishes thirteen verified assets.'
+        Assert-True ($url -ceq 'https://github.com/TahsinFaiyaz30/CloudInlet/releases/tag/v1.0.0' -and $global:CloudInletReleaseTestState.uploads -eq 8 -and $global:CloudInletReleaseTestState.publications -eq 1) 'The same desktop workflow without Store publishes eight verified public assets.'
     } finally {
         foreach ($name in $storeNames) { [IO.File]::WriteAllBytes((Join-Path $assets $name), $savedStoreFiles[$name]) }
     }
+    # Exercise the version-bump release gate in its own clone so no fixture
+    # publication state or retained immutable tag needs to be rewritten.
+    $bumpFixture = Join-Path $workspace 'bump-source'
+    Invoke-TestGit -Arguments @('clone', '--quiet', $fixture, $bumpFixture)
+    Invoke-TestGit -Arguments @('-C', $bumpFixture, 'config', 'user.name', 'CloudInlet release tests')
+    Invoke-TestGit -Arguments @('-C', $bumpFixture, 'config', 'user.email', 'release-tests@example.invalid')
+    $beforeBumpRevision = (& git -C $bumpFixture rev-parse HEAD).Trim()
+    $beforeBumpVersion = Get-Content -LiteralPath (Join-Path $bumpFixture 'version.json') -Raw
+    Assert-Rejected { & (Join-Path $PSScriptRoot 'bump-version.ps1') -RepositoryRoot $bumpFixture -Version '1.0.1' -Commit } 'A committed version bump requires reviewed next-release notes first.' 'Prepare and commit docs/releases/1.0.1.json'
+    Assert-True ((Get-Content -LiteralPath (Join-Path $bumpFixture 'version.json') -Raw) -ceq $beforeBumpVersion -and (& git -C $bumpFixture rev-parse HEAD).Trim() -ceq $beforeBumpRevision) 'Missing next-release notes leave both the version file and commit unchanged.'
+    Invoke-TestGit -Arguments @('-C', $bumpFixture, 'commit', '--quiet', '--allow-empty', '-m', 'Fix a transfer recovery fixture')
+    $nextNotes = $notesSource | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+    $nextNotes.version = '1.0.1'
+    $nextNotes.previousTag = 'v1.0.0'
+    $nextNotes.categories[0].items[0].commits = @((& git -C $bumpFixture rev-parse HEAD).Trim())
+    $nextNotes | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $bumpFixture 'docs/releases/1.0.1.json') -Encoding utf8NoBOM
+    Invoke-TestGit -Arguments @('-C', $bumpFixture, 'add', 'docs/releases/1.0.1.json')
+    Invoke-TestGit -Arguments @('-C', $bumpFixture, 'commit', '--quiet', '-m', 'Describe the next release changes before its version bump')
+    & (Join-Path $PSScriptRoot 'bump-version.ps1') -RepositoryRoot $bumpFixture -Version '1.0.1' -Commit | Out-Null
+    $bumped = & (Join-Path $PSScriptRoot 'get-release-version.ps1') -RepositoryRoot $bumpFixture
+    Assert-True ($bumped.version -ceq '1.0.1' -and @(& git -C $bumpFixture status --porcelain).Count -eq 0) 'Committed, validated notes permit a clean version-bump commit without manual release-page editing.'
     Invoke-TestGit -Arguments @('-C', $fixture, 'commit', '--quiet', '--allow-empty', '-m', 'Simulate newer main while release is building')
     Invoke-TestGit -Arguments @('-C', $fixture, 'push', '--quiet', 'origin', 'main')
     Invoke-TestGit -Arguments @('-C', $fixture, 'checkout', '--quiet', '--detach', $revision)

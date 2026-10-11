@@ -1,0 +1,233 @@
+{
+  "schemaVersion": 1,
+  "version": "1.2.0",
+  "previousTag": "v1.1.2",
+  "summary": "A refreshed interface, compact transfer views, and safer imports and recovery.",
+  "categories": [
+    {
+      "title": "Features",
+      "items": [
+        {
+          "text": "Search app pages and settings with recent queries and clear history.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        },
+        {
+          "text": "Cloud services dashboard for B2 and OneDrive accounts.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        },
+        {
+          "text": "Searchable source and destination pickers for local and cloud transfers.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        },
+        {
+          "text": "Guided transfer exclusions with editable rules and example matching.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        },
+        {
+          "text": "System, Light and Dark theme previews with Windows appearance shortcuts.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Bug fixes",
+      "items": [
+        {
+          "text": "Fixed unnecessary stacking and cramped controls in smaller windows.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        },
+        {
+          "text": "Fixed navigation unexpectedly returning Home or losing the current settings page.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        },
+        {
+          "text": "Fixed transfer-row and tray crashes caused by icon recycling.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        },
+        {
+          "text": "Prevented damaged or inaccessible diagnostic files from blocking startup.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        },
+        {
+          "text": "Restored independent cloud-job pause/resume without a configured B2 backup.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        },
+        {
+          "text": "Corrected startup controls and pause state for OneDrive-only accounts.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        },
+        {
+          "text": "Preserved transfer drafts when connecting an account during setup.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        },
+        {
+          "text": "Fixed folder moves failing after verified child files were removed.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        },
+        {
+          "text": "Rejected stale import reviews and guarded source files against concurrent changes.",
+          "commits": [
+            "4fc7ca4e5bd3f1313d469faf59417cf80f66e758"
+          ]
+        },
+        {
+          "text": "Preserved read-only imports and destination conflicts; kept online-only previews from downloading file contents.",
+          "commits": [
+            "4fc7ca4e5bd3f1313d469faf59417cf80f66e758"
+          ]
+        },
+        {
+          "text": "Fixed native sync-root registration in the Store package.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        },
+        {
+          "text": "Prevented missing placeholders after Store removal from propagating cloud deletions during recovery.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        },
+        {
+          "text": "Corrected folder-icon scaling and caption colors when Windows and app themes differ.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Improvements",
+      "items": [
+        {
+          "text": "Refreshed Fluent pages, navigation, icons, dialogs and tray.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        },
+        {
+          "text": "Combined transfer status, speed, progress and size into compact rows.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        },
+        {
+          "text": "Simplified Updates messages and grouped actions into a wrapping toolbar.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        },
+        {
+          "text": "Adapted theme previews to available width and text scaling.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        },
+        {
+          "text": "Improved OneDrive sign-in with code, expiry, progress and copy controls.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        },
+        {
+          "text": "Adapted minimum window sizing to display scale and available screen space.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Compatibility",
+      "items": [
+        {
+          "text": "Future releases use CloudInlet packages and schema-2 updates; original CloudBay clients upgrade through the frozen 1.1.2 bridge. Existing installation paths and saved data are preserved.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        },
+        {
+          "text": "Windows 11 Store virtualization exclusions now cover only shared app state and required Explorer settings; data-retention and uninstall guidance are documented.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Dependencies and release tooling",
+      "collapsed": true,
+      "items": [
+        {
+          "text": "Updated SQLite bundle to 2.1.13, with SQLite engine 3.53.3.",
+          "commits": [
+            "b6acd76697f22da7a51c770afd6a9f9cdfd23ce3"
+          ]
+        },
+        {
+          "text": "Strengthened package validation, final checksums and release-file handling.",
+          "commits": [
+            "9e7bdc1b7dc8459a723548bdea4f4fdf8c9144af",
+            "7c1b42f6edd3c1c7b0b1a8a89b92cb24916fe478"
+          ]
+        }
+      ]
+    }
+  ],
+  "storeStatus": "Certification pending.",
+  "installationNotes": [
+    "**Platform:** x64. The package minimum is Windows 10 build 19041; local native validation covered Windows 11. Windows 10 execution remains unverified.",
+    "**Runtime:** bundled with the app; no separate .NET installation is required.",
+    "Keep the same installer type and Release/Debug build when updating.",
+    "Original CloudBay installations must upgrade through the **1.1.2 bridge** first.",
+    "Portable builds update manually; Store installations update through Microsoft Store.",
+    "GitHub's source archives are for building the app."
+  ],
+  "validation": {
+    "items": [
+      "959 local desktop tests and 116 release-script assertions passed for this release.",
+      "Light and dark UI checks, including compact-window layouts; isolated Store-package removal and recovery checks.",
+      "Hosted tests exclude Native and LiveProvider cases. Live B2/OneDrive acceptance and real personal-folder redirection remain unverified. Store certification is separate."
+    ],
+    "links": [
+      {
+        "url": "https://github.com/TahsinFaiyaz30/CloudInlet/actions/runs/38114892013",
+        "label": "Windows CI"
+      },
+      {
+        "url": "https://github.com/TahsinFaiyaz30/CloudInlet/actions/runs/38115258247",
+        "label": "Release build"
+      },
+      {
+        "url": "https://github.com/TahsinFaiyaz30/CloudInlet/blob/v1.2.0/docs/ASTRA_HANDOFF.md",
+        "label": "Audit details"
+      }
+    ]
+  }
+}

@@ -38,9 +38,14 @@ try {
     $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $temporary -Encoding utf8NoBOM
     Move-Item -LiteralPath $temporary -Destination (Join-Path $root 'updates-v2.json') -Force
 } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary } }
-$releaseFiles = @(Get-ChildItem -LiteralPath $root -File | Where-Object { $_.Name -eq 'updates-v2.json' -or $_.Name -like "CloudInlet-$Version-*" })
+# Only downloadable public payloads belong in this index. Workflow validation,
+# installer sidecars and Partner Center upload files stay in CI evidence.
+$publicNames = @($assets.fileName) + @('updates-v2.json')
+$storeName = "CloudInlet-$Version-win-x64-release-store.msix"
+if (Test-Path -LiteralPath (Join-Path $root $storeName) -PathType Leaf) { $publicNames += $storeName }
+$releaseFiles = @($publicNames | ForEach-Object { Get-Item -LiteralPath (Join-Path $root $_) })
 $sums = foreach ($file in $releaseFiles | Sort-Object Name) {
-    if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Release payload cannot contain linked files.' }
+    if (($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $file.Length -le 0) { throw "Invalid release payload: $($file.Name). Require regular nonempty files." }
     "$((Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($file.Name)"
 }
 $sums | Set-Content -LiteralPath (Join-Path $root 'SHA256SUMS.txt') -Encoding ascii

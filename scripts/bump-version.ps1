@@ -26,6 +26,12 @@ if ($Commit) {
     if ($LASTEXITCODE -ne 0 -or $status.Count) { throw 'Commit a version bump from a clean tracked working tree.' }
     $branch = (& git -C $root branch --show-current).Trim()
     if ($Push -and $branch -ne 'main') { throw 'Automatic release version pushes must target main.' }
+    # Curated release content must be ready before a version commit can trigger
+    # CI and publication. Never push a version that needs later editorial repair.
+    $notesRelative = "docs/releases/$Version.json"
+    & git -C $root cat-file -e "HEAD:$notesRelative" 2>$null
+    if ($LASTEXITCODE -ne 0) { throw "Prepare and commit $notesRelative before committing the version bump. Follow docs/RELEASE_STYLE.md." }
+    & (Join-Path $PSScriptRoot 'generate-release-notes.ps1') -Version $Version -RepositoryRoot $root -ExpectedRevision $current.sourceRevision -ValidateOnly | Out-Null
 }
 @{ version = $Version } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $root 'version.json') -Encoding utf8NoBOM
 if ($Commit) {
