@@ -22,6 +22,8 @@ Cover every material change. One commit may need multiple bullets; one change ma
 
 Validation notes must state what passed and what remained unrun or unavailable. Refer to exact workflow/evidence links and relevant environment boundaries. Never turn a build success into a claim of complete functional validation, Store approval, Windows-version coverage or live-provider acceptance. The generator checks source relationships and files; it cannot prove the semantic completeness or truth of prose. The author remains responsible for reviewing those claims.
 
+Public release notes must link only to intended public project documentation and validation results. Keep internal handoffs, working audit notes, planning records and contributor instructions out of release pages, download tables and public evidence links. Use the relevant successful workflow runs for build/test evidence.
+
 ## Curated source and generated output
 
 Before advancing `version.json`, commit curated notes for the next version at `docs/releases/<version>.json`. The generator requires those notes and refuses to substitute a generic paragraph or an automatic commit log. This outline shows the JSON fields; replace illustrative values with reviewed release data:

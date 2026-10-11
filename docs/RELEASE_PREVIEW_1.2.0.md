@@ -186,7 +186,7 @@ For another package, replace the filename in the command. If the hashes differ, 
 - Light and dark UI checks, including compact-window layouts; isolated Store-package removal and recovery checks.
 - Hosted tests exclude Native and LiveProvider cases. Live B2/OneDrive acceptance and real personal-folder redirection remain unverified. Store certification is separate.
 
-[Windows CI](https://github.com/TahsinFaiyaz30/CloudInlet/actions/runs/38114892013) · [Release build](https://github.com/TahsinFaiyaz30/CloudInlet/actions/runs/38115258247) · [Audit details](https://github.com/TahsinFaiyaz30/CloudInlet/blob/v1.2.0/docs/ASTRA_HANDOFF.md)
+[Windows CI](https://github.com/TahsinFaiyaz30/CloudInlet/actions/runs/38114892013) · [Release build](https://github.com/TahsinFaiyaz30/CloudInlet/actions/runs/38115258247)
 
 </details>
 

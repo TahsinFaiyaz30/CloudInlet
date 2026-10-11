@@ -223,10 +223,6 @@
       {
         "url": "https://github.com/TahsinFaiyaz30/CloudInlet/actions/runs/38115258247",
         "label": "Release build"
-      },
-      {
-        "url": "https://github.com/TahsinFaiyaz30/CloudInlet/blob/v1.2.0/docs/ASTRA_HANDOFF.md",
-        "label": "Audit details"
       }
     ]
   }
