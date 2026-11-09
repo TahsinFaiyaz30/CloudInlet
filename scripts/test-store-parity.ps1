@@ -42,11 +42,13 @@ namespace CloudInlet.StoreParity {
 }
 function Get-UserSnapshot {
     $snapshot = [ordered]@{}
+    foreach ($brand in @('CloudBay','CloudInlet')) {
     foreach ($relative in @('Client','Debug/Client')) {
         foreach ($name in @('settings.json','settings.json.bak','credentials.dpapi','credentials.dpapi.bak','onedrive.dpapi','onedrive.dpapi.bak')) {
-            $path = Join-Path $env:LOCALAPPDATA ('CloudBay/' + $relative + '/' + $name)
-            $snapshot[$relative + '/' + $name] = if (Test-Path -LiteralPath $path) { (Get-FileHash -LiteralPath $path).Hash } else { 'absent' }
+            $path = Join-Path $env:LOCALAPPDATA ($brand + '/' + $relative + '/' + $name)
+            $snapshot[$brand + '/' + $relative + '/' + $name] = if (Test-Path -LiteralPath $path) { (Get-FileHash -LiteralPath $path).Hash } else { 'absent' }
         }
+    }
     }
     foreach ($name in @('User Shell Folders','Shell Folders')) {
         $values = [ordered]@{}
@@ -65,7 +67,9 @@ function Get-ExternalEvidence([string]$Token) {
         try { $markers[$keyName] = if ($key) { $key.GetValue('Token') -ceq $Token } else { $false } }
         finally { if ($key) { $key.Dispose() } }
     }
-    [ordered]@{ settingsVisible = (Test-Path -LiteralPath (Join-Path $path 'settings.json')); credentialsVisible = (Test-Path -LiteralPath (Join-Path $path 'credentials.dpapi')); journalVisible = (Test-Path -LiteralPath (Join-Path $path 'transfers.db')); registryMarkers = $markers }
+    [ordered]@{ settingsVisible = (Test-Path -LiteralPath (Join-Path $path 'settings.json')); credentialsVisible = (Test-Path -LiteralPath (Join-Path $path 'credentials.dpapi')); journalVisible = (Test-Path -LiteralPath (Join-Path $path 'transfers.db')); registryMarkers = $markers
+        canonicalStateVisible = (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA ('CloudInlet/Client/StoreValidation/' + $Token + '/scope.dpapi')))
+        migrationRoutingVisible = (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA ('CloudInlet/Migration/Release/StoreValidation/' + $Token + '/scope.dpapi'))) }
 }
 function Register-Fixture([string]$Payload) {
     if (Get-AppxPackage -Name 'CloudInlet.LocalValidation') { throw 'Unexpected existing validation registration.' }
@@ -114,6 +118,10 @@ function Invoke-Probe([string]$Token,[string]$Phase,[string]$Directory,[string]$
     } finally { if ($process) { $process.Dispose() } }
 }
 $before = Get-UserSnapshot
+$scopeParentsCreatedByFixture = @('CloudInlet/Client/StoreValidation','CloudInlet/Client',
+    'CloudInlet/Migration/Release/StoreValidation','CloudInlet/Migration/Release','CloudInlet/Migration','CloudInlet') |
+    ForEach-Object { [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA $_)) } |
+    Where-Object { !(Test-Path -LiteralPath $_) } | Sort-Object Length -Descending
 $run = Join-Path $outputRoot ([Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $run -Force | Out-Null
 $results = [Collections.Generic.List[object]]::new()
@@ -163,6 +171,8 @@ try {
             } else {
                 if (!$resume.passed) { throw $resume.error }
                 if (!$entry.externalBeforeRemoval.settingsVisible -or !$entry.externalAfterRemoval.credentialsVisible) { throw 'Shared state was not retained outside package isolation.' }
+                if (!$entry.externalBeforeRemoval.canonicalStateVisible -or !$entry.externalAfterRemoval.canonicalStateVisible -or
+                    !$entry.externalBeforeRemoval.migrationRoutingVisible -or !$entry.externalAfterRemoval.migrationRoutingVisible) { throw 'Migrated state or migration routing was not retained outside package isolation.' }
                 $markers = @($entry.externalBeforeRemoval.registryMarkers.Values)
                 if (!$markers[0] -or !$markers[1]) { throw 'Windows Shell mapping-key markers were not visible outside the package.' }
                 if ($policy -eq 'Candidate' -and $markers[2]) { throw 'The unrelated registry control key escaped candidate virtualization.' }
@@ -195,6 +205,17 @@ try {
         }
     }
 } finally {
+    # Do not leave an empty canonical profile behind: startup must never mistake
+    # a validation-created parent for a user's migrated account. Delete only
+    # specifically recorded, newly created, empty directories (never recursively).
+    foreach ($scopeParent in $scopeParentsCreatedByFixture) {
+        $scopeBoundary = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'CloudInlet'))
+        if ($scopeParent -cne $scopeBoundary -and !$scopeParent.StartsWith($scopeBoundary + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Scope cleanup escaped its declared boundary.' }
+        Assert-NoLinks $scopeParent
+        if ((Test-Path -LiteralPath $scopeParent -PathType Container) -and @(Get-ChildItem -LiteralPath $scopeParent -Force).Count -eq 0) {
+            [IO.Directory]::Delete($scopeParent, $false)
+        }
+    }
     [ordered]@{ testedUtc=[DateTimeOffset]::UtcNow; results=$results.ToArray(); realClientStatePreserved=((Get-UserSnapshot) -ceq $before); developerModeChanged=$false; certificateTrustChanged=$false } | ConvertTo-Json -Depth 18 | Set-Content -LiteralPath (Join-Path $run 'summary.json') -Encoding utf8NoBOM
     Write-Output (Join-Path $run 'summary.json')
 }

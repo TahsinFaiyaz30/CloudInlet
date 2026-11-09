@@ -8,6 +8,19 @@ namespace CloudInlet.Tests;
 [TestClass]
 public sealed class PathRulesTests
 {
+    [TestMethod]
+    public void ExplicitlyMigratedAndDeclinedBackupNamespacesRemainValidTogether()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "CloudInlet-backup-prefix-test");
+        var settings = new AppSettings { RootPath = Path.Combine(directory, "main"), Prefix = "Personal/",
+            CustomBackups = [new("Old", Path.Combine(directory, "old"), "Personal/.cloudbay-backups/Old/"),
+                new("New", Path.Combine(directory, "new"), "Personal/.cloudinlet-backups/New/")] };
+        PathRules.ValidateSettings(settings);
+        Assert.IsFalse(PathRules.IsValidCustomBackupPrefix("Personal/", "New", "Other/.cloudinlet-backups/New/"));
+        Assert.IsFalse(PathRules.IsValidCustomBackupPrefix("Personal/", "New", "Personal/.cloudinlet-backups/Old/"));
+        Assert.IsTrue(PathRules.IsExcluded(".cloudinlet-backups/New/file.txt", []));
+        Assert.IsTrue(PathRules.IsExcluded(".cloudbay-backups/Old/file.txt", []));
+    }
     [DataTestMethod]
     [DataRow("../outside.txt")]
     [DataRow("folder/../../outside.txt")]

@@ -944,6 +944,23 @@ public sealed partial class B2CloudStore : ICloudStore
         long modified = LongValue(item, "uploadTimestamp");
         if (item.TryGetProperty("fileInfo", out var metadata) &&
             long.TryParse(OptionalString(metadata, "src_last_modified_millis"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var millis)) modified = millis;
+        else if (metadata.ValueKind == JsonValueKind.Object &&
+            metadata.TryGetProperty("cloudinlet_migration_source_upload_millis", out var originalUpload) &&
+            metadata.TryGetProperty(Migration.CloudPrefixMigration.ReceiptMetadataKey, out var migrationReceipt) &&
+            metadata.TryGetProperty(Migration.CloudPrefixMigration.SourceMetadataKey, out var migrationSource))
+        {
+            // Files from other clients may have no explicit modification timestamp. Their old
+            // upload time was the effective content time before migration. Keep that same time
+            // in normal listings/downloads instead of presenting the server-side copy as an edit.
+            // An unrelated custom key alone must not change normal B2 timestamp semantics.
+            var receipt = migrationReceipt.ValueKind == JsonValueKind.String ? migrationReceipt.GetString() : null;
+            var source = migrationSource.ValueKind == JsonValueKind.String ? migrationSource.GetString() : null;
+            if (receipt is not { Length: 64 } || !receipt.All(Uri.IsHexDigit) || string.IsNullOrWhiteSpace(source) ||
+                source == OptionalString(item, "fileId") || originalUpload.ValueKind != JsonValueKind.String ||
+                !long.TryParse(originalUpload.GetString(), NumberStyles.None, CultureInfo.InvariantCulture, out millis) || millis < 0)
+                throw new InvalidDataException("Backblaze returned invalid migrated file timestamp metadata.");
+            modified = millis;
+        }
         DateTimeOffset timestamp;
         try { timestamp = DateTimeOffset.FromUnixTimeMilliseconds(modified); }
         catch (ArgumentOutOfRangeException) { throw new InvalidDataException("Backblaze returned an invalid file timestamp."); }

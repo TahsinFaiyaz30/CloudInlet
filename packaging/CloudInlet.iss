@@ -21,6 +21,8 @@
 #endif
 #define RegistryKey "Software\CloudBay\Distribution\" + BuildFlavor + "\Exe"
 #define OtherRegistryKey "Software\CloudBay\Distribution\" + BuildFlavor + "\Msi"
+#define CanonicalRegistryKey "Software\CloudInlet\Distribution\" + BuildFlavor + "\Exe"
+#define CanonicalOtherRegistryKey "Software\CloudInlet\Distribution\" + BuildFlavor + "\Msi"
 
 [Setup]
 AppId={{#ProductId}
@@ -68,10 +70,10 @@ Name: "{userprograms}\{#ProductName}"; Filename: "{app}\CloudInlet.exe"; Working
 Name: "{userdesktop}\{#ProductName}"; Filename: "{app}\CloudInlet.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Registry]
-; The installed Windows product identity remains stable across CloudInlet updates.
-Root: HKCU; Subkey: "{#RegistryKey}"; ValueType: string; ValueName: "InstallDirectory"; ValueData: "{app}"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "{#RegistryKey}"; ValueType: string; ValueName: "Version"; ValueData: "{#AppVersion}"
-Root: HKCU; Subkey: "{#RegistryKey}"; ValueType: string; ValueName: "BuildFlavor"; ValueData: "{#BuildFlavor}"
+; Existing registrations retain their identity; fresh installations use CloudInlet.
+Root: HKCU; Subkey: "{code:DistributionKey}"; ValueType: string; ValueName: "InstallDirectory"; ValueData: "{app}"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "{code:DistributionKey}"; ValueType: string; ValueName: "Version"; ValueData: "{#AppVersion}"
+Root: HKCU; Subkey: "{code:DistributionKey}"; ValueType: string; ValueName: "BuildFlavor"; ValueData: "{#BuildFlavor}"
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#StartupName}"; ValueData: """{app}\CloudInlet.exe"" --background"; Tasks: startup; Flags: uninsdeletevalue
 
 [Run]
@@ -95,8 +97,13 @@ function WaitForSingleObject(hHandle: THandle; dwMilliseconds: LongWord): LongWo
 function CloseHandle(hObject: THandle): Boolean;
   external 'CloseHandle@kernel32.dll stdcall';
 
-var PreviousDirectory: string;
+var PreviousDirectory, SelectedRegistryKey: string;
     PreviousStartup, PreviousDesktop, HasPrevious: Boolean;
+
+function DistributionKey(Param: string): string;
+begin
+  Result := SelectedRegistryKey;
+end;
 
 function IsUpdate: Boolean;
 var I: Integer;
@@ -107,14 +114,26 @@ begin
 end;
 
 function InitializeSetup: Boolean;
-var OtherDirectory: string;
+var OtherDirectory, CanonicalDirectory: string; HasCanonical: Boolean;
 begin
   Result := False;
-  if RegQueryStringValue(HKCU, '{#OtherRegistryKey}', 'InstallDirectory', OtherDirectory) then begin
+  SelectedRegistryKey := '{#CanonicalRegistryKey}';
+  if RegQueryStringValue(HKCU, '{#OtherRegistryKey}', 'InstallDirectory', OtherDirectory) or
+     RegQueryStringValue(HKCU, '{#CanonicalOtherRegistryKey}', 'InstallDirectory', OtherDirectory) then begin
     SuppressibleMsgBox('This build of CloudInlet is installed using MSI. Uninstall that installer before changing to EXE. Your backup settings and files will be preserved.', mbError, MB_OK, IDOK);
     Exit;
   end;
   HasPrevious := RegQueryStringValue(HKCU, '{#RegistryKey}', 'InstallDirectory', PreviousDirectory);
+  HasCanonical := RegQueryStringValue(HKCU, '{#CanonicalRegistryKey}', 'InstallDirectory', CanonicalDirectory);
+  if HasPrevious and HasCanonical then begin
+    SuppressibleMsgBox('Both CloudBay and CloudInlet installer registrations exist. Repair the conflicting installations before updating; no files have been changed.', mbError, MB_OK, IDOK);
+    Exit;
+  end;
+  if HasPrevious then SelectedRegistryKey := '{#RegistryKey}';
+  if HasCanonical then begin
+    HasPrevious := True;
+    PreviousDirectory := CanonicalDirectory;
+  end;
   if IsUpdate and not HasPrevious then begin
     SuppressibleMsgBox('This update requires an existing EXE installation of the same CloudInlet build.', mbError, MB_OK, IDOK);
     Exit;

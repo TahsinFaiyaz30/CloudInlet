@@ -1246,6 +1246,10 @@
                                     </StackPanel>
                                     </Border>
                                     <InfoBar x:Name="UpdateNotice" IsOpen="False" Visibility="Collapsed" IsClosable="False" />
+                                    <settings:SettingsCard Header="CloudBay migration" Description="Review older locations and choose what to migrate.">
+                                        <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=folder, Size=24}" Width="24" Height="24" Tag="folder" /></settings:SettingsCard.HeaderIcon>
+                                        <Button x:Name="ReviewMigrationButton" Content="Review migration" Click="ReviewMigration_Click" />
+                                    </settings:SettingsCard>
                                     <StackPanel x:Name="UpdatePreferencesPanel" Spacing="12">
                                         <TextBlock Text="Update preferences" Style="{StaticResource CloudInletSectionHeadingStyle}" Margin="0,0,0,4" />
                                         <Grid x:Name="UpdatePreferencesGrid" ColumnSpacing="12" RowSpacing="12" Tag="2" SizeChanged="SettingsDetailGrid_SizeChanged">

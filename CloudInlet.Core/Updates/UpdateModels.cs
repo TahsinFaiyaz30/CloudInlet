@@ -35,6 +35,8 @@ public sealed record VerifiedUpdatePackage(string Path, InstalledUpdateIdentity 
 /// <summary>The platform runner must revalidate the file and preserve installation scope and settings.</summary>
 public interface IUpdateInstaller
 {
+    /// <summary>Called before automatic or manual removal of installer recovery packages.</summary>
+    void EnsureRecoveryAllowsMaintenance() { }
     Task InstallAsync(VerifiedUpdatePackage package, CancellationToken cancellationToken);
 }
 

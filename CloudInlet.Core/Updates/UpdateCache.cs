@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace CloudInlet.Core.Updates;
 
@@ -9,8 +10,10 @@ internal sealed class UpdateCache
     // the product rename. Changing it would strand recoverable update state.
     private const string OwnerText = "CloudBay update cache v1\n";
     private readonly string _root;
-    public UpdateCache(string root)
+    private readonly Action? _beforePackageRemoval;
+    public UpdateCache(string root, Action? beforePackageRemoval = null)
     {
+        _beforePackageRemoval = beforePackageRemoval;
         _root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         if (Path.GetPathRoot(_root) == _root) throw new IOException("An update cache cannot be a drive root.");
         CheckDirectory();
@@ -70,7 +73,10 @@ internal sealed class UpdateCache
 
     public void RemovePackagesExcept(string? retained)
     {
+        _beforePackageRemoval?.Invoke();
         CheckDirectory();
+        var repairSource = retained is not null && Path.GetFileName(retained).StartsWith("pending-", StringComparison.Ordinal)
+            ? Path.Combine(_root, Path.GetFileName(retained)["pending-".Length..]) : null;
         // Only the reserved installer names are ours; never recursively delete cache directories
         // or arbitrary paths named in a tampered metadata file.
         foreach (var path in Directory.EnumerateFiles(_root))
@@ -79,8 +85,10 @@ internal sealed class UpdateCache
             if ((name.StartsWith("pending-CloudBay-", StringComparison.OrdinalIgnoreCase) ||
                 name.StartsWith("partial-CloudBay-", StringComparison.OrdinalIgnoreCase) ||
                 name.StartsWith("pending-CloudInlet-", StringComparison.OrdinalIgnoreCase) ||
-                name.StartsWith("partial-CloudInlet-", StringComparison.OrdinalIgnoreCase)) &&
-                !path.Equals(retained, StringComparison.OrdinalIgnoreCase)) DeletePath(path);
+                name.StartsWith("partial-CloudInlet-", StringComparison.OrdinalIgnoreCase) ||
+                Regex.IsMatch(name, @"^CloudInlet-\d+\.\d+\.\d+-win-x64-(release|debug)-setup\.msi(?:\.[a-f0-9]{32}\.tmp)?$", RegexOptions.CultureInvariant)) &&
+                !path.Equals(retained, StringComparison.OrdinalIgnoreCase) &&
+                !path.Equals(repairSource, StringComparison.OrdinalIgnoreCase)) DeletePath(path);
         }
     }
 

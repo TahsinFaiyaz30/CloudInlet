@@ -90,7 +90,7 @@ public sealed class WindowsPlaceholderService : IPlaceholderService
         ConnectAsync(rootPath, accountIdentity, hydrate, cancellationToken, beforeNewRegistration: null);
 
     public async Task ConnectAsync(string rootPath, string accountIdentity, HydrationHandler hydrate,
-        CancellationToken cancellationToken, Action? beforeNewRegistration)
+        CancellationToken cancellationToken, Action? beforeNewRegistration, bool canonicalRegistration = false)
     {
         ArgumentNullException.ThrowIfNull(hydrate);
         ArgumentException.ThrowIfNullOrWhiteSpace(accountIdentity);
@@ -101,7 +101,7 @@ public sealed class WindowsPlaceholderService : IPlaceholderService
             if (_connected) throw new InvalidOperationException("Disconnect the previous sync root before connecting another one.");
             if (!StorageProviderSyncRootManager.IsSupported()) throw new PlatformNotSupportedException("Windows Cloud Files is unavailable on this computer.");
             var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rootPath));
-            var wasRegistered = ValidateRoot(root, accountIdentity);
+            var wasRegistered = ValidateRoot(root, accountIdentity, canonicalRegistration);
             Directory.CreateDirectory(root);
             ValidateAncestorLinks(root);
             if (!wasRegistered) RejectOrphanedPlaceholders(root, cancellationToken);
@@ -109,7 +109,7 @@ public sealed class WindowsPlaceholderService : IPlaceholderService
             // Persist recovery before Windows creates the registration, so a crash after
             // registration cannot turn OS-removed placeholders into ordinary deletions.
             if (!wasRegistered) beforeNewRegistration?.Invoke();
-            var id = GetRegistrationId(accountIdentity);
+            var id = GetRegistrationId(accountIdentity, canonicalRegistration);
             var info = new StorageProviderSyncRootInfo
             {
                 Id = id,
@@ -477,11 +477,12 @@ public sealed class WindowsPlaceholderService : IPlaceholderService
     /// Revert before unregister, which would otherwise delete dehydrated files or silently skip failures.
     /// The caller must quiesce the sync engine before calling this method.
     /// </summary>
-    public async Task PrepareForUnregisterAsync(CancellationToken cancellationToken = default)
+    public async Task PrepareForUnregisterAsync(CancellationToken cancellationToken = default, IProgress<string>? progress = null)
     {
         var root = ValidateFilePath(_root ?? throw new InvalidOperationException("No sync root is connected."), allowRoot: true);
         try
         {
+            progress?.Report("Downloading and verifying all online-only files before changing the Windows registration.");
             await SetPinAsync(root, PinMode.AlwaysAvailable, cancellationToken).ConfigureAwait(false);
             // The final CfExecute can release Windows' hydrate call just before its provider callback
             // releases network buffers/handles. Finish those callbacks before acquiring revert oplocks.
@@ -496,6 +497,7 @@ public sealed class WindowsPlaceholderService : IPlaceholderService
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!IsPlaceholder(path)) continue;
+                progress?.Report("Preserving local content: " + Path.GetRelativePath(root, path));
                 try
                 {
                     using var handle = Open(path, exclusive: true);
@@ -509,6 +511,7 @@ public sealed class WindowsPlaceholderService : IPlaceholderService
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!IsPlaceholder(path)) continue;
+                progress?.Report("Preserving local content: " + Path.GetRelativePath(root, path));
                 try
                 {
                     using var handle = Open(path, exclusive: true);
@@ -1131,7 +1134,7 @@ public sealed class WindowsPlaceholderService : IPlaceholderService
         return normalized;
     }
 
-    private static bool ValidateRoot(string root, string account)
+    private static bool ValidateRoot(string root, string account, bool canonicalRegistration = false)
     {
         if (root.StartsWith("\\\\", StringComparison.Ordinal)) throw new IOException("Files On Demand requires a local NTFS drive.");
         var volume = new DriveInfo(Path.GetPathRoot(root)!);
@@ -1139,7 +1142,7 @@ public sealed class WindowsPlaceholderService : IPlaceholderService
             throw new IOException("The CloudInlet folder must be on a local fixed NTFS drive.");
         if (string.Equals(Path.TrimEndingDirectorySeparator(volume.RootDirectory.FullName), root, StringComparison.OrdinalIgnoreCase))
             throw new IOException("A drive root cannot be used as the CloudInlet folder.");
-        var id = GetRegistrationId(account);
+        var id = GetRegistrationId(account, canonicalRegistration);
         var sameRoot = false;
         foreach (var existing in StorageProviderSyncRootManager.GetCurrentSyncRoots())
         {
@@ -1189,12 +1192,25 @@ public sealed class WindowsPlaceholderService : IPlaceholderService
         }
     }
 
-    private static string GetRegistrationId(string account)
+    internal static string GetRegistrationId(string account, bool canonicalRegistration = false)
     {
         using var identity = WindowsIdentity.GetCurrent();
         var sid = identity.User?.Value ?? throw new IOException("The current Windows user could not be identified.");
         // This stable registration ID reconnects old CloudBay folders without creating a second provider.
-        return "CloudBay" + BuildInfo.PipeSuffix + "!" + sid + "!" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(account)))[..24];
+        return (canonicalRegistration ? "CloudInlet" : "CloudBay") + BuildInfo.PipeSuffix + "!" + sid + "!" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(account)))[..24];
+    }
+
+    internal static bool HasRegistrationIdentity(StorageProviderSyncRootInfo entry, string account, bool canonicalRegistration)
+    {
+        if (entry.Id != GetRegistrationId(account, canonicalRegistration) ||
+            entry.ProviderId != Guid.Empty && entry.ProviderId != ProviderId || entry.Context is null) return false;
+        // Some Windows builds return an empty telemetry GUID even for a registration
+        // created with ProviderId. Require the exact persisted account context as well
+        // as the current user's deterministic registration ID; a name alone is not proof.
+        var expected = Encoding.UTF8.GetBytes(account);
+        if (entry.Context.Length != expected.Length) return false;
+        CryptographicBuffer.CopyToByteArray(entry.Context, out var actual);
+        return actual.AsSpan().SequenceEqual(expected);
     }
 
     private static void ValidateAncestorLinks(string path)

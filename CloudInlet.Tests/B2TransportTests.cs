@@ -648,6 +648,78 @@ public sealed class B2TransportTests
         return files;
     }
 
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task MigratedVersionListingsAndDownloadPreserveEffectiveOriginalTimestamp(bool explicitModifiedTime)
+    {
+        var info = new Dictionary<string, string>
+        {
+            ["cloudinlet_migration_id"] = new string('a', 64),
+            ["cloudinlet_migration_source_id"] = "original-version",
+            ["cloudinlet_migration_source_upload_millis"] = Modified.ToUnixTimeMilliseconds().ToString(System.Globalization.CultureInfo.InvariantCulture)
+        };
+        var expected = explicitModifiedTime ? Modified.AddDays(-5) : Modified;
+        if (explicitModifiedTime) info["src_last_modified_millis"] = expected.ToUnixTimeMilliseconds().ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var downloads = 0;
+        using var store = new B2CloudStore(new FakeHandler((request, _) =>
+        {
+            if (Operation(request) == "b2_authorize_account") return Task.FromResult(Authorization());
+            if (Operation(request) is "b2_list_file_names" or "b2_list_file_versions")
+                return Task.FromResult(Json(new { files = new[] { new { fileId = File.FileId, fileName = File.Key,
+                    contentLength = Data.Length, contentSha1 = DataSha, action = "upload", uploadTimestamp = Modified.AddYears(1).ToUnixTimeMilliseconds(), fileInfo = info } },
+                    nextFileName = (string?)null, nextFileId = (string?)null }));
+            Assert.AreEqual("b2_download_file_by_id", Operation(request));
+            StringAssert.Contains(request.RequestUri!.Query, "fileId=" + File.FileId); downloads++;
+            return Task.FromResult(Download(Data));
+        }));
+        await store.ConnectAsync(new("id", "private"));
+        var current = (await CurrentFiles(store)).Single();
+        var history = (await store.VersionsAsync("bucket", File.Key)).Single();
+        Assert.AreEqual(expected, current.ModifiedUtc);
+        Assert.AreEqual(current, history, "Current sync and retained-history views must interpret the same migrated content time.");
+        using var output = new MemoryStream();
+        await store.DownloadAsync(current, output);
+        CollectionAssert.AreEqual(Data, output.ToArray());
+        Assert.AreEqual(1, downloads);
+    }
+
+    [TestMethod]
+    [DataRow("invalid")]
+    [DataRow("-1")]
+    [DataRow("253402300800000")]
+    [DataRow("9223372036854775808")]
+    public async Task InvalidMigratedTimestampCannotBecomeCurrentOrHistoricalContent(string timestamp)
+    {
+        using var store = new B2CloudStore(new FakeHandler((request, _) => Task.FromResult(
+            Operation(request) == "b2_authorize_account" ? Authorization() : Json(new
+            {
+                files = new[] { new { fileId = File.FileId, fileName = File.Key, contentLength = Data.Length,
+                    contentSha1 = DataSha, action = "upload", uploadTimestamp = 1800000000000,
+                    fileInfo = new Dictionary<string, string> { ["cloudinlet_migration_id"] = new string('a', 64),
+                        ["cloudinlet_migration_source_id"] = "original-version", ["cloudinlet_migration_source_upload_millis"] = timestamp } } },
+                nextFileName = (string?)null, nextFileId = (string?)null
+            }))));
+        await store.ConnectAsync(new("id", "private"));
+        await Assert.ThrowsExceptionAsync<InvalidDataException>(() => CurrentFiles(store));
+        await Assert.ThrowsExceptionAsync<InvalidDataException>(() => store.VersionsAsync("bucket", File.Key));
+    }
+
+    [TestMethod]
+    public async Task UnrelatedCustomMigrationTimestampDoesNotOverrideNormalUploadTime()
+    {
+        using var store = new B2CloudStore(new FakeHandler((request, _) => Task.FromResult(
+            Operation(request) == "b2_authorize_account" ? Authorization() : Json(new
+            {
+                files = new[] { new { fileId = File.FileId, fileName = File.Key, contentLength = Data.Length,
+                    contentSha1 = DataSha, action = "upload", uploadTimestamp = Modified.ToUnixTimeMilliseconds(),
+                    fileInfo = new Dictionary<string, string> { ["cloudinlet_migration_source_upload_millis"] = "not-a-migration" } } },
+                nextFileName = (string?)null
+            }))));
+        await store.ConnectAsync(new("id", "private"));
+        Assert.AreEqual(Modified, (await CurrentFiles(store)).Single().ModifiedUtc);
+    }
+
     private sealed class ListingPlaceholders : IPlaceholderService
     {
         public bool IsPlaceholder(string path) => false;

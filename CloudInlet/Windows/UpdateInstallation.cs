@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using CloudInlet.Core;
 using CloudInlet.Core.Updates;
+using CloudInlet.Packaging;
 
 namespace CloudInlet.Windows;
 
@@ -10,6 +11,16 @@ namespace CloudInlet.Windows;
 public sealed record UpdateInstallation(InstalledUpdateIdentity Identity, string Directory, string? Notice = null)
 {
     public bool CanInstall => Identity.InstallerKind is UpdateInstallerKind.Exe or UpdateInstallerKind.Msi;
+
+    public bool CanMigrateInstallation => CanInstall;
+
+    /// <summary>The matching installer owns the selected relocation during a newer update.</summary>
+    public string MigrationTarget()
+    {
+        if (!CanMigrateInstallation)
+            throw new InvalidOperationException("This installation does not support the requested installer migration.");
+        return InstallationMigrationPolicy.Target(Directory, Identity.BuildFlavor.ToString());
+    }
     public static bool IsPackaged
     {
         get

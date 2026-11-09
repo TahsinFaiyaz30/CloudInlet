@@ -21,6 +21,14 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\CloudInlet.Core\CloudInlet.Core.csproj" />
+    <Compile Include="../packaging/InstallerShared/InstallationMigrationPolicy.cs" Link="Packaging/InstallationMigrationPolicy.cs" />
+    <Compile Include="../packaging/InstallerShared/InstallerProgressJournal.cs" Link="Packaging/InstallerProgressJournal.cs" />
+    <Compile Include="../packaging/InstallerShared/InstallerProgressHandoff.cs" Link="Packaging/InstallerProgressHandoff.cs" />
+    <Compile Include="../packaging/InstallerShared/InstallerMigrationRecovery.cs" Link="Packaging/InstallerMigrationRecovery.cs" />
+    <Compile Include="../packaging/InstallerShared/ExeInstallationMigration.cs" Link="Packaging/ExeInstallationMigration.cs" />
+    <Compile Include="../packaging/InstallerShared/ExeMigrationReceipt.cs" Link="Packaging/ExeMigrationReceipt.cs" />
+    <Compile Include="../packaging/InstallerShared/DistributionRegistration.cs" Link="Packaging/DistributionRegistration.cs" />
+    <Compile Include="../packaging/InstallerShared/UpdateCacheLocation.cs" Link="Packaging/UpdateCacheLocation.cs" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260921001" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageReference Include="CommunityToolkit.WinUI.Controls.SettingsControls" Version="8.2.251219" />

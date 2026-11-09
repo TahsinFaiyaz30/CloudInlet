@@ -9,6 +9,8 @@ internal static class Program
         try
         {
             if (args.Length == 2 && args[0] == "--update") return UpdateWorker.Run(args[1]);
+            if (args.Length == 2 && args[0] == "--resume-exe-migration") return ExeMigrationWorker.Resume(args[1]);
+            if (args.Length == 2 && args[0] == "--revert-exe-migration") return ExeMigrationWorker.Resume(args[1], revert: true);
             if ((args.Length != 4 && args.Length != 5) || args[0] != "--flavor" || args[2] != "--install-directory" ||
                 (args.Length == 5 && args[4] != "--remove-notifications")) return 87;
             var directory = Path.GetFullPath(args[3]);

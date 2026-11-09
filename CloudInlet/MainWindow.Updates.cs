@@ -10,15 +10,19 @@ namespace CloudInlet;
 
 public sealed partial class MainWindow
 {
+    internal void ShowMigrationInventoryNotice(string message) => ShowWarning("Migration review unavailable", message);
     private UpdateCoordinator? _updates;
     private UpdateInstallation? _installation;
     private bool _loadingUpdates;
     private bool _updateAction;
     private int _updateRefreshQueued;
+    private string _updateDirectory = Path.Combine(BuildInfo.DefaultDataDirectory, "Updates");
+    public event Action? MigrationReviewRequested;
 
-    public void AttachUpdates(UpdateCoordinator updates, UpdateInstallation installation)
+    public void AttachUpdates(UpdateCoordinator updates, UpdateInstallation installation, string? updateDirectory = null)
     {
         _updates = updates; _installation = installation;
+        _updateDirectory = updateDirectory ?? _updateDirectory;
         updates.Changed += Updates_Changed;
         VersionCard.Header = BuildInfo.ProductName;
         VersionCard.Description = $"Version {updates.Identity.Version} · {updates.Identity.BuildFlavor} · {updates.Identity.InstallerKind}";
@@ -59,6 +63,7 @@ public sealed partial class MainWindow
         }.Where(text => text is not null));
         CheckUpdateButton.Content = store ? "Open Microsoft Store" : "Check for updates";
         CheckUpdateButton.IsEnabled = !working;
+        ReviewMigrationButton.IsEnabled = !working && MigrationReviewRequested is not null;
         UpdatePreferencesPanel.Visibility = store ? Visibility.Collapsed : Visibility.Visible;
         AutoDownloadUpdateCard.Visibility = AutoInstallUpdateCard.Visibility = installs ? Visibility.Visible : Visibility.Collapsed;
         DownloadUpdateButton.Visibility = installs && state.State == UpdateState.Available ? Visibility.Visible : Visibility.Collapsed;
@@ -112,11 +117,23 @@ public sealed partial class MainWindow
     private async void DeleteUpdate_Click(object sender, RoutedEventArgs args) =>
         await RunUpdateActionAsync(async () =>
         {
+            WindowsUpdateInstaller.EnsureRecoveryAllowsCleanup(_updateDirectory, BuildInfo.Flavor);
             await _updates!.DeleteDownloadsAsync();
-            WindowsUpdateInstaller.DeleteInactiveHosts(Path.Combine(BuildInfo.DefaultDataDirectory, "Updates"));
+            WindowsUpdateInstaller.DeleteInactiveHosts(_updateDirectory, InstallerProgressHost.RuntimeRoot(BuildInfo.Flavor), BuildInfo.Flavor);
             UpdateNotice.IsOpen = false;
             UpdateNotice.Visibility = Visibility.Collapsed;
         });
+    private async void ReviewMigration_Click(object sender, RoutedEventArgs args)
+    {
+        var dialog = new ContentDialog
+        {
+            Title = "Review CloudBay migration",
+            Content = "CloudInlet will stop its transfers and restart to review old locations. You choose each change before migration starts. Unselected locations keep working.",
+            PrimaryButtonText = "Restart and review", CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close, XamlRoot = RootGrid.XamlRoot, RequestedTheme = RootGrid.RequestedTheme
+        };
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary) MigrationReviewRequested?.Invoke();
+    }
     private async void UpdatePreference_Changed(object sender, RoutedEventArgs args) => await SaveUpdatePreferencesAsync();
     private async void UpdateInterval_Changed(object sender, SelectionChangedEventArgs args) => await SaveUpdatePreferencesAsync();
 
@@ -136,7 +153,7 @@ public sealed partial class MainWindow
         _updateAction = true; RefreshUpdates();
         try { await action(); }
         catch (OperationCanceledException) { /* Application shutdown cancels active update operations. */ }
-        catch (Exception error) when (error is IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        catch (Exception error) when (error is IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or System.Security.Cryptography.CryptographicException)
         { ShowUpdateInitializationError(error.Message); }
         finally { _updateAction = false; if (!_closed) RefreshUpdates(); }
     }

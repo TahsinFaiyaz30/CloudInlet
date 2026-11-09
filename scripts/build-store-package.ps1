@@ -93,7 +93,11 @@ try {
     # Client is the shared Release account/recovery store. Presentation caches
     # remain virtualized. Known-folder changes use the Windows Shell API; these
     # two Shell-owned keys hold its mappings and legacy compatibility cache.
-    $excludedDirectories = @('$(KnownFolder:LocalAppData)\CloudBay\Client')
+    $excludedDirectories = @(
+        '$(KnownFolder:LocalAppData)\CloudBay\Client',
+        '$(KnownFolder:LocalAppData)\CloudInlet\Client',
+        '$(KnownFolder:LocalAppData)\CloudInlet\Migration\Release'
+    )
     $excludedRegistryKeys = @(
         'HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders',
         'HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders'

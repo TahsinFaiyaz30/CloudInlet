@@ -36,6 +36,7 @@ New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
 if (!$HelperPrepared) { & (Join-Path $PSScriptRoot 'build-installer-helper.ps1') -AppFolder $appRoot }
 $helperFile = Join-Path $appRoot 'CloudInlet.SetupHelper.exe'
 if (!(Test-Path -LiteralPath $helperFile)) { throw 'The installer/update helper is missing from the application payload.' }
+& (Join-Path $PSScriptRoot 'write-installer-progress-payload.ps1') -AppFolder $appRoot
 $tools = & (Join-Path $PSScriptRoot 'get-installer-tools.ps1') -InnoCompiler $InnoCompiler -WixToolPath $WixToolPath
 $flavor = $Configuration.ToLowerInvariant()
 $productName = if ($Configuration -eq 'Debug') { 'CloudInlet Debug' } else { 'CloudInlet' }
@@ -79,8 +80,10 @@ function Stable-Guid([string]$Value) {
         ([Guid]::new($guidBytes)).ToString('D')
     } finally { $algorithm.Dispose() }
 }
-# Preserve the installed Windows product identity for CloudInlet 1.1.2 and later.
-$registry = "Software\CloudBay\Distribution\$Configuration\Msi"
+# A major upgrade removes the old product inside the MSI rollback transaction before adding the new one.
+# Each package version owns new components, so an explicitly selected path/registry transition
+# never reuses a component GUID for a different key path. Repairs retain the installed identity.
+$registry = '[CI_DISTRIBUTION_KEY]'
 $components = [Collections.Generic.List[string]]::new()
 $directories = [Text.StringBuilder]::new()
 function Append-Directory([string]$Folder, [string]$Relative, [string]$DirectoryId) {
@@ -89,7 +92,7 @@ function Append-Directory([string]$Folder, [string]$Relative, [string]$Directory
         $relativeFile = if ($Relative) { $Relative + '\' + $file.Name } else { $file.Name }
         $componentId = Stable-Id ($Configuration + '|component|' + $relativeFile.ToLowerInvariant())
         $fileId = if ($relativeFile -eq 'CloudInlet.exe') { 'CloudInletExe' } else { Stable-Id ('file|' + $relativeFile.ToLowerInvariant()) }
-        $guid = Stable-Guid ($Configuration + '|Msi|' + $relativeFile.ToLowerInvariant())
+        $guid = Stable-Guid ($Configuration + '|Msi|' + $Version + '|' + $relativeFile.ToLowerInvariant())
         $components.Add($componentId)
         [void]$directories.AppendLine("<Component Id=`"$componentId`" Guid=`"$guid`" Bitness=`"always64`"><File Id=`"$fileId`" Source=`"$(Xml $file.FullName)`" /><RegistryValue Root=`"HKCU`" Key=`"$(Xml $registry)\Files`" Name=`"$componentId`" Value=`"1`" Type=`"integer`" KeyPath=`"yes`" /></Component>")
     }
@@ -112,6 +115,9 @@ $wxs = Join-Path $stagingRoot 'CloudInlet.wxs'
     <Property Id="CB_FLAVOR" Value="$Configuration" />
     <Property Id="CB_REVISION" Value="$SourceRevision" />
     <Property Id="UPDATE" Secure="yes" />
+    <Property Id="MIGRATEINSTALLATION" Secure="yes" />
+    <Property Id="MIGRATIONDIRECTORY" Secure="yes" />
+    <Property Id="CI_DISTRIBUTION_KEY" Secure="yes" Value="Software\CloudInlet\Distribution\$Configuration\Msi" />
     <Property Id="INSTALLDIR" Secure="yes" />
     <Property Id="ARPNOMODIFY" Value="1" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/TahsinFaiyaz30/CloudInlet" />
@@ -127,32 +133,32 @@ $wxs = Join-Path $stagingRoot 'CloudInlet.wxs'
     <CustomAction Id="WriteDistribution" BinaryRef="InstallerActions" DllEntry="WriteDistribution" Execute="deferred" Return="check" Impersonate="yes" />
     <InstallUISequence>
       <Custom Action="CheckWindowsVersion" Before="LaunchConditions" />
-      <Custom Action="PrepareInstall" Before="CostInitialize" Condition="NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="PrepareInstall" Before="CostInitialize" />
     </InstallUISequence>
     <InstallExecuteSequence>
       <Custom Action="CheckWindowsVersion" Before="LaunchConditions" />
-      <Custom Action="PrepareInstall" Before="CostInitialize" Condition="NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="PrepareInstall" Before="CostInitialize" />
       <Custom Action="ValidateAndStop" Before="InstallValidate" Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
       <Custom Action="StopBeforeUninstall" Before="InstallValidate" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="WriteDistribution" After="InstallFiles" Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
     </InstallExecuteSequence>
     <StandardDirectory Id="LocalAppDataFolder"><Directory Id="ProgramsFolder" Name="Programs"><Directory Id="INSTALLDIR" Name="$(Xml $productName)">
       $directories
-      <Component Id="DistributionMetadata" Guid="$(Stable-Guid "$Configuration|Msi|distribution")" Bitness="always64">
+      <Component Id="DistributionMetadata" Guid="$(Stable-Guid "$Configuration|Msi|$Version|distribution")" Bitness="always64">
         <File Id="DistributionFile" Source="$(Xml $msiMetadata)" Name="distribution.json" />
         <RegistryValue Root="HKCU" Key="$(Xml $registry)" Name="InstallDirectory" Value="[INSTALLDIR]" Type="string" KeyPath="yes" />
         <RegistryValue Root="HKCU" Key="$(Xml $registry)" Name="Version" Value="$Version" Type="string" />
         <RegistryValue Root="HKCU" Key="$(Xml $registry)" Name="BuildFlavor" Value="$Configuration" Type="string" />
       </Component>
-      <Component Id="StartupComponent" Guid="$(Stable-Guid "$Configuration|Msi|cloudinlet-startup")" Bitness="always64">
+      <Component Id="StartupComponent" Guid="$(Stable-Guid "$Configuration|Msi|$Version|cloudinlet-startup")" Bitness="always64">
         <RegistryValue Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="$startupName" Value="&quot;[INSTALLDIR]CloudInlet.exe&quot; --background" Type="string" KeyPath="yes" />
       </Component>
     </Directory></Directory></StandardDirectory>
-    <StandardDirectory Id="ProgramMenuFolder"><Component Id="StartMenuShortcut" Guid="$(Stable-Guid "$Configuration|Msi|startmenu")" Bitness="always64">
+    <StandardDirectory Id="ProgramMenuFolder"><Component Id="StartMenuShortcut" Guid="$(Stable-Guid "$Configuration|Msi|$Version|startmenu")" Bitness="always64">
       <Shortcut Id="CloudInletStartMenu" Name="$(Xml $productName)" Target="[INSTALLDIR]CloudInlet.exe" WorkingDirectory="INSTALLDIR" Icon="CloudInletIcon" />
       <RegistryValue Root="HKCU" Key="$(Xml $registry)" Name="StartMenuShortcut" Value="1" Type="integer" KeyPath="yes" />
     </Component></StandardDirectory>
-    <StandardDirectory Id="DesktopFolder"><Component Id="DesktopShortcutComponent" Guid="$(Stable-Guid "$Configuration|Msi|desktop")" Bitness="always64">
+    <StandardDirectory Id="DesktopFolder"><Component Id="DesktopShortcutComponent" Guid="$(Stable-Guid "$Configuration|Msi|$Version|desktop")" Bitness="always64">
       <Shortcut Id="CloudInletDesktop" Name="$(Xml $productName)" Target="[INSTALLDIR]CloudInlet.exe" WorkingDirectory="INSTALLDIR" Icon="CloudInletIcon" />
       <RegistryValue Root="HKCU" Key="$(Xml $registry)" Name="DesktopShortcut" Value="1" Type="integer" KeyPath="yes" />
     </Component></StandardDirectory>

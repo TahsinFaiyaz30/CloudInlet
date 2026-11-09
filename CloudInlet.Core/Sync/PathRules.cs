@@ -203,6 +203,7 @@ public static class PathRules
 
     public static void ValidateSettings(AppSettings settings)
     {
+        SyncRootMigrationIdentity.Validate(settings);
         if (settings.Notifications is null) throw new InvalidDataException("The saved notification preferences are invalid.");
         if (settings.KeyId is null || settings.BucketId is null || settings.BucketName is null || settings.AccountId is null ||
             settings.RootPath is null || settings.Prefix is null || settings.Theme is null ||
@@ -259,8 +260,7 @@ public static class PathRules
         }
         foreach (var folder in settings.CustomBackups)
         {
-            if (ValidateRelative(folder.Name).Contains('/') || folder.Name.Length > 64 || folder.Name.StartsWith(".cloudbay", StringComparison.OrdinalIgnoreCase) ||
-                folder.Prefix != settings.Prefix + ".cloudbay-backups/" + folder.Name + "/")
+            if (!IsValidCustomBackupPrefix(settings.Prefix, folder.Name, folder.Prefix))
                 throw new InvalidDataException("A saved custom backup name or cloud prefix is invalid.");
             Path.GetFullPath(folder.SourcePath);
         }
@@ -268,4 +268,10 @@ public static class PathRules
             settings.CustomBackups.Select(folder => folder.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count() != settings.CustomBackups.Count)
             throw new InvalidDataException("Saved backup names must be unique.");
     }
+
+    public static bool IsValidCustomBackupPrefix(string mainPrefix, string name, string prefix) =>
+        !ValidateRelative(name).Contains('/') && name.Length <= 64 &&
+        !name.StartsWith(".cloudbay", StringComparison.OrdinalIgnoreCase) &&
+        (prefix == mainPrefix + ".cloudbay-backups/" + name + "/" ||
+         prefix == mainPrefix + ".cloudinlet-backups/" + name + "/");
 }

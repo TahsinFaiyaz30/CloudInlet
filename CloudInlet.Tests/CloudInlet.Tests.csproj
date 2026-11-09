@@ -25,10 +25,33 @@
     <Compile Include="../CloudInlet/Application/ClientController.Disconnect.cs" Link="Application/ClientController.Disconnect.cs" />
     <Compile Include="../CloudInlet/Application/CloudImportJournal.cs" Link="Application/CloudImportJournal.cs" />
     <Compile Include="../CloudInlet/Application/ClientStorage.cs" Link="Application/ClientStorage.cs" />
+    <Compile Include="../CloudInlet/Application/ClientStateMigration.cs" Link="Application/ClientStateMigration.cs" />
+    <Compile Include="../CloudInlet/Application/ClientFolderMigration.cs" Link="Application/ClientFolderMigration.cs" />
+    <Compile Include="../CloudInlet/Application/ClientFolderMigration.RecreatedFolders.cs" Link="Application/ClientFolderMigration.RecreatedFolders.cs" />
+    <Compile Include="../CloudInlet/Application/ClientRegistrationMigration.cs" Link="Application/ClientRegistrationMigration.cs" />
+    <Compile Include="../CloudInlet/Application/ClientCloudPrefixBinding.cs" Link="Application/ClientCloudPrefixBinding.cs" />
+    <Compile Include="../CloudInlet/Application/ClientCloudPrefixMigration.cs" Link="Application/ClientCloudPrefixMigration.cs" />
+    <Compile Include="../CloudInlet/Application/MigrationMetadataExchange.cs" Link="Application/MigrationMetadataExchange.cs" />
+    <Compile Include="../CloudInlet/Application/ClientMigrationReview.cs" Link="Application/ClientMigrationReview.cs" />
+    <Compile Include="../CloudInlet/Application/ClientMigrationInventory.cs" Link="Application/ClientMigrationInventory.cs" />
+    <Compile Include="../CloudInlet/Application/DeferredMigrationOperation.cs" Link="Application/DeferredMigrationOperation.cs" />
     <Compile Include="../CloudInlet/Application/DisconnectMode.cs" Link="Application/DisconnectMode.cs" />
     <Compile Include="../CloudInlet/Windows/SystemIntegration.cs" Link="Native/SystemIntegration.cs" />
     <Compile Include="../CloudInlet/Windows/UpdateInstallation.cs" Link="Windows/UpdateInstallation.cs" />
+    <Compile Include="../CloudInlet/Windows/StoreStateRoutingPolicy.cs" Link="Windows/StoreStateRoutingPolicy.cs" />
+    <Compile Include="../CloudInlet/Windows/LegacyMigrationDiscovery.cs" Link="Windows/LegacyMigrationDiscovery.cs" />
+    <Compile Include="../CloudInlet/Windows/WindowsDirectoryRelocation.cs" Link="Windows/WindowsDirectoryRelocation.cs" />
+    <Compile Include="../packaging/InstallerShared/UpdateCacheLocation.cs" Link="Packaging/UpdateCacheLocation.cs" />
+    <Compile Include="../packaging/InstallerShared/InstallerProgressJournal.cs" Link="Packaging/InstallerProgressJournal.cs" />
+    <Compile Include="../packaging/InstallerShared/InstallerProgressHandoff.cs" Link="Packaging/InstallerProgressHandoff.cs" />
+    <Compile Include="../packaging/InstallerShared/InstallerMigrationRecovery.cs" Link="Packaging/InstallerMigrationRecovery.cs" />
+    <Compile Include="../packaging/InstallerShared/InstallationMigrationPolicy.cs" Link="Packaging/InstallationMigrationPolicy.cs" />
+    <Compile Include="../packaging/InstallerShared/ExeInstallationMigration.cs" Link="Packaging/ExeInstallationMigration.cs" />
+    <Compile Include="../packaging/InstallerShared/ExeMigrationReceipt.cs" Link="Packaging/ExeMigrationReceipt.cs" />
+    <Compile Include="../packaging/InstallerShared/DistributionRegistration.cs" Link="Packaging/DistributionRegistration.cs" />
     <Compile Include="../CloudInlet/Windows/WindowsUpdateInstaller.cs" Link="Windows/WindowsUpdateInstaller.cs" />
+    <Compile Include="../CloudInlet/Windows/InstallerProgressHost.cs" Link="Windows/InstallerProgressHost.cs" />
+    <Compile Include="../CloudInlet/Windows/InstallationRecoveryPolling.cs" Link="Windows/InstallationRecoveryPolling.cs" />
     <Compile Include="../CloudInlet/Windows/KnownFolderBackup.cs" Link="Native/KnownFolderBackup.cs" />
     <Compile Include="../CloudInlet/Windows/ImportSourceDiscovery.cs" Link="Native/ImportSourceDiscovery.cs" />
     <Compile Include="../CloudInlet/Windows/TrayIconPresentation.cs" Link="Windows/TrayIconPresentation.cs" />

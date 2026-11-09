@@ -51,6 +51,40 @@ public sealed class UpdateMaintenanceTests
     }
 
     [TestMethod]
+    public void SuccessfulUpdateStillReportsMigrationWaitingForWindowsRestart()
+    {
+        using var fixture = new CacheFixture();
+        File.WriteAllText(Path.Combine(fixture.Path, "install-result.json"), JsonSerializer.Serialize(new
+        { success = true, migrationRequested = true, migrationCompleted = false, migrationRequiresRestart = true,
+            completedUtc = DateTimeOffset.UtcNow, message = "Restart Windows to finish installation migration." }));
+        Assert.AreEqual("Restart Windows to finish installation migration.", WindowsUpdateInstaller.ReadFailureAndPruneHosts(fixture.Path));
+    }
+
+    [TestMethod]
+    public void PendingRestartEvidenceNeverExpiresAndBlocksDownloadCleanup()
+    {
+        using var fixture = new CacheFixture();
+        var result = Path.Combine(fixture.Path, "install-result.json");
+        File.WriteAllText(result, JsonSerializer.Serialize(new
+        { success = true, migrationRequiresRestart = true, completedUtc = DateTimeOffset.UtcNow.AddDays(-30), message = "Verification remains pending." }));
+        var original = File.ReadAllBytes(result);
+        Assert.AreEqual("Verification remains pending.", WindowsUpdateInstaller.ReadFailureAndPruneHosts(fixture.Path));
+        Assert.ThrowsException<InvalidOperationException>(() => WindowsUpdateInstaller.EnsureRecoveryAllowsCleanup(fixture.Path));
+        Assert.ThrowsException<InvalidOperationException>(() => WindowsUpdateInstaller.DeleteInactiveHosts(fixture.Path));
+        CollectionAssert.AreEqual(original, File.ReadAllBytes(result));
+    }
+
+    [TestMethod]
+    public void VerifiedMigrationWithRelaunchAttentionRemainsVisible()
+    {
+        using var fixture = new CacheFixture();
+        File.WriteAllText(Path.Combine(fixture.Path, "install-result.json"), JsonSerializer.Serialize(new
+        { success = true, migrationCompleted = true, attentionRequired = true, completedUtc = DateTimeOffset.UtcNow, message = "Migration verified; reopen CloudInlet." }));
+        Assert.AreEqual("Migration verified; reopen CloudInlet.", WindowsUpdateInstaller.ReadFailureAndPruneHosts(fixture.Path));
+        WindowsUpdateInstaller.EnsureRecoveryAllowsCleanup(fixture.Path);
+    }
+
+    [TestMethod]
     public void PruningRemovesOnlyOldUnlockedWorkerFilesAndKeepsActiveOrUnrelatedFiles()
     {
         using var fixture = new CacheFixture();

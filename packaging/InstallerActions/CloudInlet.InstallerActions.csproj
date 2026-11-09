@@ -15,6 +15,8 @@
     <PackageReference Include="WixToolset.Dtf.CustomAction" Version="5.0.2" PrivateAssets="all" />
     <Reference Include="System.Runtime.Serialization" />
     <Compile Include="../InstallerShared/InstallerClientStop.cs" Link="InstallerClientStop.cs" />
+    <Compile Include="../InstallerShared/InstallationMigrationPolicy.cs" Link="InstallationMigrationPolicy.cs" />
+    <Compile Include="../InstallerShared/DistributionRegistration.cs" Link="DistributionRegistration.cs" />
     <Content Include="CustomAction.config" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

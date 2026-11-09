@@ -37,6 +37,8 @@ internal static class StoreParityValidation
             ["processId"] = Environment.ProcessId, ["version"] = BuildInfo.Version };
         var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "CloudInlet-StoreParity-" + token);
         var state = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CloudBay", "Client", "StoreValidation", token);
+        var canonicalState = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CloudInlet", "Client", "StoreValidation", token);
+        var routingState = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CloudInlet", "Migration", "Release", "StoreValidation", token);
         var payload = Encoding.UTF8.GetBytes("CloudInlet isolated native parity fixture: " + token + "\n");
         var placeholder = Path.Combine(root, "online-only.bin");
         var downloaded = Path.Combine(root, "downloaded.bin");
@@ -67,6 +69,16 @@ internal static class StoreParityValidation
                 foreach (var key in MappingKeys)
                     Registry.CurrentUser.DeleteSubKeyTree(key + @"\CloudInletStoreParity-" + token, throwOnMissingSubKey: false);
                 result["fixtureRemoved"] = !Directory.Exists(root);
+                foreach (var location in new[] { canonicalState, routingState })
+                {
+                    RejectLinks(location);
+                    if (!Directory.Exists(location)) continue;
+                    var proof = Path.Combine(location, "scope.dpapi");
+                    Require(File.Exists(proof), "The isolated scope marker is missing; cleanup stopped.");
+                    var decoded = ProtectedData.Unprotect(File.ReadAllBytes(proof), "CloudInlet.StoreScope.v1"u8.ToArray(), DataProtectionScope.CurrentUser);
+                    Require(Encoding.UTF8.GetString(decoded) == token, "The isolated scope marker belongs to another fixture.");
+                    File.Delete(proof); Directory.Delete(location, recursive: false);
+                }
             }
             else
             {
@@ -78,6 +90,14 @@ internal static class StoreParityValidation
                     await File.WriteAllTextAsync(marker, token);
                     await File.WriteAllTextAsync(local, "Preserved local fixture " + token);
                     SeedState(state, token, root);
+                    foreach (var location in new[] { canonicalState, routingState })
+                    {
+                        RejectLinks(location);
+                        Require(!Directory.Exists(location), "A canonical-state fixture already exists.");
+                        Directory.CreateDirectory(location);
+                        await File.WriteAllBytesAsync(Path.Combine(location, "scope.dpapi"), ProtectedData.Protect(
+                            Encoding.UTF8.GetBytes(token), "CloudInlet.StoreScope.v1"u8.ToArray(), DataProtectionScope.CurrentUser));
+                    }
                     foreach (var key in MappingKeys)
                     {
                         using var testKey = Registry.CurrentUser.CreateSubKey(key + @"\CloudInletStoreParity-" + token, writable: true);
@@ -88,6 +108,15 @@ internal static class StoreParityValidation
                     throw new IOException("The native fixture ownership marker is missing or different.");
 
                 ValidateState(state, token, root, result);
+                foreach (var location in new[] { canonicalState, routingState })
+                {
+                    RejectLinks(location);
+                    var proof = Path.Combine(location, "scope.dpapi");
+                    Require(File.Exists(proof), "Canonical state or migration routing was lost after package removal.");
+                    var decoded = ProtectedData.Unprotect(await File.ReadAllBytesAsync(proof), "CloudInlet.StoreScope.v1"u8.ToArray(), DataProtectionScope.CurrentUser);
+                    Require(Encoding.UTF8.GetString(decoded) == token, "Canonical state or migration routing changed after package removal.");
+                }
+                result["canonicalStateAndRoutingReopened"] = true;
                 if (phase is "resume" or "disconnect" or "verify")
                 {
                     // Check before reconnecting or listing the fake cloud: recovery must not

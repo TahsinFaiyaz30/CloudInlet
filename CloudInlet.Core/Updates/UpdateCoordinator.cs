@@ -37,10 +37,10 @@ public sealed class UpdateCoordinator : IAsyncDisposable
     private UpdatePreferences _preferences = new();
 
     public UpdateCoordinator(InstalledUpdateIdentity identity, string ownedCachePath, IUpdateInstaller? installer = null,
-        HttpMessageHandler? handler = null, TimeProvider? timeProvider = null)
+        HttpMessageHandler? handler = null, TimeProvider? timeProvider = null, Action? verifyMaintenance = null)
     {
         UpdateManifestRules.ValidateIdentity(identity);
-        _identity = identity; _cache = new UpdateCache(ownedCachePath);
+        _identity = identity; _cache = new UpdateCache(ownedCachePath, verifyMaintenance ?? (installer is null ? null : installer.EnsureRecoveryAllowsMaintenance));
         _clock = timeProvider ?? TimeProvider.System; _installer = installer;
         _transport = new GitHubUpdateTransport(handler, _clock);
     }

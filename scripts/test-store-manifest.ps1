@@ -17,7 +17,7 @@ function Assert-Set($Actual,$Expected,[string]$Label) {
 }
 $directories = @($manifest.SelectNodes('/p:Package/p:Properties/v:FileSystemWriteVirtualization/v:ExcludedDirectories/v:ExcludedDirectory',$ns) | ForEach-Object { $_.InnerText })
 $keys = @($manifest.SelectNodes('/p:Package/p:Properties/v:RegistryWriteVirtualization/v:ExcludedKeys/v:ExcludedKey',$ns) | ForEach-Object { $_.InnerText })
-Assert-Set $directories @('$(KnownFolder:LocalAppData)\CloudBay\Client') 'External application data'
+Assert-Set $directories @('$(KnownFolder:LocalAppData)\CloudBay\Client', '$(KnownFolder:LocalAppData)\CloudInlet\Client', '$(KnownFolder:LocalAppData)\CloudInlet\Migration\Release') 'External application data'
 Assert-Set $keys @('HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders','HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders') 'External registry keys'
 $capabilities = @($manifest.SelectNodes('/p:Package/p:Capabilities/*',$ns) | ForEach-Object { $_.GetAttribute('Name') })
 Assert-Set $capabilities @('internetClient','runFullTrust','unvirtualizedResources') 'Capabilities'

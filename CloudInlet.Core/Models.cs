@@ -51,6 +51,8 @@ public enum ExclusionTarget { Files, Folders, All }
 /// <summary>A name or path pattern built by the UI, optionally scoped to one local root.</summary>
 public sealed record GuidedExclusion(string Pattern, ExclusionTarget Target, string? RootPath = null,
     string? RelativeDirectory = null, bool Enabled = true);
+/// <summary>Verified local-root migration keeps its existing sync baseline and selects the native identity explicitly.</summary>
+public sealed record SyncRootBinding(string RootPath, string StateName, bool CanonicalRegistration, string AccountId, string BucketId, string Prefix);
 public sealed record AppSettings
 {
     public int SchemaVersion { get; init; } = 1;
@@ -79,6 +81,7 @@ public sealed record AppSettings
     public List<GuidedExclusion> GuidedExclusions { get; init; } = [];
     public List<BackupFolder> Backups { get; init; } = [];
     public List<CustomBackupFolder> CustomBackups { get; init; } = [];
+    public List<SyncRootBinding> RootBindings { get; init; } = [];
     public bool IsConfigured => BucketId.Length > 0 && KeyId.Length > 0;
 }
 

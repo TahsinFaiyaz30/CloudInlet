@@ -13,6 +13,13 @@ internal static class Program
 {
     private static int Main(string[] arguments)
     {
+        // This executable can stand in for a restart-required native installer.
+        // No fault injection or marker handling is included in the shipping app.
+        if (arguments.Contains("/RESTARTEXITCODE=3010")) return 3010;
+        if (arguments.Contains("--background") &&
+            Environment.GetEnvironmentVariable("CLOUDINLET_INSTALLER_TEST_RELAUNCH_MARKER") is string marker &&
+            !string.IsNullOrWhiteSpace(marker))
+            File.WriteAllText(marker, "The fixture application was reopened.");
         if (arguments.Length >= 2 && arguments[0] == "--capture-arguments")
         {
             var captured = new[] { Process.GetCurrentProcess().ProcessName }

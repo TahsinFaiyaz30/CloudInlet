@@ -257,6 +257,19 @@ public static class KnownFolderBackup
             throw new IOException("Choose separate Windows and CloudInlet folders, with neither inside the other.");
     }
     private static Guid GetId(string name) => FolderIds.TryGetValue(name, out var id) ? id : throw new ArgumentException("Unsupported system folder.", nameof(name));
+    internal static void CompareExchangePath(string name, string expected, string replacement)
+    {
+        KnownFolderPolicy.EnsureRedirectable(GetId(name));
+        var current = GetPath(name);
+        if (Path.GetFullPath(current).Equals(Path.GetFullPath(replacement), StringComparison.OrdinalIgnoreCase)) return;
+        if (!Path.GetFullPath(current).Equals(Path.GetFullPath(expected), StringComparison.OrdinalIgnoreCase))
+            throw new IOException("Another app changed the Windows " + name + " location. Its mapping was retained; review it before retrying migration.");
+        if (!Directory.Exists(replacement)) throw new DirectoryNotFoundException("The verified replacement Windows folder is unavailable.");
+        SetPath(name, replacement);
+        if (!Path.GetFullPath(GetPath(name)).Equals(Path.GetFullPath(replacement), StringComparison.OrdinalIgnoreCase))
+            throw new IOException("Windows did not preserve the requested " + name + " folder mapping. Retry or restore this migration item.");
+    }
+
     private static void SetPath(string name, string path)
     {
         var id = GetId(name);

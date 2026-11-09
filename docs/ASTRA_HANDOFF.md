@@ -1,5 +1,9 @@
 # CloudInlet configuration and verification handoff
 
+## Migration implementation checkpoint — 2026-11-09
+
+Read [MIGRATION_TEST_STATUS.md](MIGRATION_TEST_STATUS.md) for the current evidence and limits. Folder Move/Explorer/external conflict/restoration, corrected full-app synthetic MSI restart recovery, fresh missing-input Retry and its scoped uninstall pass. The original failed native deny-rename case remains retained. Its stale registration was retired using native baseline repair/uninstall, preserving 3,191 files. The corrected normal-load MSI case passed Prepare; its Upgrade verifier encountered an illegal-path parsing error after native execution. The VM remains running and offline. Inspect the saved native result without rerunning the installer; finish the outstanding restart check and evidence export before claiming full acceptance. No passed tests need repeating or live host app refresh. The user requested committing the implementation before continuing this final check.
+
 ## Release presentation completed — 2026-10-11
 
 The user-approved one-time recreation of the **1.2.0 release object** is complete. Replacement release `409803658` is published as latest; original object `409447363` was removed only after all sixteen original assets were backed up and verified. Tag `v1.2.0` remains at `7c1b42f6edd3c1c7b0b1a8a89b92cb24916fe478`. All six desktop packages, the Store MSIX and `updates-v2.json` remain byte-identical. The nine public assets are the six Release/Debug desktop packages, current Store MSIX, update feed and regenerated `SHA256SUMS.txt`. The MSIXUPLOAD, Store identity record, validation report and duplicate installer checksum sidecars are retained internally. GitHub also displays its two automatic source archives.

@@ -11,7 +11,7 @@ public sealed record SyncEntry(string RelativePath, CloudObject Remote, long Loc
 }
 public sealed record SyncDirectoryEntry(string RelativePath, CloudObject Remote);
 
-public sealed class SyncManifest
+public sealed partial class SyncManifest
 {
     private readonly string _connectionString;
     public SyncManifest(string databasePath)

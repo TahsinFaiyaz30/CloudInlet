@@ -42,24 +42,18 @@ namespace CloudInlet.Packaging
             return Guard(session, () =>
             {
                 var flavor = Flavor(session);
+                var registration = ReadRegistration(session, flavor, "Msi");
+                session["CI_DISTRIBUTION_KEY"] = DistributionRegistration.Key(registration?.Brand ?? "CloudInlet", flavor, "Msi");
                 if (session["REMOVE"].Split(',').Contains("ALL", StringComparer.OrdinalIgnoreCase))
                 {
-                    using (var installed = UserKey(session, Key(flavor, "Msi")))
-                    {
-                        if (installed?.GetValue("InstallDirectory") is string directory)
-                        {
-                            session["INSTALLDIR"] = ValidateDirectory(directory);
-                        }
-                    }
+                    if (registration != null) session["INSTALLDIR"] = ValidateDirectory(registration.Directory);
                     return ActionResult.Success;
                 }
-                using (var other = UserKey(session, Key(flavor, "Exe")))
-                    if (other?.GetValue("InstallDirectory") is string)
-                        throw new InvalidOperationException("CloudInlet is installed using the EXE installer. Uninstall that installer before changing to MSI. Your backup settings and files will be preserved.");
+                if (ReadRegistration(session, flavor, "Exe") != null)
+                    throw new InvalidOperationException("CloudInlet is installed using the EXE installer. Uninstall that installer before changing to MSI. Your backup settings and files will be preserved.");
 
-                using (var previous = UserKey(session, Key(flavor, "Msi")))
                 {
-                    var previousDirectory = previous?.GetValue("InstallDirectory") as string;
+                    var previousDirectory = registration?.Directory;
                     session["CB_PREVIOUS_DIRECTORY"] = "";
                     if (session["UPDATE"] == "1" && string.IsNullOrEmpty(previousDirectory))
                         throw new InvalidOperationException("This update requires an existing MSI installation of the same CloudInlet build.");
@@ -69,9 +63,19 @@ namespace CloudInlet.Packaging
                     {
                         previousDirectory = ValidateDirectory(previousDirectory!);
                         session["CB_PREVIOUS_DIRECTORY"] = previousDirectory;
-                        // An installed MSI owns its location. Repairs retain it, and
-                        // upgrades retain custom names rather than moving user data.
-                        session["INSTALLDIR"] = previousDirectory;
+                        if (session["MIGRATEINSTALLATION"] == "1")
+                        {
+                            // Only a new product's major-upgrade transaction may change
+                            // component paths. Maintenance and frozen update workers retain them.
+                            if (session["UPDATE"] != "1" || !string.IsNullOrEmpty(session["Installed"]) ||
+                                string.IsNullOrEmpty(session["WIX_UPGRADE_DETECTED"]))
+                                throw new IOException("Installation migration requires a newer MSI major upgrade started by CloudInlet.");
+                            session["INSTALLDIR"] = ValidateDirectory(InstallationMigrationPolicy.Validate(previousDirectory,
+                                session["MIGRATIONDIRECTORY"], flavor, "Msi", registration!.Version, session["ProductVersion"]));
+                            RequireVacantDestination(previousDirectory, session["INSTALLDIR"]);
+                            session["CI_DISTRIBUTION_KEY"] = DistributionRegistration.Key("CloudInlet", flavor, "Msi");
+                        }
+                        else session["INSTALLDIR"] = previousDirectory;
                         using (var run = UserKey(session, @"Software\Microsoft\Windows\CurrentVersion\Run"))
                             session["CB_CURRENT_STARTUP"] = run?.GetValue(RunName(flavor)) is string ? "1" : "0";
                         session["CB_CURRENT_DESKTOP"] = File.Exists(DesktopShortcut(flavor)) ? "1" : "0";
@@ -83,6 +87,8 @@ namespace CloudInlet.Packaging
                             session["REMOVE"] = string.Join(",", new[] { session["CB_CURRENT_STARTUP"] == "1" ? "" : "Startup", session["CB_CURRENT_DESKTOP"] == "1" ? "" : "DesktopShortcut" }.Where(x => x.Length > 0));
                         }
                     }
+                    else if (session["MIGRATEINSTALLATION"] == "1")
+                        throw new IOException("Installation migration requires an existing verified installation.");
                 }
                 return ActionResult.Success;
             });
@@ -97,6 +103,7 @@ namespace CloudInlet.Packaging
                 var flavor = Flavor(session);
                 var previousDirectory = session["CB_PREVIOUS_DIRECTORY"];
                 var source = string.IsNullOrEmpty(previousDirectory) ? directory : ValidateDirectory(previousDirectory);
+                if (session["MIGRATEINSTALLATION"] == "1") RequireVacantDestination(source, directory);
                 if (session["UPDATE"] == "1" || (!string.IsNullOrEmpty(previousDirectory) && string.IsNullOrEmpty(session["Installed"])))
                 {
                     ValidateInstalledSource(source, flavor);
@@ -172,8 +179,18 @@ namespace CloudInlet.Packaging
         private static string Flavor(Session session) => session["CB_FLAVOR"] == "Debug" ? "Debug" : "Release";
         private static string AppName(string flavor) => flavor == "Debug" ? "CloudInlet Debug" : "CloudInlet";
         private static string RunName(string flavor) => flavor == "Debug" ? "CloudInletDebug" : "CloudInlet";
-        // Keep the installed Windows product and cross-installer identity stable.
-        private static string Key(string flavor, string kind) => @"Software\CloudBay\Distribution\" + flavor + @"\" + kind;
+        private static DistributionRegistration? ReadRegistration(Session session, string flavor, string kind) =>
+            DistributionRegistration.Read(flavor, kind, (path, name) =>
+            {
+                using (var key = UserKey(session, path)) return key?.GetValue(name) as string;
+            });
+
+        private static void RequireVacantDestination(string source, string target)
+        {
+            if (!string.Equals(source, target, StringComparison.OrdinalIgnoreCase) &&
+                (File.Exists(target) || Directory.Exists(target)))
+                throw new IOException("The reviewed CloudInlet destination already exists. Nothing was overwritten; resolve the conflict and retry.");
+        }
         private static RegistryKey? UserKey(Session session, string path)
         {
             // Bind reads to the MSI installing user's hive rather than an HKCU

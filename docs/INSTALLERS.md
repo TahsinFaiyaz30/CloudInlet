@@ -132,7 +132,7 @@ ownership, package name, SHA-256 and size. It acknowledges readiness before the
 app gracefully exits, then waits for that exact process to exit. An active client
 is never forcibly terminated. If shutdown takes too long, installation stops.
 
-The EXE update uses `/UPDATE /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-` with
+The EXE update uses `/UPDATE /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /RESTARTEXITCODE=3010 /SP-` with
 the current installation directory. MSI uses `/qn /norestart UPDATE=1`. Both require
 an existing installation of the same kind and flavor and read current startup
 and desktop shortcut choices at update time. They do not reset those choices to
@@ -146,6 +146,9 @@ The helper keeps the verified package locked against changes while the installer
 runs, saves a result in the owned cache, and reopens the installed application
 after success or after an installer failure. It never interrupts Windows Installer
 rollback. Result code 3010 records Windows' restart request without forcing a reboot.
+When Windows requests a restart, the helper skips automatic application relaunch,
+even if post-install verification also fails. The progress window retains the
+restart requirement alongside that failure.
 Temporary helper/request files are maintained separately from the update package.
 
 Portable distributions need manual installation. Microsoft Store distributions
@@ -162,11 +165,26 @@ waits for exit. It does not use a command interpreter, PowerShell custom actions
 process-name termination or elevation. Installer tests should use isolated Debug
 fixture payloads and must not overwrite a real Debug or Release installation.
 
-Run `./scripts/test-installers.ps1` for real, isolated Debug fixture acceptance.
+Run `./scripts/test-installers.ps1 -ExeMigration` for real, isolated Debug fixture acceptance.
 It verifies EXE/MSI upgrades through the external updater, checksum rejection after
 graceful shutdown, current startup and desktop choices, custom installation paths,
 matching kind, update-only guards and uninstall. It compares Release configuration,
 credentials and Windows folder mappings before and after and preserves client data.
+The EXE migration cases stop at an authenticated uninstall boundary, then exercise
+resume and restoration with the real retained helper. They also verify destination
+conflict refusal, preservation of independent files and startup choices, and refusal
+to undo a completed move. Same-folder cases start from the frozen bridge at custom
+and canonical directory names, cancel before uninstall, recover after uninstall,
+verify the unchanged directory identity and personal files, then update, repair
+and uninstall the canonical registration. A further native fixture saves the migration
+before the ordinary update, simulates its restart-required outcome, rejects same-boot
+retry/revert, and completes the already updated installation after a simulated boot
+change. A separate simulated 3010 result verifies that a failed post-install check
+does not erase the restart signal or reopen the application. It does not restart
+Windows. Run the native installer fixture separately from the Debug UI smoke test
+to keep installer ownership checks and desktop acceptance isolated. The actual
+WinUI progress-to-recovery handoff and a real
+restart-required Windows reboot remain separate desktop acceptance checks.
 
 The script creates a hidden same-user Windows process through WMI and checks its SID
 before touching fixtures. This gives the EXE installer and Windows Installer service

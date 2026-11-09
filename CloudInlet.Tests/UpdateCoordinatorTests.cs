@@ -13,6 +13,29 @@ namespace CloudInlet.Tests;
 public sealed class UpdateCoordinatorTests
 {
     [TestMethod]
+    public async Task PendingInstallerRecoveryPreventsStartupCachePruning()
+    {
+        await using var fixture = new Fixture();
+        var pending = Path.Combine(fixture.Cache, "pending-CloudInlet-recovery-fixture.exe");
+        await File.WriteAllTextAsync(pending, "verified installer retained");
+        fixture.Installer.RecoveryPending = true;
+        await Assert.ThrowsExceptionAsync<IOException>(() => fixture.Updater.InitializeAsync());
+        Assert.AreEqual("verified installer retained", await File.ReadAllTextAsync(pending));
+        fixture.Installer.RecoveryPending = false;
+        await fixture.Updater.InitializeAsync();
+        Assert.IsFalse(File.Exists(pending));
+    }
+    [TestMethod]
+    public async Task PendingInstallerRecoveryAlsoPreventsManualPruningAfterInitialization()
+    {
+        await using var fixture = new Fixture(); await fixture.Updater.InitializeAsync();
+        var pending = Path.Combine(fixture.Cache, "pending-CloudInlet-recovery-fixture.exe");
+        await File.WriteAllTextAsync(pending, "verified installer retained");
+        fixture.Installer.RecoveryPending = true;
+        await Assert.ThrowsExceptionAsync<IOException>(() => fixture.Updater.DeleteDownloadsAsync());
+        Assert.AreEqual("verified installer retained", await File.ReadAllTextAsync(pending));
+    }
+    [TestMethod]
     public void PostBridgeReleasesAcceptOnlyCanonicalManifestsAndCandidates()
     {
         var modern = Manifest("1.1.3");
@@ -235,6 +258,8 @@ public sealed class UpdateCoordinatorTests
             "pending-CloudInlet-0.8.0-win-x64-release-setup.exe",
             "pending-CloudInlet-0.9.0-win-x64-debug-setup.msi",
             "partial-CloudInlet-1.1.0-win-x64-debug-setup.exe",
+            "CloudInlet-1.1.0-win-x64-release-setup.msi",
+            "CloudInlet-1.0.0-win-x64-debug-setup.msi.0123456789abcdef0123456789abcdef.tmp",
             "PARTIAL-CLOUDINLET-0.9.0-win-x64-release-portable.zip"
         }) await File.WriteAllBytesAsync(Path.Combine(fixture.Cache, name), Payload);
         var unrelated = Path.Combine(fixture.Cache, "keep.txt");
@@ -246,6 +271,8 @@ public sealed class UpdateCoordinatorTests
         await fixture.Updater.DeleteDownloadsAsync();
 
         Assert.IsFalse(File.Exists(current));
+        Assert.IsFalse(File.Exists(Path.Combine(fixture.Cache, "CloudInlet-1.1.0-win-x64-release-setup.msi")));
+        Assert.IsFalse(File.Exists(Path.Combine(fixture.Cache, "CloudInlet-1.0.0-win-x64-debug-setup.msi.0123456789abcdef0123456789abcdef.tmp")));
         Assert.IsFalse(Directory.GetFiles(fixture.Cache).Any(path => Path.GetFileName(path).StartsWith("pending-", StringComparison.OrdinalIgnoreCase) ||
             Path.GetFileName(path).StartsWith("partial-", StringComparison.OrdinalIgnoreCase)));
         CollectionAssert.AreEqual(preferencesBefore, await File.ReadAllBytesAsync(Path.Combine(fixture.Cache, "preferences.json")));
@@ -903,6 +930,8 @@ public sealed class UpdateCoordinatorTests
     }
     private sealed class FakeInstaller : IUpdateInstaller
     {
+        public bool RecoveryPending;
+        public void EnsureRecoveryAllowsMaintenance() { if (RecoveryPending) throw new IOException("Installation migration still needs recovery."); }
         public int Calls; public VerifiedUpdatePackage? Package; public Action? Installed;
         public Task InstallAsync(VerifiedUpdatePackage package, CancellationToken cancellationToken)
         { Calls++; Package = package; Installed?.Invoke(); return Task.CompletedTask; }

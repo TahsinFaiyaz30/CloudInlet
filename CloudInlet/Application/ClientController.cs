@@ -214,7 +214,7 @@ public sealed partial class ClientController : IAsyncDisposable
             settings = settings with { AccountId = account.AccountId, BucketId = bucket.Id };
             // Each account/root/prefix retains its own baseline across registration loss.
             var identity = account.AccountId + "|" + bucket.Id + "|" + settings.Prefix + "|" + settings.RootPath.ToUpperInvariant();
-            var stateName = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..24];
+            var stateName = SyncRootMigrationIdentity.StateName(settings, settings.RootPath, settings.Prefix);
             var manifest = new SyncManifest(Path.Combine(_storage.DirectoryPath, "State", stateName + ".sqlite"));
             placeholders = new WindowsPlaceholderService();
             placeholders.ConfigureTransferLimits(TransferLimits.For(settings).Downloads);
@@ -223,7 +223,7 @@ public sealed partial class ClientController : IAsyncDisposable
                 {
                     await HydrateTrackedAsync(cloud, file, settings.Prefix, BuildInfo.ProductName, offset, length, destination, token,
                         new(settings.RootPath, null, "", settings.BucketId, settings.Prefix));
-                }, ct, manifest.PrepareForNewRegistration);
+                }, ct, manifest.PrepareForNewRegistration, SyncRootMigrationIdentity.IsCanonical(settings, settings.RootPath));
             _cloud = cloud; _placeholders = placeholders; Settings = settings;
             foreach (var folder in settings.Backups)
             {
@@ -474,9 +474,8 @@ public sealed partial class ClientController : IAsyncDisposable
         if (_cloud is null) throw new IOException("Connect your B2 account first.");
         if (!Directory.Exists(folder.SourcePath)) throw new DirectoryNotFoundException("The custom backup folder is unavailable. No deletions were sent to B2.");
         ValidatePersonalRoot(folder.SourcePath);
-        // Existing backup objects and recovery journals own this private B2 namespace across product renames.
-        var expectedPrefix = Settings.Prefix + ".cloudbay-backups/" + PathRules.ValidateRelative(folder.Name) + "/";
-        if (!folder.Prefix.Equals(expectedPrefix, StringComparison.Ordinal)) throw new InvalidDataException("Custom backup settings contain an unexpected cloud prefix.");
+        // Retain declined legacy namespaces and reopen explicitly migrated ones using the saved prefix.
+        if (!PathRules.IsValidCustomBackupPrefix(Settings.Prefix, folder.Name, folder.Prefix)) throw new InvalidDataException("Custom backup settings contain an unexpected cloud prefix.");
         var placeholders = new WindowsPlaceholderService();
         placeholders.ConfigureTransferLimits(TransferLimits.For(Settings).Downloads);
         try
@@ -484,14 +483,14 @@ public sealed partial class ClientController : IAsyncDisposable
             var cloud = _cloud;
             var activitySettings = Settings;
             var identity = Settings.AccountId + "|" + Settings.BucketId + "|" + folder.Prefix + "|" + folder.SourcePath.ToUpperInvariant();
-            var stateName = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..24];
+            var stateName = SyncRootMigrationIdentity.StateName(Settings, folder.SourcePath, folder.Prefix);
             var manifest = new SyncManifest(Path.Combine(_storage.DirectoryPath, "State", stateName + ".sqlite"));
             await placeholders.ConnectAsync(folder.SourcePath, Settings.AccountId + ":" + Settings.BucketId + ":" + folder.Prefix,
                 async (file, offset, length, destination, token) =>
                 {
                     await HydrateTrackedAsync(cloud, file, folder.Prefix, folder.Name, offset, length, destination, token,
                         new(folder.SourcePath, folder.Name, "", activitySettings.BucketId, folder.Prefix));
-                }, ct, manifest.PrepareForNewRegistration);
+                }, ct, manifest.PrepareForNewRegistration, SyncRootMigrationIdentity.IsCanonical(Settings, folder.SourcePath));
             var engine = new SyncEngine(cloud, placeholders, manifest, CustomSettings(folder),
                 Path.Combine(_storage.DirectoryPath, "Recovery", folder.Name),
                 value => AddActivity(value with { Path = folder.Name + "/" + value.Path,
@@ -511,7 +510,7 @@ public sealed partial class ClientController : IAsyncDisposable
         using var operation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
         cancellationToken = operation.Token;
         name = PathRules.ValidateRelative(name.Trim());
-        if (name.Contains('/') || name.Length > 64 || name.StartsWith(".cloudbay", StringComparison.OrdinalIgnoreCase))
+        if (name.Contains('/') || name.Length > 64 || name.StartsWith(".cloudbay", StringComparison.OrdinalIgnoreCase) || name.StartsWith(".cloudinlet", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Choose a backup name of at most 64 characters without path separators.");
         sourcePath = Path.GetFullPath(sourcePath);
         ValidatePersonalRoot(sourcePath);
@@ -520,7 +519,7 @@ public sealed partial class ClientController : IAsyncDisposable
         {
             EnsureConnected();
             if (Settings.CustomBackups.Any(folder => folder.Name.Equals(name, StringComparison.OrdinalIgnoreCase))) throw new IOException("A backup with this name already exists.");
-            var folder = new CustomBackupFolder(name, sourcePath, Settings.Prefix + ".cloudbay-backups/" + name + "/");
+            var folder = new CustomBackupFolder(name, sourcePath, Settings.Prefix + ".cloudinlet-backups/" + name + "/");
             // Save intent first: a crash after registration will reconnect the same source and prefix.
             var previous = Settings;
             Settings = Settings with { CustomBackups = [..Settings.CustomBackups, folder] };
