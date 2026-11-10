@@ -1,8 +1,8 @@
 # CloudInlet configuration and verification handoff
 
-## Migration implementation checkpoint — 2026-11-09
+## Migration implementation and batch closure — 2026-11-10
 
-Read [MIGRATION_TEST_STATUS.md](MIGRATION_TEST_STATUS.md) for the current evidence and limits. Folder Move/Explorer/external conflict/restoration, corrected full-app synthetic MSI restart recovery, fresh missing-input Retry and its scoped uninstall pass. The original failed native deny-rename case remains retained. Its stale registration was retired using native baseline repair/uninstall, preserving 3,191 files. The corrected normal-load MSI case passed Prepare; its Upgrade verifier encountered an illegal-path parsing error after native execution. The VM remains running and offline. Inspect the saved native result without rerunning the installer; finish the outstanding restart check and evidence export before claiming full acceptance. No passed tests need repeating or live host app refresh. The user requested committing the implementation before continuing this final check.
+Implementation is committed as `989517d`. Read [MIGRATION_TEST_STATUS.md](MIGRATION_TEST_STATUS.md) and `artifacts/migration-review/final-batch-summary-20261110.json`. Folder Move/Explorer/external conflict/restoration, corrected full-app synthetic MSI restart recovery, fresh missing-input Retry and scoped uninstall pass. Final exports and normal VM shutdown are verified; the VM is Off with both checkpoints retained. The native normal-load fixture returned **0**, not **3010**, and its pending-path verifier failed. After a separately recorded later ordinary boot, all 617 target files and 3,214 protected files matched and native registration was healthy. The natural 3010/restart case remains unproven; no installer rerun, controlled-restart success, or full acceptance is claimed. Earlier failures remain retained. Do not repeat completed tests or refresh the live host app.
 
 ## Release presentation completed — 2026-10-11
 
