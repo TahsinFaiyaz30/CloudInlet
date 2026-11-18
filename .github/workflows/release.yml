@@ -151,8 +151,18 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: CloudInlet-payload-Store
-          path: artifacts/store-packages/*
+          path: |
+            artifacts/store-packages/*.msix
+            artifacts/store-packages/*.msixupload
+            artifacts/store-packages/*-package-info.json
           if-no-files-found: error
+      - name: Retain Store build logs outside the publication inventory
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: CloudInlet-store-build-logs
+          path: artifacts/store-packages/*.log
+          if-no-files-found: ignore
 
   publish:
     needs: [prepare, installers, store-package]
