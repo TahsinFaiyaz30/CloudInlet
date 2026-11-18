@@ -1,0 +1,76 @@
+name: Complete 1.2.1 publication
+on:
+  push:
+    branches: [codex/complete-1.2.1-publication]
+    paths: [.github/workflows/complete-1.2.1.yml]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  publish:
+    runs-on: windows-2025
+    environment: github-release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: a09f34cbd2e4576c419d4da9fa7a3844cea6acd3
+          fetch-depth: 0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          run-id: 44268204469
+          github-token: ${{ github.token }}
+          pattern: CloudInlet-payload-*
+          merge-multiple: true
+          path: artifacts/release-assets
+      - name: Preserve build logs and assemble exact-source evidence
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $jobs = (gh api repos/TahsinFaiyaz30/CloudInlet/actions/runs/44268204469/jobs | ConvertFrom-Json).jobs
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot verify original build jobs.' }
+          foreach ($name in @('installers (Debug)', 'installers (Release)', 'store-package')) {
+            $job = @($jobs | Where-Object name -CEQ $name)
+            if ($job.Count -ne 1 -or $job[0].conclusion -cne 'success') { throw "Original gate did not pass: $name" }
+          }
+          $ci = gh run view 44266566742 --json conclusion,headSha | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $ci.conclusion -cne 'success' -or $ci.headSha -cne 'a09f34cbd2e4576c419d4da9fa7a3844cea6acd3') { throw 'Windows CI did not pass for the release source.' }
+          New-Item -ItemType Directory -Path artifacts/store-build-logs | Out-Null
+          foreach ($name in @('makeappx.log', 'makepri.log')) {
+            $log = Join-Path artifacts/release-assets $name
+            if (Test-Path -LiteralPath $log) { Move-Item -LiteralPath $log -Destination artifacts/store-build-logs }
+          }
+          $configurations = foreach ($flavor in @('Debug', 'Release')) {
+            $validation = Get-Content -LiteralPath "artifacts/release-assets/$flavor-build-validation.json" -Raw | ConvertFrom-Json
+            if ($validation.version -cne '1.2.1' -or $validation.sourceRevision -cne 'a09f34cbd2e4576c419d4da9fa7a3844cea6acd3' -or $validation.configuration -cne $flavor) { throw 'Build evidence differs.' }
+            $validation
+          }
+          @{ version = '1.2.1'; sourceRevision = 'a09f34cbd2e4576c419d4da9fa7a3844cea6acd3'; configurations = @($configurations); hostedNativeTestsExcluded = $true } | ConvertTo-Json -Depth 8 | Set-Content artifacts/release-assets/release-validation.json -Encoding utf8NoBOM
+      - name: Publish original packages with unchanged release guards
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          .\scripts\publish-github-release.ps1 -AssetDirectory artifacts/release-assets -ExpectedRevision a09f34cbd2e4576c419d4da9fa7a3844cea6acd3
+          $notesPath = 'artifacts/release-assets/release-notes.md'
+          $notes = Get-Content -LiteralPath $notesPath -Raw
+          $links = '[Windows CI](https://github.com/TahsinFaiyaz30/CloudInlet/actions/runs/44266566742) · [Package builds](https://github.com/TahsinFaiyaz30/CloudInlet/actions/runs/44268204469)'
+          $notes = $notes.Replace('<summary>Validation</summary>', "<summary>Validation</summary>`n`n$links`n`nPackage builds passed; this follow-up publishes their unchanged bytes after separating two internal build logs.")
+          Set-Content -LiteralPath $notesPath -Value $notes -Encoding utf8NoBOM
+          gh release edit v1.2.1 --repo TahsinFaiyaz30/CloudInlet --notes-file $notesPath
+          if ($LASTEXITCODE -ne 0) { throw 'Could not attach exact build evidence links.' }
+      - name: Retain submission package and publication evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: CloudInlet-1.2.1-publication-evidence
+          path: |
+            artifacts/release-assets/*validation.json
+            artifacts/release-assets/*.sha256
+            artifacts/release-assets/*-store.msixupload
+            artifacts/release-assets/*-store-package-info.json
+            artifacts/release-assets/release-notes.md
+            artifacts/release-assets/updates-v2.json
+            artifacts/release-assets/SHA256SUMS.txt
+            artifacts/store-build-logs/*.log
