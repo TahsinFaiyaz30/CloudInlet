@@ -245,6 +245,12 @@ Add
 Add ('- Build validation: ' + ($buildSummaries -join '; ') + '; zero failures or skips.')
 foreach ($item in $notes.validation.items) { Add "- $item" }
 $evidenceLinks = @($notes.validation.links | Where-Object { $null -ne $_ })
+if ($env:GITHUB_ACTIONS -ceq 'true' -and $env:GITHUB_REPOSITORY -ceq $repository -and
+    $env:GITHUB_RUN_ID -match '^\d+$' -and $env:GITHUB_SHA -ceq $ExpectedRevision) {
+    # The run ID is not known when curated notes are committed before the bump.
+    # Link the publishing run only when it belongs to this exact release source.
+    $evidenceLinks += @{ label = 'Release build and validation'; url = "$repositoryUrl/actions/runs/$($env:GITHUB_RUN_ID)" }
+}
 if ($evidenceLinks.Count) {
     Add
     Add (@($evidenceLinks | ForEach-Object { "[$($_.label)]($($_.url))" }) -join ' · ')

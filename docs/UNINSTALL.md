@@ -74,6 +74,7 @@ using that directory or if you still need its recovery contents. It does not
 delete cloud data or files in your chosen backup roots. You can also revoke
 CloudInlet's authorization directly with the relevant cloud provider.
 
-For help, use [CloudInlet support](https://github.com/TahsinFaiyaz30/CloudInlet/issues).
-Do not include application keys, tokens, private file contents or unredacted
-account/recovery files in a public issue.
+For help, email [CloudInlet support](mailto:tahsinfaiyaz30@gmail.com).
+No GitHub account is required. Do not send application keys, tokens, private file
+contents or unredacted account/recovery files. Public technical reports can also
+be filed in the [source repository](https://github.com/TahsinFaiyaz30/CloudInlet/issues).

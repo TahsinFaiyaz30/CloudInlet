@@ -4,6 +4,12 @@ Draft text for product `9N63JNRR5VB4`, submission `1152921505702060020`.
 Keep verification claims tied to the recorded evidence in `ASTRA_HANDOFF.md`.
 Microsoft approval remains a separate external decision.
 
+**Historical submission text:** the report completed on 2026-10-15 denied
+`unvirtualizedResources` and specifically rejected GitHub as the support contact
+or developer website. Use [the prepared follow-up](STORE_CERTIFICATION_FOLLOWUP.md)
+before resubmitting. The manifest scope below describes the original 1.2.0
+package, not a new package built from today's migration-enabled source.
+
 ## runFullTrust (445 / 500 characters)
 
 ```text
