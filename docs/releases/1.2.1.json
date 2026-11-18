@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "version": "1.2.1",
+  "previousTag": "v1.2.0",
+  "summary": "A better-positioned tray panel, clearer icons, and reviewed migration with recovery for existing CloudBay installations.",
+  "categories": [
+    {
+      "title": "Tray and interface",
+      "items": [
+        {
+          "text": "Center the tray panel above its notification icon, clamping it to the monitor work area and handling side taskbars. Returning from a dialog keeps the icon anchor.",
+          "commits": ["694d8230d8cf5e7d5f623d1d9fc1fd85fee25e49"]
+        },
+        {
+          "text": "Animate status and empty-state illustrations when opening the tray or entering a page, while retaining hover effects and respecting Windows animation preferences.",
+          "commits": ["694d8230d8cf5e7d5f623d1d9fc1fd85fee25e49"]
+        },
+        {
+          "text": "Remove excess padding from app artwork and regenerate all native icon sizes so taskbar and notification-area icons appear larger and clearer.",
+          "commits": ["694d8230d8cf5e7d5f623d1d9fc1fd85fee25e49"]
+        }
+      ]
+    },
+    {
+      "title": "Reviewed migration and recovery",
+      "items": [
+        {
+          "text": "Review legacy locations at startup or in Settings > Updates. Migration requires explicit selection and confirmation; declining keeps existing locations and identities working.",
+          "commits": ["989517d6f8faa37569fcadc3bf93ba0357b831c4"]
+        },
+        {
+          "text": "Move selected private app state to CloudInlet with protected routing and recovery journals, preserving accounts, settings, sync baselines and unfinished work. Fresh profiles use CloudInlet state directly.",
+          "commits": ["989517d6f8faa37569fcadc3bf93ba0357b831c4"]
+        },
+        {
+          "text": "Migrate selected local sync and backup folders with verified placeholder hydration, saved account references and Windows folder-mapping checks. Conflicting destinations, unsafe links and externally changed mappings stop the operation.",
+          "commits": ["989517d6f8faa37569fcadc3bf93ba0357b831c4"]
+        },
+        {
+          "text": "Recover interrupted folder moves and selected Explorer registrations while preserving the original sync baseline. Pending migration pauses normal transfers until recovery is resolved; completed migrations are not silently reversed.",
+          "commits": ["989517d6f8faa37569fcadc3bf93ba0357b831c4"]
+        }
+      ]
+    },
+    {
+      "title": "Installer and update safety",
+      "items": [
+        {
+          "text": "Add durable update progress and recovery windows, recording installer outcomes and Windows restarts. Restart-required or unknown outcomes keep retry, restore and opening the app unavailable until restart; CloudInlet does not restart Windows automatically.",
+          "commits": ["989517d6f8faa37569fcadc3bf93ba0357b831c4"]
+        },
+        {
+          "text": "Support explicitly selected installation migration using verified installer payloads. EXE migration updates the original installation before retiring owned files; MSI relocation requires a newer version and preserves installation scope and choices.",
+          "commits": ["989517d6f8faa37569fcadc3bf93ba0357b831c4"]
+        },
+        {
+          "text": "Keep repair sources and staged workers outside moving application/state directories, prevent cache cleanup during unresolved recovery, and verify registration and retained personal files before reporting completion.",
+          "commits": ["989517d6f8faa37569fcadc3bf93ba0357b831c4"]
+        },
+        {
+          "text": "Use version-scoped MSI components for upgrade, relocation and repair, and retain authenticated EXE migration receipts for recovery and owned-file cleanup.",
+          "commits": ["989517d6f8faa37569fcadc3bf93ba0357b831c4"]
+        }
+      ]
+    },
+    {
+      "title": "Compatibility and support",
+      "items": [
+        {
+          "text": "Preserve historical credentials, sync identities and installer paths unless the user selects migration. Windows 11 Store exclusions now include the CloudInlet client and Release migration-state directories alongside the legacy client directory and required Shell keys; Windows 10 retains its broader fallback.",
+          "commits": ["989517d6f8faa37569fcadc3bf93ba0357b831c4"]
+        },
+        {
+          "text": "Document direct email support and the retained state, folder mappings and recovery requirements after uninstall. Prepare a package-specific Store capability reconsideration; certification remains pending.",
+          "commits": ["da40f6709d90d3dc669084a72ab3ec5ace91de74"]
+        }
+      ]
+    },
+    {
+      "title": "Migration infrastructure and release tooling",
+      "collapsed": true,
+      "items": [
+        {
+          "text": "Add B2 prefix inventory, protected copy journals, version-aware recovery and local binding support. Cloud namespace entries remain review-only in normal discovery; this release does not automatically rename cloud objects.",
+          "commits": ["989517d6f8faa37569fcadc3bf93ba0357b831c4"]
+        },
+        {
+          "text": "Generate curated release pages with separate Release and Debug download tables, complete checksums and native Copy controls. Keep submission archives and validation records in CI artifacts and link publication evidence to the exact source.",
+          "commits": ["ce45c630e30959dce7ac8eeb37247e4f1e91c190", "cb1c2721b6adcf1b2ddc6b7761aea3487618134d", "da40f6709d90d3dc669084a72ab3ec5ace91de74"]
+        }
+      ]
+    }
+  ],
+  "storeStatus": "Not certified. A revised restricted-capability justification is prepared for Microsoft reconsideration.",
+  "installationNotes": [
+    "**Platform:** x64; package minimum Windows 10 build 19041. Windows 10 execution remains unverified; local native acceptance used Windows 11.",
+    "**Runtime:** bundled with the app; no separate .NET installation is required.",
+    "Keep the same installer type and Release/Debug build when updating. Installation relocation is an explicit migration choice.",
+    "Original CloudBay installations must upgrade through the frozen **1.1.2 bridge** first; retain account and recovery state.",
+    "Portable builds update manually; Store installations update through Microsoft Store. The downloadable Store package is not evidence of Microsoft certification.",
+    "GitHub's source archives are for building the app."
+  ],
+  "validation": {
+    "items": [
+      "The current UI changes built locally with zero warnings or errors and were checked by the user. Four incomplete-snapshot regression cases passed locally after an earlier hosted timeout; the release build records above report this source's gated results.",
+      "Earlier Windows 11 migration evidence includes a 1,605-test desktop suite, actual folder movement and mapping-conflict recovery, controlled interrupted-installer recovery, and scoped uninstall with retained files. These results are prior development evidence, not a claim that every case was repeated on the final package.",
+      "Full-app restart UI was exercised with a synthetic restart requirement. A separate native MSI fixture returned genuine 3010 and verified deferred old-file cleanup after restart; the combined full-app UI path with naturally triggered 3010 remains unverified.",
+      "Hosted tests exclude Native and LiveProvider cases. Windows 10 execution, production Store delivery and complete live-provider acceptance remain outside these gates; Microsoft Store approval is a separate decision."
+    ]
+  }
+}
