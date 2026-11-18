@@ -294,7 +294,7 @@ public partial class App : Microsoft.UI.Xaml.Application
             _trayActions = trayActions;
             _trayIcon = new TrayIcon(WinRT.Interop.WindowNative.GetWindowHandle(MainWindow),
                 Path.Combine(AppContext.BaseDirectory, "Assets", BuildInfo.IconFileName),
-                () => { _trayContextMenu?.Hide(); _trayWindow.ShowAtTray(); }, MainWindow.ShowWindow, trayActions);
+                () => { _trayContextMenu?.Hide(); _trayWindow.ShowAtTray(trayIconBounds: _trayIcon?.GetBounds()); }, MainWindow.ShowWindow, trayActions);
             _trayIcon.Update(_controller.Snapshot);
             _controller.Changed += Controller_Changed;
             _ = ListenForActivationAsync();

@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="CloudInlet app icon">
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="16 16 224 224" role="img" aria-label="CloudInlet app icon">
   <defs>
     <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#20385b"/>
@@ -22,7 +22,7 @@
     </linearGradient>
   </defs>
 
-  <!-- The rounded tile stays clear of the edge so the mark reads in the Windows taskbar. -->
+  <!-- Fit the rounded tile to the canvas; Windows supplies taskbar and tray spacing. -->
   <rect x="16" y="16" width="224" height="224" rx="52" fill="url(#tile)"/>
   <rect x="16.5" y="16.5" width="223" height="223" rx="51.5" fill="none" stroke="#a9e8f5" stroke-opacity=".32"/>
 

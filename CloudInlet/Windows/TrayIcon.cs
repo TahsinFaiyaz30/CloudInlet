@@ -209,6 +209,15 @@ public sealed class TrayIcon : IDisposable
         if (!_disposed && _shellRegistered) ShellNotifyIcon(3, ref _data);
     }
 
+    public global::Windows.Graphics.RectInt32? GetBounds()
+    {
+        if (_disposed || !_shellRegistered) return null;
+        var identifier = new NotifyIconIdentifier { Size = (uint)Marshal.SizeOf<NotifyIconIdentifier>(), Window = _window, Id = IconId };
+        if (ShellNotifyIconGetRect(ref identifier, out var rect) < 0 || rect.Right <= rect.Left || rect.Bottom <= rect.Top)
+            return null;
+        return new global::Windows.Graphics.RectInt32(rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top);
+    }
+
     private Point ContextMenuPosition()
     {
         var point = new Point();

@@ -200,6 +200,7 @@ public sealed partial class MainWindow : Window
         AppWindow.Show(!Environment.GetCommandLineArgs().Contains("--ui-smoke"));
         if (AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized } presenter) presenter.Restore();
         if (!Environment.GetCommandLineArgs().Contains("--ui-smoke")) Activate();
+        FluentIconMotion.PlayEntrance(RootGrid);
     }
 
     public void ShowSettings()
@@ -511,6 +512,7 @@ public sealed partial class MainWindow : Window
         if (page == "backup") RefreshBackups(refreshMetadata: true);
         if (page is "services" or "overview") RefreshCloudServices();
         if (selected is ScrollViewer viewer) viewer.ChangeView(null, 0, null, true);
+        FluentIconMotion.PlayEntrance(RootGrid, selected);
         PersistNavigationRoute();
     }
 

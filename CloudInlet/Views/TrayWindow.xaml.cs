@@ -26,6 +26,7 @@ public sealed partial class TrayWindow : Window
     private int _refreshPending;
     private int _lastHeight;
     private bool _anchorToTop;
+    private RectInt32? _trayIconBounds;
     private bool _footerStacked;
     private bool _suppressAutoResize;
     private bool _keepOpenForInspection;
@@ -110,12 +111,20 @@ public sealed partial class TrayWindow : Window
         Refresh();
     }
 
-    public void ShowAtTray(bool keepOpenForInspection = false, bool forceActivationForValidation = false)
+    public void ShowAtTray(bool keepOpenForInspection = false, bool forceActivationForValidation = false, RectInt32? trayIconBounds = null)
     {
         if (_closed) return;
         _keepOpenForInspection = keepOpenForInspection;
         Refresh();
         GetCursorPos(out var cursor);
+        if (trayIconBounds is { Width: > 0, Height: > 0 }) _trayIconBounds = trayIconBounds;
+        // Keep the icon anchor when returning from a dialog, even if the
+        // pointer has since moved into the window. Keyboard opens use it too.
+        if (_trayIconBounds is { } bounds)
+        {
+            cursor.X = bounds.X + bounds.Width / 2;
+            cursor.Y = bounds.Y + bounds.Height / 2;
+        }
         var area = DisplayArea.GetFromPoint(new PointInt32(cursor.X, cursor.Y), DisplayAreaFallback.Nearest);
         var work = area.WorkArea;
         var dpi = GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this));
@@ -139,11 +148,13 @@ public sealed partial class TrayWindow : Window
         // WorkArea excludes the taskbar, so the flyout never covers its icon.
         if (cursor.X < work.X) x = work.X + margin;
         if (cursor.Y < work.Y) y = work.Y + margin;
-        if (cursor.Y < work.Y || cursor.Y >= work.Y + work.Height)
-            x = Math.Clamp(cursor.X - width + (int)(24 * scale), work.X + margin, Math.Max(work.X + margin, work.X + work.Width - width - margin));
-        else if (cursor.X < work.X || cursor.X >= work.X + work.Width)
-            y = Math.Clamp(cursor.Y - height + (int)(24 * scale), work.Y + margin, Math.Max(work.Y + margin, work.Y + work.Height - height - margin));
         var sideTaskbar = cursor.X < work.X || cursor.X >= work.X + work.Width;
+        if (sideTaskbar)
+            y = cursor.Y - height / 2;
+        else if (_trayIconBounds is not null || cursor.Y < work.Y || cursor.Y >= work.Y + work.Height)
+            x = cursor.X - width / 2;
+        x = Math.Clamp(x, work.X + margin, Math.Max(work.X + margin, work.X + work.Width - width - margin));
+        y = Math.Clamp(y, work.Y + margin, Math.Max(work.Y + margin, work.Y + work.Height - height - margin));
         _anchorToTop = cursor.Y < work.Y || (sideTaskbar && cursor.Y < work.Y + work.Height && y <= work.Y + margin);
         AppWindow.MoveAndResize(new RectInt32(x, y, width, height));
         var requestActivation = forceActivationForValidation || !Environment.GetCommandLineArgs().Contains("--ui-smoke");
@@ -166,6 +177,7 @@ public sealed partial class TrayWindow : Window
             }
         }
         finally { _opening = false; }
+        FluentIconMotion.PlayEntrance(TrayRoot);
     }
 
     internal FocusState FocusStateForValidation => QuickSettingsButton.FocusState;

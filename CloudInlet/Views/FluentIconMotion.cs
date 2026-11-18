@@ -12,13 +12,18 @@ using SettingsExpander = CommunityToolkit.WinUI.Controls.SettingsExpander;
 
 namespace CloudInlet.Views;
 
-/// <summary>Shared, interaction-driven motion for native Fluent icons.</summary>
+/// <summary>Shared entrance and interaction motion for native Fluent icons.</summary>
 internal static class FluentIconMotion
 {
     private static readonly ConditionalWeakTable<UIElement, Interaction> Interactions = new();
     private static readonly ConditionalWeakTable<MenuFlyout, object> Flyouts = new();
 
     internal static void Attach(UIElement root) => Interactions.GetValue(root, element => new Interaction(element));
+
+    internal static void PlayEntrance(UIElement root, UIElement? surface = null)
+    {
+        if (Interactions.TryGetValue(root, out var interaction)) interaction.PlayEntrance(surface ?? root);
+    }
 
     internal static void Attach(MenuFlyout menu) => Flyouts.GetValue(menu, flyout =>
     {
@@ -54,6 +59,8 @@ internal static class FluentIconMotion
         private IconElement? _active;
         private string _activeState = "Normal";
         private bool _subscribed;
+        private int _entranceVersion;
+        private readonly HashSet<IconElement> _entranceIcons = [];
         private readonly PointerEventHandler _move, _press, _release, _exit;
 
         internal Interaction(UIElement root)
@@ -73,9 +80,10 @@ internal static class FluentIconMotion
             root.LostFocus += (_, _) => SetActive(null, "Normal");
             if (root is FrameworkElement element)
             {
-                element.Loaded += (_, _) => Subscribe();
+                element.Loaded += (_, _) => { Subscribe(); PlayEntrance(_root); };
                 element.Unloaded += (_, _) =>
                 {
+                    ResetEntrance();
                     SetActive(null, "Normal");
                     _settings.AnimationsEnabledChanged -= AnimationsChanged;
                     _settings.ColorValuesChanged -= ContrastChanged;
@@ -102,7 +110,49 @@ internal static class FluentIconMotion
             // Drop the previous gesture so entering the same icon after the
             // preference changes can start a fresh transition.
             SetActive(null, "Normal");
+            ResetEntrance();
         });
+
+        internal void PlayEntrance(UIElement surface)
+        {
+            var version = ++_entranceVersion;
+            _root.DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            {
+                if (version != _entranceVersion || surface is not FrameworkElement { IsLoaded: true }
+                    || surface.Visibility != Visibility.Visible) return;
+                ResetEntrance();
+                if (_settings.AnimationsEnabled) AnimateIllustrations(surface);
+            });
+        }
+
+        private void ResetEntrance()
+        {
+            ++_entranceVersion;
+            foreach (var icon in _entranceIcons)
+                if (!ReferenceEquals(icon, _active)) Animate(icon, "Normal");
+            _entranceIcons.Clear();
+        }
+
+        private void AnimateIllustrations(DependencyObject node)
+        {
+            // Status/empty-state artwork welcomes the user on entry. Commands,
+            // navigation and item lists retain their existing hover behavior.
+            if (node is UIElement { Visibility: Visibility.Collapsed }
+                or Control { IsEnabled: false }
+                or ButtonBase or NavigationViewItem or MenuFlyoutItemBase
+                or AutoSuggestBox or ItemsControl or SettingsCard or SettingsExpander) return;
+            if (node is IconElement icon)
+            {
+                if (FluentIcons.KindOf(icon) is not null && icon.ActualWidth > 0 && icon.ActualHeight > 0)
+                {
+                    _entranceIcons.Add(icon);
+                    Animate(icon, "PointerOver");
+                }
+                return;
+            }
+            for (var index = 0; index < VisualTreeHelper.GetChildrenCount(node); index++)
+                AnimateIllustrations(VisualTreeHelper.GetChild(node, index));
+        }
 
         private void ContrastChanged(UISettings sender, object args) => _root.DispatcherQueue.TryEnqueue(() =>
             FluentIcons.RefreshContrast(_root, _accessibility.HighContrast));
