@@ -1,6 +1,9 @@
 # Store certification follow-up
 
-Prepared locally on 2026-11-18. Not saved to Partner Center or submitted.
+Historical rejection analysis prepared on 2026-11-18. The later 1.2.1 release,
+saved Partner Center changes and current submission status are recorded in
+[RELEASE_1.2.1_PUBLICATION.md](RELEASE_1.2.1_PUBLICATION.md). The review-time
+observations and pending actions below are retained as history.
 
 ## Verified report and submission
 

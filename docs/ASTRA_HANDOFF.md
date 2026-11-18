@@ -1,5 +1,21 @@
 # CloudInlet configuration and verification handoff
 
+## Version 1.2.1 published and Store resubmission completed — 2026-11-18
+
+[CloudInlet 1.2.1](https://github.com/TahsinFaiyaz30/CloudInlet/releases/tag/v1.2.1)
+is published from `a09f34cbd2e4576c419d4da9fa7a3844cea6acd3`, including migration
+work and the user-verified tray placement, page-entry animation and icon fixes.
+Release and Debug each passed 1,278 hosted tests; all nine public assets, updater
+variants and displayed hashes were verified. The Store package 1.2.1.0 was saved
+as Validated, then resubmitted with direct support and expanded capability
+justifications. Partner Center confirms **In certification / Pre-processing**;
+publishing remains automatic after approval. Microsoft approval is pending.
+
+See [RELEASE_1.2.1_PUBLICATION.md](RELEASE_1.2.1_PUBLICATION.md) for exact workflow,
+package and submission evidence. This publication batch is complete; no further
+test is queued. The natural-3010/full-app UI combination and other previously
+unverified acceptance limits below remain explicit, not silently declared passed.
+
 ## Natural MSI restart and deferred cleanup verified — 2026-11-17
 
 The isolated administrator/per-machine DLL fixture returned native **3010** without `ScheduleReboot`, `ForceReboot` or a manually populated pending queue. Windows installed the new DLL, renamed the loaded old DLL to `C:\Config.Msi\9a8dd.rbf`, and queued deletion of that old file. Its exact 3,072 bytes matched the baseline DLL and were preserved before restart. A normal Windows restart advanced both OS boot time and Kernel-General event 12, removed the queued old file, cleared the queue, and retained target version 1.2.3 with native product/Main-feature states 5/3. No installer was rerun. This is the behavior described in [Microsoft's reboot-request logging documentation](https://learn.microsoft.com/en-us/windows/win32/msi/logging-of-reboot-requests).

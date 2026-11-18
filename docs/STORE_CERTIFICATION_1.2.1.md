@@ -1,8 +1,10 @@
 # Store certification response for 1.2.1
 
-Prepared on 2026-11-18 for product `9N63JNRR5VB4`. This is submission text,
-not a certification claim. Verify the final 1.2.1.0 package identity and manifest
-against the generated package record before uploading. The original 1.2.0 text
+Prepared on 2026-11-18 for product `9N63JNRR5VB4`. This is the full technical
+reference, not a certification claim. The saved reviewer field uses a condensed
+5,538-character version to fit Partner Center's limit. See
+[publication evidence and current status](RELEASE_1.2.1_PUBLICATION.md) for the
+verified 1.2.1.0 package and saved fields. The original 1.2.0 text
 and rejection analysis remain in `STORE_CERTIFICATION.md` and
 `STORE_CERTIFICATION_FOLLOWUP.md`.
 
