@@ -309,6 +309,8 @@ public sealed class UpdateCoordinator : IAsyncDisposable
     }
 
     /// <summary>Starts one bounded background scheduler. Manual checks still honor server delays.</summary>
+    public Func<CancellationToken, Task>? CheckConnectorUpdates { get; set; }
+
     public void Start()
     {
         ThrowIfDisposed();
@@ -324,6 +326,7 @@ public sealed class UpdateCoordinator : IAsyncDisposable
             {
                 if (Snapshot.State != UpdateState.Installing)
                 {
+                    if (CheckConnectorUpdates is { } connectors) await connectors(token).ConfigureAwait(false);
                     if (Preferences.AutomaticChecks) await CheckAsync(manual: false, token).ConfigureAwait(false);
                     if (_identity.InstallerKind is UpdateInstallerKind.Exe or UpdateInstallerKind.Msi &&
                         Preferences.AutomaticallyDownload && Snapshot.State == UpdateState.Available)

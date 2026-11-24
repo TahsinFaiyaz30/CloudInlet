@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CloudInlet signed connector manifest v1",
+  "type": "object",
+  "required": ["schema", "id", "name", "publisher", "publicKey", "version", "sdk", "platforms", "architectures", "assembly", "entryPoint", "capabilities", "dependencies", "license", "documentation", "releaseNotes", "files"],
+  "properties": {
+    "schema": { "const": 1 },
+    "id": { "allOf": [{ "$ref": "#/$defs/id" }, { "not": { "const": "local" } }] },
+    "name": { "$ref": "#/$defs/text" },
+    "publisher": { "$ref": "#/$defs/text" },
+    "publicKey": { "type": "string", "minLength": 1, "contentEncoding": "base64", "description": "Canonical DER SubjectPublicKeyInfo for the publisher's ECDSA P-256 key." },
+    "version": { "$ref": "#/$defs/version" },
+    "sdk": { "$ref": "#/$defs/range" },
+    "platforms": { "$ref": "#/$defs/list", "examples": [["windows"]] },
+    "architectures": { "$ref": "#/$defs/list", "examples": [["x64"]] },
+    "assembly": { "$ref": "#/$defs/dll" },
+    "entryPoint": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Full name of a public concrete type with a public parameterless constructor." },
+    "kind": { "enum": ["provider", "component"], "default": "provider" },
+    "capabilities": { "type": "string", "pattern": "^(None|(?:Browse|Read|Write|DeleteExactVersion|Verify|ResumableUpload|ServerCopy|FolderBackup|ObjectKeys|HierarchicalFolders|Checksums|AccountSetup)(?:, (?:Browse|Read|Write|DeleteExactVersion|Verify|ResumableUpload|ServerCopy|FolderBackup|ObjectKeys|HierarchicalFolders|Checksums|AccountSetup))*)$" },
+    "dependencies": {
+      "type": "array", "maxItems": 32,
+      "items": {
+        "type": "object", "required": ["id", "publisherKey", "versions"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "publisherKey": { "$ref": "#/$defs/sha256", "description": "Fingerprint of the allowed dependency publisher." },
+          "versions": { "$ref": "#/$defs/range" },
+          "optional": { "type": "boolean", "default": false }
+        }
+      }
+    },
+    "license": { "$ref": "#/$defs/text" },
+    "documentation": { "$ref": "#/$defs/text" },
+    "sourceRevision": { "type": "string", "pattern": "^[0-9a-f]{40}$", "description": "Exact Git commit for an official release." },
+    "releaseNotes": { "type": "string" },
+    "files": {
+      "type": "object", "minProperties": 1, "maxProperties": 128,
+      "propertyNames": { "anyOf": [{ "$ref": "#/$defs/dll" }, { "enum": ["LICENSE.txt", "README.md"] }] },
+      "additionalProperties": { "$ref": "#/$defs/sha256" },
+      "description": "Every payload file, including the entry assembly, with its uppercase SHA-256 digest. Names are unique under Windows case folding."
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "maxLength": 96, "not": { "pattern": "^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\\.|$)" }, "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$" },
+    "text": { "type": "string", "minLength": 1 },
+    "list": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/text" } },
+    "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+    "range": { "type": "object", "required": ["min", "max"], "properties": { "min": { "$ref": "#/$defs/version" }, "max": { "$ref": "#/$defs/version" } }, "description": "Include min and exclude max. Max must exceed min." },
+    "sha256": { "type": "string", "pattern": "^[0-9A-F]{64}$" },
+    "dll": { "type": "string", "maxLength": 160, "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*\\.dll$", "description": "Flat managed assembly filename. Reserved Windows device and host assembly names are rejected." }
+  }
+}

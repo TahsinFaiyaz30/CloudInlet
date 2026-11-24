@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "id": "b2",
+  "name": "Backblaze B2",
+  "publisher": "CloudInlet",
+  "publicKey": "",
+  "version": "1.0.0",
+  "sdk": {
+    "min": "1.0.0",
+    "max": "2.0.0"
+  },
+  "platforms": [
+    "windows"
+  ],
+  "architectures": [
+    "x64"
+  ],
+  "assembly": "CloudInlet.Connectors.BackblazeB2.dll",
+  "entryPoint": "CloudInlet.Core.B2.B2Connector",
+  "capabilities": "Browse, Read, Write, DeleteExactVersion, Verify, ResumableUpload, ServerCopy, FolderBackup, ObjectKeys, Checksums",
+  "dependencies": [],
+  "license": "MIT",
+  "documentation": "https://github.com/TahsinFaiyaz30/CloudInlet/blob/main/docs/CONNECTORS.md",
+  "releaseNotes": "B2 backup, file versions and resumable verified transfers.",
+  "files": {
+    "CloudInlet.Connectors.BackblazeB2.dll": "",
+    "LICENSE.txt": ""
+  }
+}

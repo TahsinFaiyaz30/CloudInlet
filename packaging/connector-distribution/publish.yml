@@ -1,0 +1,99 @@
+name: Publish a signed connector
+run-name: Publish ${{ inputs.connector }} from ${{ inputs.source_commit }}
+on:
+  workflow_dispatch:
+    inputs:
+      connector:
+        description: Official provider
+        type: choice
+        options: [b2, onedrive]
+        required: true
+      source_commit:
+        description: Full reviewed CloudInlet source commit
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: official-connector-catalog
+  cancel-in-progress: false
+env:
+  SOURCE_COMMIT: ${{ inputs.source_commit }}
+  CONNECTOR: ${{ inputs.connector }}
+  DOTNET_NOLOGO: true
+jobs:
+  build:
+    if: github.repository == 'TahsinFaiyaz30/CloudInlet-Connectors' && github.ref == 'refs/heads/main'
+    runs-on: windows-2025
+    steps:
+      - name: Validate the requested commit
+        shell: pwsh
+        run: |
+          if ($env:SOURCE_COMMIT -cnotmatch '^[0-9a-f]{40}$') { throw 'Supply the exact lowercase Git SHA.' }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: TahsinFaiyaz30/CloudInlet
+          ref: ${{ inputs.source_commit }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+        with:
+          dotnet-version: 8.0.426
+      - name: Use the release SDK
+        shell: pwsh
+        run: dotnet new globaljson --sdk-version 8.0.426 --roll-forward disable
+      - name: Check connector contracts and provider behavior
+        shell: pwsh
+        run: dotnet test source/CloudInlet.Tests/CloudInlet.Tests.csproj -c Release --filter 'TestCategory!=LiveProvider&FullyQualifiedName!~Native&(FullyQualifiedName~ConnectorSystemTests|FullyQualifiedName~OneDrive|FullyQualifiedName~B2)' -v:minimal
+      - name: Build just the selected provider
+        shell: pwsh
+        run: ./source/scripts/build-connector-input.ps1 -Connector $env:CONNECTOR -SourceCommit $env:SOURCE_COMMIT -OutputDirectory "$env:RUNNER_TEMP/input"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: unsigned-input
+          path: ${{ runner.temp }}/input/
+          if-no-files-found: error
+          retention-days: 5
+  publish:
+    needs: build
+    runs-on: windows-2025
+    environment: connector-production
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: distribution
+          persist-credentials: false
+      - id: tooling
+        name: Read the distribution maintainer's reviewed signer revision
+        shell: pwsh
+        run: |
+          $revision = (Get-Content -Raw distribution/.github/publisher.json | ConvertFrom-Json).toolRevision
+          if ($revision -cnotmatch '^[0-9a-f]{40}$') { throw 'Unexpected publisher configuration.' }
+          "revision=$revision" >> $env:GITHUB_OUTPUT
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: TahsinFaiyaz30/CloudInlet
+          ref: ${{ steps.tooling.outputs.revision }}
+          path: release-tools
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+        with:
+          dotnet-version: 8.0.426
+      - name: Compile the pinned signing tool
+        shell: pwsh
+        run: |
+          dotnet new globaljson --sdk-version 8.0.426 --roll-forward disable
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          dotnet build release-tools/tools/CloudInlet.ConnectorTool/CloudInlet.ConnectorTool.csproj -c Release -v:minimal
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: unsigned-input
+          path: input
+      - name: Sign, publish immutable assets and advance the complete catalog
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLOUDINLET_CONNECTOR_SIGNING_KEY: ${{ secrets.CONNECTOR_PUBLISHER_PKCS8 }}
+        run: ./distribution/.github/publish.ps1 -Connector $env:CONNECTOR -SourceCommit $env:SOURCE_COMMIT -InputDirectory input -ToolRoot release-tools

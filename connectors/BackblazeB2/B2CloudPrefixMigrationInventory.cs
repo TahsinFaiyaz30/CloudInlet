@@ -106,7 +106,7 @@ public sealed partial class B2CloudStore
             if (version.Action == "upload" && !IsSha1(version.Sha1)) Block("missing-whole-file-checksum", "A historical version lacks a verified whole-file checksum.");
             if (version.Key == sourcePrefix || version.Key == destinationPrefix) Block("root-marker", "The selected prefix has its own root marker, which needs explicit mapping during migration.");
         }
-        if (sources.Any(version => version.Metadata.ContainsKey(CloudPrefixMigration.ReceiptMetadataKey) || version.Metadata.ContainsKey(CloudPrefixMigration.SourceMetadataKey)))
+        if (sources.Any(version => version.Metadata.ContainsKey(PrefixReceiptKeys.ReceiptMetadataKey) || version.Metadata.ContainsKey(PrefixReceiptKeys.SourceMetadataKey)))
             Block("existing-migration-receipts", "Source history already has migration receipts that must remain intact.");
         using var final = await MigrationBucketAsync(account, bucketId, cancellationToken).ConfigureAwait(false);
         if (MigrationLong(final.RootElement.GetProperty("buckets")[0], "revision") != revision)

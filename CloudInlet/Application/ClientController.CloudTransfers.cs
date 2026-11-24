@@ -1,8 +1,8 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using CloudInlet.Core;
-using CloudInlet.Core.B2;
-using CloudInlet.Core.OneDrive;
+using CloudInlet.Connectors;
+using CloudInlet.Core.Connectors;
 using CloudInlet.Core.Transfers;
 
 namespace CloudInlet.Application;
@@ -11,7 +11,7 @@ public sealed partial class ClientController
 {
     private readonly TransferBandwidthBudget _transferBandwidth = new();
     private TransferJobEngine? _cloudTransferEngine;
-    private B2CloudStore? _cloudTransferB2;
+    private IBackupSession? _cloudTransferB2;
     private readonly SemaphoreSlim _cloudTransferProviderGate = new(1, 1);
     private readonly ConcurrentDictionary<string, Task> _cloudTransferRuns = new(StringComparer.Ordinal);
     private readonly object _cloudTransferRunGate = new();
@@ -76,10 +76,11 @@ public sealed partial class ClientController
 
     private ITransferEndpoint ResolveTransferEndpoint(TransferLocation location) => location.Provider switch
     {
-        "onedrive" => new OneDriveTransferEndpoint(GetOneDriveClient(location.AccountId), location),
+        "onedrive" => GetOneDriveClient(location.AccountId).OpenEndpoint(location),
         "local" => new LocalTransferEndpoint(location),
-        "b2" when !_disconnecting && _pendingDisconnectMode is null && _cloudTransferB2 is not null && location.AccountId == Settings.AccountId => new B2TransferEndpoint(_cloudTransferB2, location),
-        _ => throw new IOException("Reconnect the original cloud account before continuing this job.")
+        "b2" when !_disconnecting && _pendingDisconnectMode is null && _cloudTransferB2 is not null && location.AccountId == Settings.AccountId => _cloudTransferB2.OpenEndpoint(location),
+        "b2" => throw new IOException("Reconnect the original cloud account before continuing this job."),
+        _ => OpenCustomSession(location.Provider, location.AccountId).OpenEndpoint(location)
     };
 
     private async Task EnsureCloudTransferProvidersAsync(CancellationToken ct)
@@ -90,7 +91,7 @@ public sealed partial class ClientController
         {
             if (_cloudTransferB2 is not null) return;
             var credentials = _storage.LoadCredentials() ?? throw new IOException("Connect the B2 account before starting a cloud transfer.");
-            var store = new B2CloudStore(bandwidthBudget: _transferBandwidth);
+            var store = OpenBackup(Connectors, _transferBandwidth);
             try
             {
                 ConfigureTransport(store, Settings);
@@ -117,6 +118,7 @@ public sealed partial class ClientController
         CancellationToken cancellationToken = default)
     {
         using var operation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+        if (location.Provider != "local" && Connectors.Issue(location.Provider) is { } issue) throw new ConnectorUnavailableException(issue);
         if (location.Provider == "b2") await EnsureCloudTransferProvidersAsync(operation.Token);
         return await ResolveTransferEndpoint(location).BrowseFoldersAsync(cursor, operation.Token);
     }
@@ -128,6 +130,7 @@ public sealed partial class ClientController
         EnsureSettingsHealthy();
         var engine = _cloudTransferEngine ?? throw new IOException("Cloud transfer checkpoints need recovery before another job can start.");
         if (source.Provider == destination.Provider) throw new IOException("Choose different source and destination providers.");
+        CheckTransferConnectors(source, destination, operation);
         ValidateNativeCloudMove(source, operation);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
         if (source.Provider == "b2" || destination.Provider == "b2") await EnsureCloudTransferProvidersAsync(linked.Token);
@@ -146,6 +149,7 @@ public sealed partial class ClientController
             if (_storage.LoadCloudBackupStopIntent() is { } pending)
             {
                 ValidateCloudBackupStopIntent(pending);
+                CheckTransferConnectors(pending.Plan.Source, pending.Plan.Destination, pending.Plan.Operation);
                 if (Settings.Backups.Any(folder => folder.Name.Equals(pending.Name, StringComparison.OrdinalIgnoreCase)))
                 {
                     var review = await PreviewStopBackupAsync(pending.Name, pending.RestorePath, Core.Sync.BackupTransferMode.None, ct);
@@ -164,11 +168,22 @@ public sealed partial class ClientController
             {
                 try
                 {
+                    if (_userPausedCloudTransfers.ContainsKey(id)) continue;
                     var plan = CloudTransferJobs.Single(job => job.Plan.Id == id).Plan;
+                    CheckTransferConnectors(plan.Source, plan.Destination, plan.Operation);
                     if (plan.Source.Provider == "b2" || plan.Destination.Provider == "b2") await EnsureCloudTransferProvidersAsync(ct);
                     QueueCloudTransferRun(id, resume: true);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (ConnectorUnavailableException error)
+                {
+                    unfinished.Add(id);
+                    if (CloudTransferJobs.Single(j => j.Plan.Id == id).Error is null)
+                    {
+                        _cloudTransferEngine.WaitForConnectors(id);
+                        AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Error, id, error.Message));
+                    }
+                }
                 catch (Exception error)
                 {
                     unfinished.Add(id);
@@ -191,6 +206,7 @@ public sealed partial class ClientController
         await _cloudBackupStopGate.WaitAsync(linked.Token);
         try
         {
+            CheckTransferConnectors(source, destination, operation);
             await EnsureCloudTransferProvidersAsync(linked.Token);
             var plan = new TransferJobPlan(Guid.NewGuid().ToString("N"), source, destination, operation, conflicts, exclusions.ToArray(), DateTimeOffset.UtcNow);
             TransferValidation.ValidatePlan(plan);
@@ -313,6 +329,7 @@ public sealed partial class ClientController
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
         var job = CloudTransferJobs.Single(item => item.Plan.Id == id);
+        CheckTransferConnectors(job.Plan.Source, job.Plan.Destination, job.Plan.Operation);
         ValidateNativeCloudMove(job.Plan.Source, job.Plan.Operation);
         if (job.Plan.Source.Provider == "b2" || job.Plan.Destination.Provider == "b2") await EnsureCloudTransferProvidersAsync(linked.Token);
         if (_cloudTransferRuns.TryGetValue(id, out var previous))
@@ -331,6 +348,7 @@ public sealed partial class ClientController
         if (_cloudTransferEngine is null || _cloudTransferRuns.ContainsKey(id)) return;
         if (_userPausedCloudTransfers.ContainsKey(id)) return;
         var plan = CloudTransferJobs.Single(job => job.Plan.Id == id).Plan;
+        CheckTransferConnectors(plan.Source, plan.Destination, plan.Operation);
         ValidateNativeCloudMove(plan.Source, plan.Operation);
         var manuallyPaused = Interlocked.Read(ref _manualPauseUntilTicks) > DateTimeOffset.UtcNow.UtcTicks;
         var policyPauseReason = _cloudPauseReason(Settings);

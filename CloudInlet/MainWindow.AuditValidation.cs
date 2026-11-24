@@ -102,21 +102,23 @@ public sealed partial class MainWindow
             var picker = new CloudTransferDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this),
                 preferOneDrive: true, draft: draft) { XamlRoot = RootGrid.XamlRoot, RequestedTheme = theme };
             var showing = picker.ShowAsync();
+            var needsConnector = _controller.Connectors.Issue("onedrive") is not null;
+            var connectLabel = needsConnector ? "Install required connectors" : "Connect OneDrive";
             CloudTransferDraft saved;
             try
             {
                 await Task.Delay(220);
                 picker.UpdateLayout();
-                var connect = FindDescendant<Button>(picker, button => ButtonText(button) == "Connect OneDrive")
+                var connect = FindDescendant<Button>(picker, button => ButtonText(button) == connectLabel)
                     ?? throw new InvalidOperationException("The disconnected source picker must offer its OneDrive connection action.");
-                if (picker.IsPrimaryButtonEnabled)
-                    throw new InvalidOperationException("A disconnected source must not be accepted as a transfer location.");
+                if (picker.IsPrimaryButtonEnabled != needsConnector || picker.Source is not null)
+                    throw new InvalidOperationException("A missing service may be chosen for installation. A transfer still requires a connected location.");
                 var invoke = FrameworkElementAutomationPeer.CreatePeerForElement(connect)?.GetPattern(PatternInterface.Invoke) as IInvokeProvider
                     ?? throw new InvalidOperationException("The connection action must support accessible invocation.");
                 invoke.Invoke();
                 await showing.AsTask().WaitAsync(TimeSpan.FromSeconds(3));
                 saved = picker.CaptureDraft();
-                if (picker.RequestedConnectionProvider != "onedrive" || saved.EditingSide != "source" ||
+                if (picker.RequestedConnectionProvider != (needsConnector ? "install:onedrive" : "onedrive") || saved.EditingSide != "source" ||
                     saved.PendingLocation?.Provider != "onedrive" || saved.Destination?.Location != destination ||
                     saved.Operation != 1 || saved.Conflicts != 3 || !saved.Exclusions.SequenceEqual(draft.Exclusions))
                     throw new InvalidOperationException("Opening a connection must preserve the edited side, destination, action, conflicts, and exclusions.");
@@ -130,7 +132,7 @@ public sealed partial class MainWindow
                 await Task.Delay(220);
                 restored.UpdateLayout();
                 if (restored.Title as string != "Choose source" || restored.Destination != destination ||
-                    FindDescendant<Button>(restored, button => ButtonText(button) == "Connect OneDrive") is null)
+                    FindDescendant<Button>(restored, button => ButtonText(button) == connectLabel) is null)
                     throw new InvalidOperationException("Returning from connection setup must resume the original picker and retain its destination.");
                 await UiSmokeCapture.SaveAsync(restored, Path.Combine(outputDirectory, $"transfer-connection-draft{suffix}.png"));
             }

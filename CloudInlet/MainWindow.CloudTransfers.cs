@@ -54,6 +54,17 @@ public sealed partial class MainWindow
                 // Keep the original caller alive: backup import/restore workflows
                 // must resume their own reviewed operation after connecting.
                 draft = dialog.CaptureDraft();
+                if (provider.StartsWith("install:", StringComparison.Ordinal))
+                {
+                    var ids = new[] { provider[8..], draft.Source?.Provider, draft.Destination?.Provider, draft.PendingLocation?.Provider }.OfType<string>().ToArray();
+                    if (!await InstallRequiredAsync(ids)) return null;
+                    continue;
+                }
+                if (provider is not ("b2" or "onedrive"))
+                {
+                    if (!await ConnectCustomAsync(provider)) return null;
+                    continue;
+                }
                 _returnToTransfer = new(TaskCreationOptions.RunContinuationsAsynchronously);
                 TransferConnectionBanner.Visibility = Visibility.Visible;
                 TransferConnectionBanner.IsOpen = true;

@@ -15,11 +15,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <PublishTrimmed>false</PublishTrimmed>
+    <CloudInletConnectorBootstrap Condition="'$(CloudInletConnectorBootstrap)' == ''">$(MSBuildProjectDirectory)/../connectors/official-source.json</CloudInletConnectorBootstrap>
     <ApplicationIcon>Assets\CloudInlet.ico</ApplicationIcon>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Description>Native Windows backup and Files On-Demand for Backblaze B2.</Description>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../tools/CloudInlet.ConnectorTool/ConnectorAcquisitionCheck.cs" Link="Validation/ConnectorAcquisitionCheck.cs" />
     <ProjectReference Include="..\CloudInlet.Core\CloudInlet.Core.csproj" />
     <Compile Include="../packaging/InstallerShared/InstallationMigrationPolicy.cs" Link="Packaging/InstallationMigrationPolicy.cs" />
     <Compile Include="../packaging/InstallerShared/InstallerProgressJournal.cs" Link="Packaging/InstallerProgressJournal.cs" />
@@ -35,6 +37,8 @@
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include="$(CloudInletConnectorBootstrap)" Condition="'$(CloudInletConnectorBootstrap)' != ''" Link="connector-source.json"
+             CopyToOutputDirectory="Always" CopyToPublishDirectory="Always" />
     <Content Include="..\docs\UNINSTALL.md" Link="UNINSTALL.md">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>

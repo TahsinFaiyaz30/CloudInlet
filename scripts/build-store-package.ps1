@@ -63,6 +63,8 @@ $staging = Join-Path $output ('.store-' + [Guid]::NewGuid().ToString('N'))
 $payload = Join-Path $staging 'Payload'
 New-Item -ItemType Directory -Path $payload -Force | Out-Null
 try {
+    & (Join-Path $PSScriptRoot 'assert-core-payload.ps1') -AppFolder $app
+    if (!$LocalValidationIdentity) { & (Join-Path $PSScriptRoot 'write-connector-bootstrap.ps1') -AppFolder $app -VerifyOnly }
     Get-ChildItem -LiteralPath $app -Force | Copy-Item -Destination $payload -Recurse
     $distribution = [ordered]@{ schemaVersion = 1; version = $Version; buildFlavor = 'Release'; installerKind = 'Store'; architecture = 'x64'; installScope = 'perUser'; installDirectory = ''; startWithWindows = $false; desktopShortcut = $false; sourceRevision = $SourceRevision }
     $distribution | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $payload 'distribution.json') -Encoding utf8NoBOM

@@ -9,6 +9,8 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <ProjectReference Include="../../connectors/BackblazeB2/CloudInlet.Connectors.BackblazeB2.csproj" />
+    <ProjectReference Include="../../connectors/OneDrive/CloudInlet.Connectors.OneDrive.csproj" />
     <ProjectReference Include="../../CloudInlet.Core/CloudInlet.Core.csproj" />
     <Compile Include="../../CloudInlet/Windows/CloudFiles/CloudFilesNative.cs" Link="Native/CloudFilesNative.cs" />
     <Compile Include="../../CloudInlet/Windows/CloudFiles/HydrationStream.cs" Link="Native/HydrationStream.cs" />
@@ -17,6 +19,7 @@
     <Compile Include="../../CloudInlet/Application/ClientController.Imports.cs" Link="Application/ClientController.Imports.cs" />
     <Compile Include="../../CloudInlet/Application/ClientController.CloudImports.cs" Link="Application/ClientController.CloudImports.cs" />
     <Compile Include="../../CloudInlet/Application/ClientController.CloudAccounts.cs" Link="Application/ClientController.CloudAccounts.cs" />
+    <Compile Include="../../CloudInlet/Application/ClientController.Connectors.cs" Link="Application/ClientController.Connectors.cs" />
     <Compile Include="../../CloudInlet/Application/ClientController.CloudTransfers.cs" Link="Application/ClientController.CloudTransfers.cs" />
     <Compile Include="../../CloudInlet/Application/ImportJournal.cs" Link="Application/ImportJournal.cs" />
     <Compile Include="../../CloudInlet/Application/CloudImportJournal.cs" Link="Application/CloudImportJournal.cs" />

@@ -89,7 +89,10 @@ public partial class App : Microsoft.UI.Xaml.Application
             catch (Exception) { Environment.ExitCode = 1; Exit(); return; }
         }
         var isSmoke = commandLine.Contains("--ui-smoke");
-        var isLive = commandLine.Contains("--ui-live");
+        var connectorLab = commandLine.Contains("--connector-lab");
+        var labId = connectorLab ? Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(AppContext.BaseDirectory.ToUpperInvariant())))[..16] : "";
+        var isLive = connectorLab || commandLine.Contains("--ui-live");
         var smokeTheme = commandLine.FirstOrDefault(arg => arg.StartsWith("--ui-smoke-theme=", StringComparison.Ordinal))?[17..];
         _isUiSmoke = isSmoke;
         _isUiLive = isLive;
@@ -129,11 +132,21 @@ public partial class App : Microsoft.UI.Xaml.Application
                 var installed = Path.TrimEndingDirectorySeparator(Path.GetFullPath(package.InstalledLocation.Path));
                 if (!installed.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory)), StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("The Windows package location does not match the executing application.");
+                var verifyConnectors = commandLine.Contains("--verify-connectors");
+                if (verifyConnectors)
+                {
+                    if (package.Id.Name != "CloudInlet.LocalValidation") throw new InvalidOperationException("A separate test package identity is required.");
+                    var expected = Path.Combine(global::Windows.Storage.ApplicationData.Current.LocalFolder.Path, "ProviderPacks", BuildInfo.Flavor);
+                    if (ClientController.ProfileConnectorDirectory != expected || Path.Exists(expected))
+                        throw new InvalidOperationException("A fresh package-local connector directory is required.");
+                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+                    await Validation.ConnectorAcquisitionCheck.RunAsync(ClientController.ProfileConnectorManager, expected, timeout.Token);
+                }
                 await File.WriteAllTextAsync(Path.Combine(directory, "complete.json"), JsonSerializer.Serialize(new
                 {
                     version = BuildInfo.Version, packageName = package.Id.Name, packageFamilyName = package.Id.FamilyName,
                     installerKind = "Store", startupTaskId = startup.TaskId, startupState = startup.State.ToString(),
-                    notificationRegistration = true,
+                    notificationRegistration = true, connectorLifecycleVerified = verifyConnectors,
                     activation = Microsoft.Windows.AppLifecycle.AppInstance.GetCurrent().GetActivatedEventArgs().Kind.ToString(),
                     completedUtc = DateTimeOffset.UtcNow
                 }));
@@ -204,7 +217,7 @@ public partial class App : Microsoft.UI.Xaml.Application
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             { /* An unavailable update cache must not prevent normal backup startup. */ }
         }
-        var isolationSuffix = isSmoke ? ".UiSmoke." + smokeTheme : isLive ? ".UiLive" : BuildInfo.PipeSuffix;
+        var isolationSuffix = isSmoke ? ".UiSmoke." + smokeTheme : connectorLab ? ".ConnectorLab." + labId : isLive ? ".UiLive" : BuildInfo.PipeSuffix;
         var sid = WindowsIdentity.GetCurrent().User?.Value ?? Environment.UserName;
         // Keep the published CloudBay instance identity so old installers stop this client safely,
         // and old/new apphosts cannot run competing engines against the same saved sync roots.
@@ -251,7 +264,8 @@ public partial class App : Microsoft.UI.Xaml.Application
             }
             _startupStage = "Initialize client state";
             // Validation/live tools share this private legacy path and pipe protocol across apphost aliases.
-            var isolatedStorage = isSmoke || isLive ? new ClientStorage(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            var isolatedStorage = connectorLab ? new ClientStorage(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "CloudInlet", "ConnectorLabs", labId)) : isSmoke || isLive ? new ClientStorage(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "CloudBay", isSmoke ? "UiValidation" : "UiLive", isSmoke ? Guid.NewGuid().ToString("N") : "Client")) : new ClientStorage(_clientDataDirectory);
             _controller = new ClientController(isolatedStorage, manageStartup: !(isSmoke || isLive));
             _startupStage = "Create main window";
@@ -269,6 +283,7 @@ public partial class App : Microsoft.UI.Xaml.Application
                         () => MainWindow.DispatcherQueue.TryEnqueue(() => _ = QuitAsync()), ReviewInstallationMigrationAsync) : null;
                     _updates = new UpdateCoordinator(installation.Identity, updateDirectory, installer,
                         verifyMaintenance: () => WindowsUpdateInstaller.EnsureRecoveryAllowsCleanup(updateDirectory, BuildInfo.Flavor));
+                    _updates.CheckConnectorUpdates = _controller.CheckAutomaticConnectorsAsync;
                     _notificationCanInstallUpdates = installation.CanInstall;
                     _updates.Changed += Updates_NotificationChanged;
                     MainWindow.AttachUpdates(_updates, installation, updateDirectory);
@@ -306,7 +321,7 @@ public partial class App : Microsoft.UI.Xaml.Application
             var clientStartup = _controller.StartAsync();
             _notificationCommandsReady = true;
             DrainNotificationCommands();
-            if (isLive)
+            if (isLive && !connectorLab)
             {
                 if (MainWindow.AppWindow.IsVisible)
                 {
@@ -344,7 +359,8 @@ public partial class App : Microsoft.UI.Xaml.Application
             File.Delete(failurePath);
             try
             {
-                if (commandLine.Contains("--ui-smoke-migration")) await MainWindow.RunMigrationUiValidationAsync(output);
+                if (commandLine.Contains("--ui-smoke-connectors")) await MainWindow.RunConnectorUiValidationAsync(output);
+                else if (commandLine.Contains("--ui-smoke-migration")) await MainWindow.RunMigrationUiValidationAsync(output);
                 else if (commandLine.Contains("--ui-smoke-updates")) await MainWindow.RunUpdateOnlyUiValidationAsync(output);
                 else if (commandLine.Contains("--ui-smoke-layout")) await MainWindow.RunResponsiveUiValidationAsync(output);
                 else
@@ -369,6 +385,7 @@ public partial class App : Microsoft.UI.Xaml.Application
     private static string LiveStateDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "CloudBay", "UiLive", "Client");
     private static string UiSmokeOutput => Path.Combine(Environment.CurrentDirectory, "artifacts",
+        Environment.GetCommandLineArgs().Contains("--ui-smoke-connectors") ? "ui-smoke-connectors" :
         Environment.GetCommandLineArgs().Contains("--ui-smoke-migration") ? "ui-smoke-migration" :
         Environment.GetCommandLineArgs().Contains("--ui-smoke-updates") ? "ui-smoke-updates" :
         Environment.GetCommandLineArgs().Contains("--ui-smoke-tray") ? "ui-smoke-tray" : "ui-smoke");
@@ -467,6 +484,7 @@ public partial class App : Microsoft.UI.Xaml.Application
                 if (trayOnly) launch.ArgumentList.Add("--ui-smoke-tray");
                 if (Environment.GetCommandLineArgs().Contains("--ui-smoke-updates")) launch.ArgumentList.Add("--ui-smoke-updates");
                 if (Environment.GetCommandLineArgs().Contains("--ui-smoke-layout")) launch.ArgumentList.Add("--ui-smoke-layout");
+                if (Environment.GetCommandLineArgs().Contains("--ui-smoke-connectors")) launch.ArgumentList.Add("--ui-smoke-connectors");
                 if (Environment.GetCommandLineArgs().Contains("--ui-smoke-migration")) launch.ArgumentList.Add("--ui-smoke-migration");
                 var initialPage = Environment.GetCommandLineArgs().FirstOrDefault(arg => arg.StartsWith("--page=", StringComparison.Ordinal));
                 if (initialPage is not null) launch.ArgumentList.Add(initialPage);

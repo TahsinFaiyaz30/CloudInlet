@@ -946,8 +946,8 @@ public sealed partial class B2CloudStore : ICloudStore
             long.TryParse(OptionalString(metadata, "src_last_modified_millis"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var millis)) modified = millis;
         else if (metadata.ValueKind == JsonValueKind.Object &&
             metadata.TryGetProperty("cloudinlet_migration_source_upload_millis", out var originalUpload) &&
-            metadata.TryGetProperty(Migration.CloudPrefixMigration.ReceiptMetadataKey, out var migrationReceipt) &&
-            metadata.TryGetProperty(Migration.CloudPrefixMigration.SourceMetadataKey, out var migrationSource))
+            metadata.TryGetProperty(Migration.PrefixReceiptKeys.ReceiptMetadataKey, out var migrationReceipt) &&
+            metadata.TryGetProperty(Migration.PrefixReceiptKeys.SourceMetadataKey, out var migrationSource))
         {
             // Files from other clients may have no explicit modification timestamp. Their old
             // upload time was the effective content time before migration. Keep that same time

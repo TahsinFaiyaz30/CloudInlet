@@ -1156,10 +1156,10 @@ public sealed class B2TransferEndpointTests
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
-    private sealed class Handler(Server server) : HttpMessageHandler
+    internal sealed class Handler(Server server) : HttpMessageHandler
     { protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => server.SendAsync(request, cancellationToken); }
 
-    private sealed class Server : IDisposable
+    internal sealed class Server : IDisposable
     {
         public ConcurrentDictionary<string, object> Files { get; } = new();
         private readonly ConcurrentDictionary<string, (string Key, Dictionary<string, string> Info)> _starts = new();

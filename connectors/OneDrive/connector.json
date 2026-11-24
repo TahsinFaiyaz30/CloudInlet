@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "id": "onedrive",
+  "name": "OneDrive",
+  "publisher": "CloudInlet",
+  "publicKey": "",
+  "version": "1.0.0",
+  "sdk": {
+    "min": "1.0.0",
+    "max": "2.0.0"
+  },
+  "platforms": [
+    "windows"
+  ],
+  "architectures": [
+    "x64"
+  ],
+  "assembly": "CloudInlet.Connectors.OneDrive.dll",
+  "entryPoint": "CloudInlet.Core.OneDrive.OneDriveConnector",
+  "capabilities": "Browse, Read, Write, DeleteExactVersion, Verify, ResumableUpload, HierarchicalFolders, Checksums",
+  "dependencies": [],
+  "license": "MIT",
+  "documentation": "https://github.com/TahsinFaiyaz30/CloudInlet/blob/main/docs/CONNECTORS.md",
+  "releaseNotes": "Delegated OneDrive connections, drive browsing and resumable verified transfers.",
+  "files": {
+    "CloudInlet.Connectors.OneDrive.dll": "",
+    "LICENSE.txt": ""
+  }
+}

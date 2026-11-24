@@ -92,6 +92,7 @@ public sealed partial class MainWindow : Window
     public string CurrentPageTitle => PageTitle.Text;
     public string CurrentRoute => SettingsPage.Visibility == Visibility.Visible
         ? _settingsRoute == "home" ? "settings" : $"settings/{_settingsRoute}"
+        : ConnectorsPage.Visibility == Visibility.Visible ? "connectors"
         : ServicesPage.Visibility == Visibility.Visible ? "services"
         : ActivityPage.Visibility == Visibility.Visible ? "activity"
         : BackupPage.Visibility == Visibility.Visible ? "backup"
@@ -118,6 +119,7 @@ public sealed partial class MainWindow : Window
         };
         RootGrid.DataContext = _viewModel;
         InitializeCloudServices();
+        _controller.Connectors.Progress += OnConnectorProgress;
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
         RootGrid.ActualThemeChanged += (_, _) => UpdateCaptionTheme();
@@ -156,6 +158,7 @@ public sealed partial class MainWindow : Window
             DisposeBackupUiWhenIdle();
             _initialNavigationReady.TrySetCanceled();
             _controller.Changed -= Controller_Changed;
+            _controller.Connectors.Progress -= OnConnectorProgress;
             _uiSettings.TextScaleFactorChanged -= TextScaleFactor_Changed;
             if (_updates is not null) _updates.Changed -= Updates_Changed;
         };
@@ -251,7 +254,7 @@ public sealed partial class MainWindow : Window
 
     private static string NormalizeNavigationRoute(string? route) => route?.Trim() switch
     {
-        "activity" => "activity", "backup" => "backup", "files" => "files", "services" => "services", "settings" or "settings/home" => "settings",
+        "activity" => "activity", "backup" => "backup", "files" => "files", "services" => "services", "connectors" => "connectors", "settings" or "settings/home" => "settings",
         "settings/account" => "settings/account", "settings/onedrive" => "settings/onedrive", "settings/sync" => "settings/sync",
         "settings/network" => "settings/network", "settings/appearance" => "settings/appearance",
         "settings/general" => "settings/general", "settings/about" => "settings/about",
@@ -334,9 +337,9 @@ public sealed partial class MainWindow : Window
         FrameworkElement expectedPage = page switch
         {
             "activity" => ActivityPage, "backup" => BackupPage, "files" => FilesPage,
-            "settings" => SettingsPage, "services" => ServicesPage, _ => OverviewPage
+            "settings" => SettingsPage, "services" => ServicesPage, "connectors" => ConnectorsPage, _ => OverviewPage
         };
-        FrameworkElement[] pages = [OverviewPage, ActivityPage, BackupPage, FilesPage, SettingsPage, ServicesPage];
+        FrameworkElement[] pages = [OverviewPage, ActivityPage, BackupPage, FilesPage, SettingsPage, ServicesPage, ConnectorsPage];
         var expectedSelection = NavigationItemForRoute(route);
         if (CurrentRoute != route || expectedSelection is null || !ReferenceEquals(Navigation.SelectedItem, expectedSelection) ||
             pages.Any(item => (item.Visibility == Visibility.Visible) != ReferenceEquals(item, expectedPage)) ||
@@ -360,7 +363,7 @@ public sealed partial class MainWindow : Window
         var pages = new (string Name, FrameworkElement Element)[]
         {
             ("overview", OverviewPage), ("activity", ActivityPage), ("backup", BackupPage),
-            ("files", FilesPage), ("settings", SettingsPage), ("services", ServicesPage)
+            ("files", FilesPage), ("settings", SettingsPage), ("services", ServicesPage), ("connectors", ConnectorsPage)
         };
         var selectedFlags = string.Join(",", Navigation.MenuItems.Concat(Navigation.FooterMenuItems)
             .OfType<NavigationViewItem>().Select(item => $"{Item(item)}:{item.IsSelected}"));
@@ -496,7 +499,7 @@ public sealed partial class MainWindow : Window
     {
         if (page != "settings") OneDriveSettingsDetail.Content = null;
         _currentPage = page;
-        FrameworkElement[] pages = [OverviewPage, ActivityPage, BackupPage, FilesPage, SettingsPage, ServicesPage];
+        FrameworkElement[] pages = [OverviewPage, ActivityPage, BackupPage, FilesPage, SettingsPage, ServicesPage, ConnectorsPage];
         foreach (var item in pages) item.Visibility = Visibility.Collapsed;
         var selected = page switch
         {
@@ -504,11 +507,13 @@ public sealed partial class MainWindow : Window
             "backup" => BackupPage,
             "files" => FilesPage,
             "settings" => SettingsPage,
-            "services" => ServicesPage,
+            "services" => ServicesPage, "connectors" => ConnectorsPage,
             _ => OverviewPage
         };
         selected.Visibility = Visibility.Visible;
         UpdatePageHeader();
+        if (page == "connectors") EnterConnectors();
+        if (page == "overview") RefreshConnectorRecovery();
         if (page == "backup") RefreshBackups(refreshMetadata: true);
         if (page is "services" or "overview") RefreshCloudServices();
         if (selected is ScrollViewer viewer) viewer.ChangeView(null, 0, null, true);
@@ -525,6 +530,7 @@ public sealed partial class MainWindow : Window
             "backup" => "Folder backup",
             "files" => "Files",
             "services" => "Cloud services",
+            "connectors" => "Connectors",
             "settings" => _settingsRoute switch
             {
                 "account" => "Account",
@@ -1386,6 +1392,7 @@ public sealed partial class MainWindow : Window
             ShowInfo("Finish or cancel the pending import and folder backup changes before updating this connection.");
             return;
         }
+        if (_controller.Connectors.Issue("b2") is not null && !await InstallRequiredAsync("b2")) return;
         await RunAsync("Connecting securely to Backblaze B2…", async () =>
         {
             if (string.IsNullOrWhiteSpace(ApplicationKeyBox.Password)) throw new InvalidOperationException("Enter your B2 application key to connect.");
@@ -1745,7 +1752,8 @@ public sealed partial class MainWindow : Window
         if (route != "onedrive") OneDriveSettingsDetail.Content = null;
         else if (OneDriveSettingsDetail.Content is null)
         {
-            var connection = new OneDriveConnectionView(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            var connection = new OneDriveConnectionView(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this))
+            { InstallConnectorAsync = () => InstallRequiredAsync("onedrive") };
             connection.ConnectionChanged += (_, _) => RefreshCloudServices();
             OneDriveSettingsDetail.Content = connection;
         }
@@ -1762,6 +1770,7 @@ public sealed partial class MainWindow : Window
         if (routes.TryGetValue(_settingsRoute, out var detail))
         {
             detail.Visibility = Visibility.Visible;
+            if (route == "about") RenderConnectorUpdates();
         }
         SynchronizeSettingsNavigation();
         if (SettingsPage.Visibility == Visibility.Visible) ShowPage("settings");

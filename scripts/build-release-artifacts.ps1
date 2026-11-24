@@ -39,6 +39,8 @@ try {
     if ($testsFailed -ne 0 -or $testsSkipped -ne 0 -or $testsPassed -lt 1 -or $testsPassed -ne $results.Count) { throw 'Release test results contain a failure, skip, unknown outcome, or no executed tests.' }
     dotnet publish CloudInlet/CloudInlet.csproj -c $Configuration -r win-x64 --self-contained true -p:PublishSingleFile=false -p:PublishTrimmed=false -p:Version=$Version -p:CloudInletBuildFlavor=$Configuration -o $app -v:minimal
     if ($LASTEXITCODE -ne 0) { throw "$Configuration self-contained publish failed." }
+    & (Join-Path $PSScriptRoot 'write-connector-bootstrap.ps1') -AppFolder $app
+    & (Join-Path $PSScriptRoot 'assert-core-payload.ps1') -AppFolder $app
     $portableIdentity = [ordered]@{ schemaVersion = 1; version = $Version; buildFlavor = $Configuration; installerKind = 'Portable'; architecture = 'x64'; installScope = 'perUser'; installDirectory = ''; startWithWindows = $false; desktopShortcut = $false; sourceRevision = $SourceRevision }
     $portableIdentity | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $app 'distribution.json') -Encoding utf8NoBOM
     & (Join-Path $PSScriptRoot 'copy-release-notices.ps1') -AppFolder $app -AssetsPath (Join-Path $repository 'CloudInlet/obj/project.assets.json')

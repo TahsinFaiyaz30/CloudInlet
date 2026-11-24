@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "id": "example.readonly",
+  "name": "Private sample files",
+  "publisher": "Example developer",
+  "publicKey": "",
+  "version": "1.0.0",
+  "sdk": {
+    "min": "1.0.0",
+    "max": "2.0.0"
+  },
+  "platforms": [
+    "windows"
+  ],
+  "architectures": [
+    "x64"
+  ],
+  "assembly": "ExampleConnector.dll",
+  "entryPoint": "ExampleConnector.ExampleProvider",
+  "capabilities": "Browse, Read, Checksums",
+  "dependencies": [],
+  "license": "MIT",
+  "documentation": "https://github.com/TahsinFaiyaz30/CloudInlet/blob/main/docs/CONNECTORS.md",
+  "releaseNotes": "Read-only sample with one versioned text file.",
+  "files": {
+    "ExampleConnector.dll": "",
+    "LICENSE.txt": ""
+  }
+}

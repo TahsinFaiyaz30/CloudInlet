@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net8.0</TargetFramework><AssemblyName>Fixture.Storage.Shared</AssemblyName></PropertyGroup>
+  <ItemGroup><ProjectReference Include="../../../CloudInlet.ConnectorSdk/CloudInlet.ConnectorSdk.csproj" /></ItemGroup>
+</Project>

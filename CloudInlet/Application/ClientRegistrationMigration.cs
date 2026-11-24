@@ -78,7 +78,7 @@ internal sealed class ClientRegistrationMigration : IMigrationOperation, IDispos
         {
             PinAncestors(state, guards); PinAncestors(receipts, guards);
             MigrationMetadataExchange.Recover(state, record + ".metadata");
-            runtime ??= new ClientFolderMigration.WindowsRuntime();
+            runtime ??= new ClientFolderMigration.WindowsRuntime(() => ClientController.OpenBackup(ClientController.OpenConnectors(state)));
             Receipt receipt;
             if (File.Exists(record))
             {

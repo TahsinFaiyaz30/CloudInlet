@@ -91,7 +91,7 @@ internal sealed partial class ClientFolderMigration : IMigrationOperation, IDisp
     private static ClientFolderMigration Open(MigrationPlan plan, string itemId, string stateDirectory,
         string receiptDirectory, IClientFolderMigrationRuntime? runtime, bool create)
     {
-        runtime ??= new WindowsRuntime();
+        runtime ??= new WindowsRuntime(() => ClientController.OpenBackup(ClientController.OpenConnectors(stateDirectory)));
         if (MigrationPlan.Create(plan.Items).Fingerprint != plan.Fingerprint) throw new InvalidDataException("The folder migration review changed.");
         var item = plan.Items.Single(value => value.Id == itemId);
         if (item.BlockedReason is not null || item.Area is not (MigrationArea.SyncFolder or MigrationArea.BackupFolder))
@@ -510,33 +510,37 @@ internal sealed partial class ClientFolderMigration : IMigrationOperation, IDisp
             if (!IsRegistered(root, account, canonical)) return;
             // Fully local folders do not need network access. Connect only if Windows requests
             // online-only content, and serialize first authorization across hydration callbacks.
-            using var cloud = cloudFactory?.Invoke() ?? new B2CloudStore();
-            using var authorization = new SemaphoreSlim(1, 1);
-            var authorized = false;
-            await using (var placeholders = new WindowsPlaceholderService())
+            var store = new Lazy<ICloudStore>(() => cloudFactory?.Invoke() ?? ClientController.OpenBackup(ClientController.OpenConnectors(BuildInfo.DefaultDataDirectory)));
+            try
             {
-                await placeholders.ConnectAsync(root, account,
-                    async (file, offset, length, destination, token) =>
-                    {
-                        await authorization.WaitAsync(token);
-                        try
+                using var authorization = new SemaphoreSlim(1, 1);
+                var authorized = false;
+                await using (var placeholders = new WindowsPlaceholderService())
+                {
+                    await placeholders.ConnectAsync(root, account,
+                        async (file, offset, length, destination, token) =>
                         {
-                            if (!authorized)
+                            await authorization.WaitAsync(token);
+                            try
                             {
-                                if (credentials is null) throw new IOException("Reconnect the B2 account before migrating online-only files. No registration was removed.");
-                                var connected = await cloud.ConnectAsync(credentials, token);
-                                if (!account.StartsWith(connected.AccountId + ":", StringComparison.Ordinal))
-                                    throw new IOException("These credentials belong to a different B2 account. The original provider was retained.");
-                                authorized = true;
+                                if (!authorized)
+                                {
+                                    if (credentials is null) throw new IOException("Reconnect the B2 account before migrating online-only files. No registration was removed.");
+                                    var connected = await store.Value.ConnectAsync(credentials, token);
+                                    if (!account.StartsWith(connected.AccountId + ":", StringComparison.Ordinal))
+                                        throw new IOException("These credentials belong to a different B2 account. The original provider was retained.");
+                                    authorized = true;
+                                }
                             }
-                        }
-                        finally { authorization.Release(); }
-                        await cloud.DownloadAsync(file, destination, offset, length,
-                            new InlineProgress<TransferProgress>(value => progress.Report("Downloading " + file.Key + ": " + value.Bytes + " / " + value.TotalBytes + " bytes")), token);
-                    },
-                    cancellationToken, null, canonical);
-                await placeholders.PrepareForUnregisterAsync(cancellationToken, progress);
+                            finally { authorization.Release(); }
+                            await store.Value.DownloadAsync(file, destination, offset, length,
+                                new InlineProgress<TransferProgress>(value => progress.Report("Downloading " + file.Key + ": " + value.Bytes + " / " + value.TotalBytes + " bytes")), token);
+                        },
+                        cancellationToken, null, canonical);
+                    await placeholders.PrepareForUnregisterAsync(cancellationToken, progress);
+                }
             }
+            finally { if (store.IsValueCreated) store.Value.Dispose(); }
             cancellationToken.ThrowIfCancellationRequested();
             if (!IsRegistered(root, account, canonical)) throw new IOException("The Windows registration changed while cloud files were being preserved.");
             StorageProviderSyncRootManager.Unregister(WindowsPlaceholderService.GetRegistrationId(account, canonical));

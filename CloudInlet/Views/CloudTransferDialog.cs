@@ -110,6 +110,14 @@ internal sealed class CloudTransferDialog : ContentDialog
         _body.Children.Add(_error); _body.Children.Add(_locations); _body.Children.Add(_options); _body.Children.Add(_exclusions);
         RenderLocationSummary(_sourceSummary, Source, false);
         RenderLocationSummary(_destinationSummary, Destination, true);
+        var missing = new[] { _selectedSource?.Provider, _selectedDestination?.Provider }.OfType<string>().Distinct()
+            .Where(id => id != "local" && _controller.Connectors.Issue(id) is not null).ToArray();
+        if (missing.Length > 0)
+        {
+            var install = SourceImportDialog.ActionButton("Install required connectors");
+            install.Click += (_, _) => RequestConnection("install:" + missing[0]);
+            _body.Children.Insert(2, install);
+        }
         _scroll.ChangeView(null, 0, null, true);
         SelectionChanged();
     }
@@ -124,6 +132,9 @@ internal sealed class CloudTransferDialog : ContentDialog
             summary.Children.Add(SourceImportDialog.Text(location.DisplayName));
             summary.Children.Add(SourceImportDialog.Text(location.Path.Length == 0 ? "Root folder" : location.Path, true));
         }
+        else if ((destination ? _selectedDestination : _selectedSource) is { } selected)
+            summary.Children.Add(SourceImportDialog.Text((_controller.Connectors.Snapshot.Installed.GetValueOrDefault(selected.Provider)?.Current.Manifest.Name ??
+                (selected.Provider == "b2" ? "Backblaze B2" : selected.Provider == "onedrive" ? "OneDrive" : selected.Provider)) + " · Choose a location"));
         else summary.Children.Add(SourceImportDialog.Text(destination ? "Where your files will go." : "Where your files come from.", true));
         if ((destination ? _fixedDestination : _fixedSource) is not null) return;
         var choose = SourceImportDialog.ActionButton((location is null ? "Choose " : "Change ") + name);
@@ -176,7 +187,7 @@ internal sealed class CloudTransferDialog : ContentDialog
         if (_closed || _source is null || _destination is null || _exclusions is null) return;
         var idle = !_working && !_source.IsWorking && !_destination.IsWorking;
         IsSecondaryButtonEnabled = idle;
-        IsPrimaryButtonEnabled = idle && (_activePicker is not null ? _activePicker.Location is not null :
+        IsPrimaryButtonEnabled = idle && (_activePicker is not null ? _activePicker.CanChooseService :
             !_exclusions.IsEditing && Source is not null && Destination is not null);
     }
     private void ShowError(Exception error)
@@ -193,7 +204,7 @@ internal sealed class CloudTransferDialog : ContentDialog
         if (_activePicker is not null)
         {
             args.Cancel = true;
-            if (_activePicker.Location is null) return;
+            if (!_activePicker.CanChooseService) return;
             if (_activePicker == _source) _selectedSource = _activePicker.Selection;
             else _selectedDestination = _activePicker.Selection;
             _activePicker = null;

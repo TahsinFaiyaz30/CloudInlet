@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Channels;
-using CloudInlet.Core.B2;
 
 namespace CloudInlet.Core.Transfers;
 
@@ -62,6 +61,16 @@ public sealed class TransferJobEngine : IAsyncDisposable
             runtime.Task = Task.Run(() => ExecuteAsync(jobId, runtime, retryFailures), CancellationToken.None);
             return runtime.Task;
         }
+    }
+
+    public void WaitForConnectors(string jobId)
+    {
+        lock (_gate)
+        {
+            if (_running.ContainsKey(jobId)) return;
+            _journal.SetState(jobId, TransferJobState.Paused, TransferJobJournal.WaitingForConnectors);
+        }
+        Publish(jobId);
     }
 
     public Task PauseAsync(string jobId) => StopAsync(jobId, TransferJobState.Paused);

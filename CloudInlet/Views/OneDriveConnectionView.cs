@@ -14,6 +14,7 @@ namespace CloudInlet.Views;
 internal sealed class OneDriveConnectionView : UserControl
 {
     private readonly ClientController _controller;
+    internal Func<Task<bool>>? InstallConnectorAsync { get; init; }
     private readonly StackPanel _accounts = new() { Spacing = 8 };
     private readonly StackPanel _connectedSection = new() { Spacing = 12 };
     private readonly StackPanel _form = new() { Spacing = 16 };
@@ -251,6 +252,7 @@ internal sealed class OneDriveConnectionView : UserControl
         HideNotice();
         try
         {
+            if (_controller.Connectors.Issue("onedrive") is not null && InstallConnectorAsync is not null && !await InstallConnectorAsync()) return;
             var options = OneDriveSignInConfiguration.Resolve(_clientId.Text, _tenant.Text);
             var code = await _controller.BeginOneDriveSignInAsync(options.ClientId, options.Tenant, operation.Token);
             operation.Token.ThrowIfCancellationRequested();

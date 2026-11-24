@@ -1,4 +1,3 @@
-using CloudInlet.Core.B2;
 using System.Net;
 
 namespace CloudInlet.Core;
@@ -6,8 +5,8 @@ namespace CloudInlet.Core;
 /// <summary>Directional byte and payload-request budgets shared by every provider and sync root in a client.</summary>
 public sealed class TransferBandwidthBudget
 {
-    internal BandwidthLimiter Uploads { get; } = new();
-    internal BandwidthLimiter Downloads { get; } = new();
+    public BandwidthLimiter Uploads { get; } = new();
+    public BandwidthLimiter Downloads { get; } = new();
     private readonly ConcurrencyGate _uploadRequests = new();
     private readonly ConcurrencyGate _downloadRequests = new();
 
@@ -20,14 +19,14 @@ public sealed class TransferBandwidthBudget
         _downloadRequests.Configure(downloadRequests);
     }
 
-    internal void ConfigureDownloadRequests(int requests)
+    public void ConfigureDownloadRequests(int requests)
     {
         ValidateRequests(requests);
         _downloadRequests.Configure(requests);
     }
 
-    internal Task<IDisposable> EnterUploadAsync(CancellationToken token) => EnterAsync(_uploadRequests, token);
-    internal Task<IDisposable> EnterDownloadAsync(CancellationToken token) => EnterAsync(_downloadRequests, token);
+    public Task<IDisposable> EnterUploadAsync(CancellationToken token) => EnterAsync(_uploadRequests, token);
+    public Task<IDisposable> EnterDownloadAsync(CancellationToken token) => EnterAsync(_downloadRequests, token);
 
     private static async Task<IDisposable> EnterAsync(ConcurrencyGate gate, CancellationToken token)
     {
@@ -42,7 +41,7 @@ public sealed class TransferBandwidthBudget
 
     // Response ownership also owns admission. Forward the existing stream directly:
     // a wrapping HttpContent must never buffer a cloud response to implement ReadAsStream.
-    internal static void AttachResponseLease(HttpResponseMessage response, IDisposable lease) =>
+    public static void AttachResponseLease(HttpResponseMessage response, IDisposable lease) =>
         response.Content = new LeasedContent(response.Content, lease);
 
     private sealed class RequestLease(ConcurrencyGate gate) : IDisposable

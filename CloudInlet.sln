@@ -1,4 +1,4 @@
-
+﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
@@ -8,6 +8,26 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CloudInlet.Tests", "CloudInlet.Tests\CloudInlet.Tests.csproj", "{83470750-2D5A-438F-9287-210E59D9017E}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CloudInlet.Core", "CloudInlet.Core\CloudInlet.Core.csproj", "{BFCCF1A0-CBBF-4FBC-8EE0-EDF6B275328F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CloudInlet.ConnectorSdk", "CloudInlet.ConnectorSdk\CloudInlet.ConnectorSdk.csproj", "{42D0C027-8E8C-4FE2-B1EE-27E5AB34E65C}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "connectors", "connectors", "{0DD52B2A-C5DA-4D2F-9D9D-930DD98E359C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CloudInlet.Connectors.BackblazeB2", "connectors\BackblazeB2\CloudInlet.Connectors.BackblazeB2.csproj", "{163941EF-CE54-428C-BD9A-0D5F01D6457F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CloudInlet.Connectors.OneDrive", "connectors\OneDrive\CloudInlet.Connectors.OneDrive.csproj", "{AA68D6B9-8989-4EA6-A75C-0234339D0357}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ExampleConnector", "connectors\Example\ExampleConnector.csproj", "{24928B51-A74D-451F-8119-DD301B0E0A66}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{D7E7CA5D-3CCF-4D88-A683-9255C3089353}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CloudInlet.ConnectorTool", "tools\CloudInlet.ConnectorTool\CloudInlet.ConnectorTool.csproj", "{2BF5A562-30DD-42C9-AF18-272F1A20679E}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "TestFixtures", "TestFixtures", "{0700ED6D-9842-42E1-8C1C-36D9B47BF475}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Shared", "CloudInlet.Tests\ConnectorFixtures\Shared\Shared.csproj", "{29CA1B5E-A1C1-4C70-8473-4EF362FE2F84}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Dependent", "CloudInlet.Tests\ConnectorFixtures\Dependent\Dependent.csproj", "{6EE5BBD8-8170-47E3-8978-59410761ABA9}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -30,5 +50,41 @@ Global
 		{BFCCF1A0-CBBF-4FBC-8EE0-EDF6B275328F}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{BFCCF1A0-CBBF-4FBC-8EE0-EDF6B275328F}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{BFCCF1A0-CBBF-4FBC-8EE0-EDF6B275328F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{42D0C027-8E8C-4FE2-B1EE-27E5AB34E65C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{42D0C027-8E8C-4FE2-B1EE-27E5AB34E65C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{42D0C027-8E8C-4FE2-B1EE-27E5AB34E65C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{42D0C027-8E8C-4FE2-B1EE-27E5AB34E65C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{163941EF-CE54-428C-BD9A-0D5F01D6457F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{163941EF-CE54-428C-BD9A-0D5F01D6457F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{163941EF-CE54-428C-BD9A-0D5F01D6457F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{163941EF-CE54-428C-BD9A-0D5F01D6457F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AA68D6B9-8989-4EA6-A75C-0234339D0357}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AA68D6B9-8989-4EA6-A75C-0234339D0357}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AA68D6B9-8989-4EA6-A75C-0234339D0357}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AA68D6B9-8989-4EA6-A75C-0234339D0357}.Release|Any CPU.Build.0 = Release|Any CPU
+		{24928B51-A74D-451F-8119-DD301B0E0A66}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{24928B51-A74D-451F-8119-DD301B0E0A66}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{24928B51-A74D-451F-8119-DD301B0E0A66}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{24928B51-A74D-451F-8119-DD301B0E0A66}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2BF5A562-30DD-42C9-AF18-272F1A20679E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2BF5A562-30DD-42C9-AF18-272F1A20679E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2BF5A562-30DD-42C9-AF18-272F1A20679E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2BF5A562-30DD-42C9-AF18-272F1A20679E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{29CA1B5E-A1C1-4C70-8473-4EF362FE2F84}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{29CA1B5E-A1C1-4C70-8473-4EF362FE2F84}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{29CA1B5E-A1C1-4C70-8473-4EF362FE2F84}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{29CA1B5E-A1C1-4C70-8473-4EF362FE2F84}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6EE5BBD8-8170-47E3-8978-59410761ABA9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6EE5BBD8-8170-47E3-8978-59410761ABA9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6EE5BBD8-8170-47E3-8978-59410761ABA9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6EE5BBD8-8170-47E3-8978-59410761ABA9}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{163941EF-CE54-428C-BD9A-0D5F01D6457F} = {0DD52B2A-C5DA-4D2F-9D9D-930DD98E359C}
+		{AA68D6B9-8989-4EA6-A75C-0234339D0357} = {0DD52B2A-C5DA-4D2F-9D9D-930DD98E359C}
+		{24928B51-A74D-451F-8119-DD301B0E0A66} = {0DD52B2A-C5DA-4D2F-9D9D-930DD98E359C}
+		{2BF5A562-30DD-42C9-AF18-272F1A20679E} = {D7E7CA5D-3CCF-4D88-A683-9255C3089353}
+		{29CA1B5E-A1C1-4C70-8473-4EF362FE2F84} = {0700ED6D-9842-42E1-8C1C-36D9B47BF475}
+		{6EE5BBD8-8170-47E3-8978-59410761ABA9} = {0700ED6D-9842-42E1-8C1C-36D9B47BF475}
 	EndGlobalSection
 EndGlobal

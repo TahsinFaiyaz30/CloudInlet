@@ -68,6 +68,29 @@ public sealed class CloudTransferControllerDisconnectTests
     }
 
     [TestMethod]
+    public async Task MissingConnectorPausesPendingVerifiedDisconnectWithoutChangingTheJournalOrFiles()
+    {
+        var state = NewState();
+        try
+        {
+            var storage = Configure(state);
+            var settings = storage.LoadSettings();
+            Directory.CreateDirectory(settings.RootPath);
+            var personal = Path.Combine(settings.RootPath, "personal.txt");
+            File.WriteAllText(personal, "retained local data");
+            storage.SaveAccountDisconnectIntent(new(DisconnectMode.RemoveLocalCopyAndDisconnect, settings.AccountId, settings.BucketId, settings.RootPath));
+            var saved = File.ReadAllBytes(Path.Combine(state, "disconnect-pending.json"));
+            await using var controller = new ClientController(storage, _ => Assert.Fail("No sync root should change"), manageStartup: false);
+            await controller.StartAsync();
+            Assert.AreEqual(ClientState.Paused, controller.Snapshot.State);
+            Assert.AreEqual("retained local data", File.ReadAllText(personal));
+            CollectionAssert.AreEqual(saved, File.ReadAllBytes(Path.Combine(state, "disconnect-pending.json")));
+            CollectionAssert.Contains(controller.RequiredConnectors(), "b2");
+        }
+        finally { SqliteConnection.ClearAllPools(); Directory.Delete(state, true); }
+    }
+
+    [TestMethod]
     public async Task RemoveLocalCopiesRefusesUnverifiableAccountAndPreservesFilesAndRecoveryIntent()
     {
         var state = NewState();

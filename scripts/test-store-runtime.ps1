@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory)][string]$PackagePath,
-    [string]$OutputRoot = (Join-Path $PSScriptRoot '../artifacts/store-runtime-smoke')
+    [string]$OutputRoot = (Join-Path $PSScriptRoot '../artifacts/store-runtime-smoke'),
+    [switch]$VerifyConnectors
 )
 $ErrorActionPreference = 'Stop'
 $packagePath = [IO.Path]::GetFullPath($PackagePath)
@@ -82,6 +83,7 @@ try {
     $resultDirectory = Join-Path $workspace 'Result'
     New-Item -ItemType Directory -Path $resultDirectory | Out-Null
     $arguments = '--ui-smoke --store-runtime-smoke "--validation-output=' + $resultDirectory + '"'
+    if ($VerifyConnectors) { $arguments += ' --verify-connectors' }
     $processId = [CloudInlet.StoreRuntimeTests.Activation]::Launch($aumid, $arguments)
     $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
     if ($process) {
@@ -91,7 +93,8 @@ try {
             if ($activatedPath -and !$activatedPath.Equals((Join-Path $payload 'CloudInlet.exe'), [StringComparison]::OrdinalIgnoreCase)) { throw 'The Store validation activation returned an unexpected executable.' }
         }
     }
-    $deadline = [DateTime]::UtcNow.AddSeconds(60)
+    $timeoutSeconds = if ($VerifyConnectors) { 120 } else { 60 }
+    $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSeconds)
     do {
         if ((Test-Path -LiteralPath (Join-Path $resultDirectory 'complete.json')) -or (Test-Path -LiteralPath (Join-Path $resultDirectory 'failure.txt'))) { break }
         if (!$process -or $process.HasExited) { break }
@@ -101,18 +104,19 @@ try {
     if (Test-Path -LiteralPath $failure) { throw "The packaged app reported a runtime failure. Inspect $failure" }
     $completion = Join-Path $resultDirectory 'complete.json'
     if (!(Test-Path -LiteralPath $completion)) {
-        $exitDescription = if ($process -and $process.HasExited) { "exit code $($process.ExitCode)" } elseif (!$process) { 'already exited' } else { '60-second deadline reached' }
+        $exitDescription = if ($process -and $process.HasExited) { "exit code $($process.ExitCode)" } elseif (!$process) { 'already exited' } else { "$timeoutSeconds-second deadline reached" }
         throw "The packaged app did not complete the isolated runtime probe ($exitDescription). Activation process: $processId; diagnostics: $resultDirectory"
     }
     $result = Get-Content -LiteralPath $completion -Raw | ConvertFrom-Json
     if ($result.notificationRegistration -ne $true) { throw 'The packaged notification registration was not confirmed.' }
+    if ($VerifyConnectors -and $result.connectorLifecycleVerified -ne $true) { throw 'The packaged connector lifecycle did not pass.' }
     if ($result.version -cne $expectedVersion -or $result.packageName -cne 'CloudInlet.LocalValidation' -or $result.packageFamilyName -cne $registered.PackageFamilyName -or $result.installerKind -cne 'Store' -or $result.startupTaskId -cne 'CloudBayStartup') { throw 'The packaged runtime identity or startup-task probe returned unexpected results.' }
     if ($process -and !$process.WaitForExit(10000)) { throw 'The isolated Store runtime process did not finish gracefully.' }
     if ($process -and $process.ExitCode -ne 0) { throw "The isolated Store runtime process returned exit code $($process.ExitCode)." }
     Write-Output "Store runtime validation passed: $completion"
 } finally {
     if ($processId) {
-        [ordered]@{ processId=$processId; packageName='CloudInlet.LocalValidation'; processObserved=[bool]$process; exitCode=$(if ($process -and $process.HasExited) { $process.ExitCode } else { $null }); deadlineSeconds=60 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $workspace 'activation-validation.json') -Encoding utf8NoBOM
+        [ordered]@{ processId=$processId; packageName='CloudInlet.LocalValidation'; processObserved=[bool]$process; exitCode=$(if ($process -and $process.HasExited) { $process.ExitCode } else { $null }); deadlineSeconds=$timeoutSeconds } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $workspace 'activation-validation.json') -Encoding utf8NoBOM
     }
     # Remove only this newly registered development identity at its exact expected payload path.
     $current = Get-AppxPackage -Name 'CloudInlet.LocalValidation'

@@ -18,7 +18,7 @@ internal sealed class ClientCloudPrefixMigration : IMigrationOperation, IKeepOri
     private readonly AnchoredJournal _journal;
     private readonly ProtectedB2CloudPrefixCopyJournal _copyJournal;
     private readonly Func<B2Credentials, CancellationToken, Task<ICloudPrefixMigrationStore>> _connect;
-    private readonly B2CloudStore? _cloud;
+    private CloudInlet.Connectors.IBackupSession? _cloud;
     private CloudPrefixMigration? _operation;
     private IProgress<MigrationProgress>? _progress;
     private bool _disposed;
@@ -83,10 +83,10 @@ internal sealed class ClientCloudPrefixMigration : IMigrationOperation, IKeepOri
             if (connect is not null) _connect = connect;
             else
             {
-                _cloud = new B2CloudStore();
                 _connect = async (credentials, token) =>
                 {
                     var settings = new ClientStorage(_state).LoadSettings();
+                    _cloud ??= ClientController.OpenBackup(ClientController.OpenConnectors(_state));
                     var account = await _cloud.ConnectAsync(credentials, token).ConfigureAwait(false);
                     if (account.AccountId != settings.AccountId) throw new IOException("The connected cloud account differs from the reviewed account.");
                     return _cloud.CreatePrefixMigrationStore(settings.BucketId, _item.CurrentLocation, _item.ProposedLocation, _copyJournal, _item.CloudMappings);

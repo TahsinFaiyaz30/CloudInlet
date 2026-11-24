@@ -27,7 +27,13 @@ public sealed record UpdateInstallation(InstalledUpdateIdentity Identity, string
         {
             uint length = 0;
             var result = GetCurrentPackageFullName(ref length, IntPtr.Zero);
-            return result == 0 || result == 122 && length > 0;
+            return result switch
+            {
+                15700 => false, // APPMODEL_ERROR_NO_PACKAGE
+                0 => true,
+                122 when length > 0 => true, // ERROR_INSUFFICIENT_BUFFER
+                _ => throw new System.ComponentModel.Win32Exception(result, "Cannot determine the running app's package identity.")
+            };
         }
     }
 

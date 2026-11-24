@@ -124,3 +124,7 @@ Local manifest/schema validation can run before any reservation:
 The separate `CloudInlet.LocalValidation` identity produces unsigned test MSIX/MSIXUPLOAD files. It is not installable as a trusted public Store package without a suitable local test signature, and the submission script rejects it by reading the embedded manifest, even if its file is renamed. Production packages use the exact reserved identity; Microsoft manages Store signing and updates after a successful submission.
 
 On a desktop with Windows Developer Mode already enabled, `test-store-runtime.ps1 -PackagePath path\to\local-validation.msix` can development-register only this test identity and activate its isolated runtime probe. The probe checks real package identity, the Store update channel, package location, compiled version, and the declared startup task. Validation records process exit evidence, stops on an early crash, and caps an unresponsive probe at 60 seconds. The script removes that exact test registration afterward and verifies that regular account settings, credential bytes, and Windows folder mappings are unchanged. It does not enable Developer Mode, install a certificate, change machine trust, connect a backup account, or turn on the startup task.
+
+## Provider connector releases
+
+The independently versioned Backblaze B2 and OneDrive packs use the distribution repository, its protected publisher environment and a cumulative signed catalog. The app release does not publish those assets. [Official connector release procedure](CONNECTOR_RELEASES.md)

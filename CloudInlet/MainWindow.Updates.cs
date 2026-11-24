@@ -107,8 +107,14 @@ public sealed partial class MainWindow
     {
         if (_updates is null) return;
         if (_updates.Identity.InstallerKind == UpdateInstallerKind.Store)
-        { await RunUpdateActionAsync(() => { Process.Start(new ProcessStartInfo("ms-windows-store://downloadsandupdates") { UseShellExecute = true }); return Task.CompletedTask; }); }
-        else await RunUpdateActionAsync(() => _updates.CheckAsync());
+        {
+            await RunUpdateActionAsync(async () =>
+            {
+                Process.Start(new ProcessStartInfo("ms-windows-store://downloadsandupdates") { UseShellExecute = true });
+                await RunConnectorActionAsync(() => _controller.Connectors.RefreshAsync(_backupUiLifetime.Token));
+            });
+        }
+        else await RunUpdateActionAsync(() => Task.WhenAll(_updates.CheckAsync(), RunConnectorActionAsync(() => _controller.Connectors.RefreshAsync(_backupUiLifetime.Token))));
     }
     private async void DownloadUpdate_Click(object sender, RoutedEventArgs args) =>
         await RunUpdateActionAsync(() => _updates!.DownloadAsync());

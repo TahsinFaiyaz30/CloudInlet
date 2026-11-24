@@ -8,7 +8,7 @@ namespace CloudInlet.Core.Migration;
 /// without retaining it; it is used only to avoid scanning an unchanged inventory during journaling.
 /// Untrusted or freshly deserialized lists always take the full comparison path.
 /// </summary>
-internal sealed class MigrationSnapshotList<T> : IReadOnlyList<T>
+public sealed class MigrationSnapshotList<T> : IReadOnlyList<T>
 {
     private readonly ImmutableList<T> _items;
     private readonly object _revision = new();

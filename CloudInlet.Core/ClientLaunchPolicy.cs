@@ -13,5 +13,5 @@ public static class ClientLaunchPolicy
         IsInteractive(commandLine) ? "show" : "launch";
 
     private static bool IsInteractive(IReadOnlyCollection<string> commandLine) =>
-        commandLine.Contains("--show") || commandLine.Contains("--ui-smoke") || commandLine.Contains("--ui-live");
+        commandLine.Contains("--connector-lab") || commandLine.Contains("--show") || commandLine.Contains("--ui-smoke") || commandLine.Contains("--ui-live");
 }

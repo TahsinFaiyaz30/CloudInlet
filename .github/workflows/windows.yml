@@ -29,6 +29,9 @@ jobs:
           .\scripts\test-release-scripts.ps1
       - name: Build complete solution
         run: dotnet build CloudInlet.sln -c Release -v:minimal
+      - name: Build and validate the signed connector packs
+        shell: pwsh
+        run: .\scripts\build-connectors.ps1 -OutputDirectory artifacts/ci-connectors -IncludeExample
       - name: Test transport and reconciliation
         # Hosted Server runners are not a desktop Cloud Files acceptance environment.
         run: dotnet test CloudInlet.Tests/CloudInlet.Tests.csproj -c Release --no-build --filter "TestCategory!=LiveProvider&FullyQualifiedName!~Native" -v:minimal --logger "trx;LogFileName=windows-ci.trx" --results-directory artifacts/ci-tests

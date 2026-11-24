@@ -3,29 +3,32 @@ using System.Security.Cryptography;
 using System.Text;
 using CloudInlet.Core;
 using CloudInlet.Core.OneDrive;
+using CloudInlet.Connectors;
+using System.Text.Json;
 using CloudInlet.Core.Transfers;
 
 namespace CloudInlet.Application;
 
 public sealed partial class ClientController
 {
-    private readonly ConcurrentDictionary<string, OneDriveClient> _oneDriveClients = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, IOneDriveSession> _oneDriveClients = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _oneDriveVaultGate = new(1, 1);
     public IReadOnlyList<ClientStorage.OneDriveConnection> OneDriveAccounts => _storage.LoadOneDriveConnections();
+
+    private IOneDriveConnector OneDriveConnector => (IOneDriveConnector)Connectors.Provider("onedrive");
 
     public Task<OneDriveDeviceCode> BeginOneDriveSignInAsync(string clientId, string tenant = "common", CancellationToken cancellationToken = default)
     {
         if (!Guid.TryParse(clientId.Trim(), out _)) throw new ArgumentException("Enter the Microsoft application (client) ID for CloudInlet's delegated OneDrive connection.");
-        return new OneDriveAuthClient(clientId.Trim(), tenant.Trim()).BeginDeviceSignInAsync(cancellationToken);
+        return OneDriveConnector.BeginSignInAsync(clientId.Trim(), tenant.Trim(), cancellationToken);
     }
 
     public async Task<ClientStorage.OneDriveConnection> CompleteOneDriveSignInAsync(string clientId, string tenant,
         OneDriveDeviceCode code, CancellationToken cancellationToken = default)
     {
         using var operation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
-        var auth = new OneDriveAuthClient(clientId.Trim(), tenant.Trim());
-        var tokens = await auth.CompleteDeviceSignInAsync(code, operation.Token);
-        var client = new OneDriveClient(auth, bandwidthBudget: _transferBandwidth);
+        var tokens = await OneDriveConnector.CompleteSignInAsync(clientId.Trim(), tenant.Trim(), code, operation.Token);
+        var client = OpenOneDrive("", clientId.Trim(), tenant.Trim(), tokens);
         ConfigureOneDriveTransport(client, Settings);
         var drives = await client.ListDrivesAsync(operation.Token);
         var drive = drives.FirstOrDefault() ?? throw new IOException("This Microsoft account has no accessible OneDrive. Set up OneDrive and sign in again.");
@@ -45,27 +48,37 @@ public sealed partial class ClientController
         return profile;
     }
 
-    private OneDriveClient GetOneDriveClient(string accountId) => _oneDriveClients.GetOrAdd(accountId, id =>
+    private IOneDriveSession GetOneDriveClient(string accountId)
     {
-        var account = _storage.LoadOneDriveConnections().SingleOrDefault(item => item.Id == id)
-            ?? throw new IOException("Reconnect the original OneDrive account to continue this transfer.");
-        var client = new OneDriveClient(new OneDriveAuthClient(account.ClientId, account.Tenant, account.Tokens,
-            async (tokens, ct) =>
-            {
-                await _oneDriveVaultGate.WaitAsync(ct);
-                try
+        if (Connectors.Issue("onedrive") is { } issue) throw new Core.Connectors.ConnectorUnavailableException(issue);
+        return _oneDriveClients.GetOrAdd(accountId, id =>
+        {
+            var account = _storage.LoadOneDriveConnections().SingleOrDefault(item => item.Id == id)
+                ?? throw new IOException("Reconnect the original OneDrive account to continue this transfer.");
+            var client = OpenOneDrive(id, account.ClientId, account.Tenant, account.Tokens,
+                async (tokens, ct) =>
                 {
-                    var accounts = _storage.LoadOneDriveConnections().Select(item => item.Id == id ? item with { Tokens = tokens } : item).ToArray();
-                    if (!accounts.Any(item => item.Id == id)) throw new IOException("This OneDrive account was removed while refreshing its session.");
-                    _storage.SaveOneDriveConnections(accounts);
-                }
-                finally { _oneDriveVaultGate.Release(); }
-            }), bandwidthBudget: _transferBandwidth);
-        ConfigureOneDriveTransport(client, Settings);
-        return client;
-    });
+                    await _oneDriveVaultGate.WaitAsync(ct);
+                    try
+                    {
+                        var accounts = _storage.LoadOneDriveConnections().Select(item => item.Id == id ? item with { Tokens = tokens } : item).ToArray();
+                        if (!accounts.Any(item => item.Id == id)) throw new IOException("This OneDrive account was removed while refreshing its session.");
+                        _storage.SaveOneDriveConnections(accounts);
+                    }
+                    finally { _oneDriveVaultGate.Release(); }
+                });
+            ConfigureOneDriveTransport(client, Settings);
+            return client;
+        });
+    }
 
-    private static void ConfigureOneDriveTransport(OneDriveClient client, AppSettings settings)
+    private IOneDriveSession OpenOneDrive(string id, string clientId, string tenant, OneDriveTokenSet tokens,
+        Func<OneDriveTokenSet, CancellationToken, Task>? save = null) => (IOneDriveSession)OneDriveConnector.Open(
+        new(id, _transferBandwidth, JsonSerializer.Serialize(tokens), save is null ? null :
+            (value, ct) => save(JsonSerializer.Deserialize<OneDriveTokenSet>(value)!, ct),
+            new Dictionary<string, string> { ["clientId"] = clientId, ["tenant"] = tenant }));
+
+    private static void ConfigureOneDriveTransport(IOneDriveSession client, AppSettings settings)
     {
         var limits = TransferLimits.For(settings);
         client.Configure(settings.UploadBytesPerSecond, settings.DownloadBytesPerSecond, limits.Uploads, limits.Downloads);

@@ -15,6 +15,7 @@ public sealed class TransferJobJournal : IDisposable
     private readonly SqliteConnection _connection;
     private readonly ITransferCheckpointProtector _protector;
     private bool _disposed;
+    internal const string WaitingForConnectors = "Install required connectors to resume this transfer.";
     public IReadOnlyList<string> RecoverableJobIds { get; }
 
     public TransferJobJournal(string path, ITransferCheckpointProtector protector)
@@ -51,8 +52,8 @@ public sealed class TransferJobJournal : IDisposable
                     "UPDATE transfer_jobs SET skipped_bytes=COALESCE((SELECT SUM(json_extract(entry,'$.Size')-bytes) FROM transfer_items WHERE job_id=transfer_jobs.id AND state=$skipped),0)",
                     ("$skipped", (int)TransferItemState.Skipped));
         }
-        using (var saved = Command("SELECT id FROM transfer_jobs WHERE state IN ($discovering,$running)",
-            ("$discovering", (int)TransferJobState.Discovering), ("$running", (int)TransferJobState.Running)))
+        using (var saved = Command("SELECT id FROM transfer_jobs WHERE state IN ($discovering,$running) OR (state=$paused AND error=$waiting)",
+            ("$paused", (int)TransferJobState.Paused), ("$waiting", WaitingForConnectors), ("$discovering", (int)TransferJobState.Discovering), ("$running", (int)TransferJobState.Running)))
         {
             using var reader = saved.ExecuteReader();
             var ids = new List<string>();
@@ -358,7 +359,7 @@ public static class TransferValidation
     }
     public static void ValidateLocation(TransferLocation location)
     {
-        if (location is null || location.Provider is not ("local" or "b2" or "onedrive") ||
+        if (location is null || !Connectors.ConnectorFormat.ValidId(location.Provider) ||
             string.IsNullOrWhiteSpace(location.AccountId) || string.IsNullOrWhiteSpace(location.ContainerId) ||
             location.FolderId is null || location.Path is null || string.IsNullOrWhiteSpace(location.DisplayName) ||
             location.Path.Length > 32768 || location.AccountId.Length > 1024 || location.ContainerId.Length > 1024 || location.FolderId.Length > 1024)

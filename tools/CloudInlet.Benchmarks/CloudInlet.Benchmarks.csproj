@@ -9,6 +9,8 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <ProjectReference Include="../../connectors/BackblazeB2/CloudInlet.Connectors.BackblazeB2.csproj" />
+    <ProjectReference Include="../../connectors/OneDrive/CloudInlet.Connectors.OneDrive.csproj" />
     <ProjectReference Include="../../CloudInlet.Core/CloudInlet.Core.csproj" />
     <Compile Include="../../CloudInlet/Application/ClientStorage.cs" Link="ClientStorage.cs" />
     <Compile Include="../../CloudInlet/Application/DisconnectMode.cs" Link="DisconnectMode.cs" />

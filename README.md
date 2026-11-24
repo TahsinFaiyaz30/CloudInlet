@@ -8,6 +8,10 @@ CloudInlet is a native Windows backup and sync client for **Backblaze B2**. It r
 
 The local `legacy` branch retains the previous mounted-drive migration helper at `03656fb`. The published repository contains the current native client.
 
+## Provider connectors
+
+The connector-enabled EXE, MSI, portable and MSIX builds start with the shared engine. Open **Connectors → Install** to download Backblaze B2 or OneDrive. You can also import a signed private pack. **Settings → Updates and about** manages connector updates. [Connector guide](docs/CONNECTORS.md) · [Distribution workflow](docs/CONNECTOR_RELEASES.md) · [Store policy and certification](docs/STORE_CONNECTORS.md)
+
 ## Features
 
 - Notification area icon and activity flyout with live per-file uploads/downloads, waiting counts, recent history, pause/resume, quick settings, and full settings. Activity includes All activity, In progress, Queued, and History filters.
@@ -30,11 +34,11 @@ The local `legacy` branch retains the previous mounted-drive migration helper at
 
 ## Run
 
-Use the complete self-contained x64 release folder, or build from source:
+Use the complete self-contained x64 release folder. For a source build with a local connector catalog, run these commands in PowerShell 7. Choose a new output folder for each preview.
 
 ```powershell
-dotnet build CloudInlet.sln -c Release
-& '.\CloudInlet\bin\x64\Release\net8.0-windows10.0.19041.0\win-x64\CloudInlet.exe'
+pwsh -File scripts/build-connectors.ps1 -OutputDirectory artifacts/connector-preview -Preview
+& '.\artifacts\connector-preview\App\CloudInlet.exe' --connector-lab --page=connectors
 ```
 
 Windows 11 on x64 is recommended for Mica Alt. The project minimum is Windows 10 build 19041; Files On-Demand requires a **local fixed NTFS drive**. The release includes its .NET and Windows App SDK runtime files. Keep all files in the release's `App` folder together.
@@ -46,6 +50,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1
 ```
 
 ## Connect B2
+
+In a connector-enabled build, choose **Connectors → Backblaze B2 → Install** first.
 
 1. Create or select a private B2 bucket. Use a bucket-scoped application key with `listFiles`, `readFiles`, and `writeFiles` access and **Allow List All Bucket Names** enabled. Previous-version server-side restore also needs access to the version being restored.
 2. Open **Settings → Account**, enter the bucket name, key ID, and application key. Advanced connection options let you choose a dedicated local CloudInlet folder and a cloud prefix such as `CloudInlet/`.

@@ -55,7 +55,7 @@ internal sealed class ClientCloudPrefixBinding : ICloudPrefixMigrationBinding, I
         try
         {
             ClientRegistrationMigration.PinAncestors(state, guards); ClientRegistrationMigration.PinAncestors(receiptDirectory, guards);
-            MigrationMetadataExchange.Recover(state, record + ".metadata"); runtime ??= new ClientFolderMigration.WindowsRuntime();
+            MigrationMetadataExchange.Recover(state, record + ".metadata"); runtime ??= new ClientFolderMigration.WindowsRuntime(() => ClientController.OpenBackup(ClientController.OpenConnectors(state)));
             Receipt receipt;
             if (File.Exists(record))
             {

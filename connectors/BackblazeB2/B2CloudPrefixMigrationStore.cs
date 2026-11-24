@@ -417,7 +417,7 @@ public sealed partial class B2CloudStore
                 source.Size is < 0 or > MaxLargeFileSize || !IsSha1(source.Sha1) || string.IsNullOrWhiteSpace(source.ContentType) ||
                 operationId is not { Length: 64 } || !operationId.All(Uri.IsHexDigit)) throw Conflict("The cloud copy does not match a reviewed immutable source.");
             ValidateProtection(source);
-            if (source.Metadata.Keys.Any(k => k is CloudPrefixMigration.ReceiptMetadataKey or CloudPrefixMigration.SourceMetadataKey or TimestampMetadata))
+            if (source.Metadata.Keys.Any(k => k is PrefixReceiptKeys.ReceiptMetadataKey or PrefixReceiptKeys.SourceMetadataKey or TimestampMetadata))
                 throw Conflict("Source metadata already contains migration receipts. Existing metadata will not be replaced.");
             if (source.Metadata.TryGetValue("large_file_sha1", out var sha) && !sha.Equals(source.Sha1, StringComparison.OrdinalIgnoreCase))
                 throw Conflict("The source's whole-file checksum metadata is inconsistent.");
@@ -441,16 +441,16 @@ public sealed partial class B2CloudStore
         {
             var result = new Dictionary<string, string>(intent.Source.Metadata, StringComparer.Ordinal)
             {
-                [CloudPrefixMigration.ReceiptMetadataKey] = intent.OperationId,
-                [CloudPrefixMigration.SourceMetadataKey] = intent.Source.FileId,
+                [PrefixReceiptKeys.ReceiptMetadataKey] = intent.OperationId,
+                [PrefixReceiptKeys.SourceMetadataKey] = intent.Source.FileId,
                 [TimestampMetadata] = intent.Source.UploadedAtMillis.ToString(CultureInfo.InvariantCulture)
             };
             if (intent.Source.Size >= MaxPartSize) result.TryAdd("large_file_sha1", intent.Source.Sha1!);
             return result;
         }
         private static bool Matches(B2CloudPrefixCopyIntent intent, CloudPrefixVersion version) =>
-            version.Key == intent.DestinationKey && version.Metadata.TryGetValue(CloudPrefixMigration.ReceiptMetadataKey, out var receipt) && receipt == intent.OperationId &&
-            version.Metadata.TryGetValue(CloudPrefixMigration.SourceMetadataKey, out var source) && source == intent.Source.FileId;
+            version.Key == intent.DestinationKey && version.Metadata.TryGetValue(PrefixReceiptKeys.ReceiptMetadataKey, out var receipt) && receipt == intent.OperationId &&
+            version.Metadata.TryGetValue(PrefixReceiptKeys.SourceMetadataKey, out var source) && source == intent.Source.FileId;
         private bool IsOwnedUnfinished(CloudPrefixVersion version)
         {
             if (version.Action != "start") return false;

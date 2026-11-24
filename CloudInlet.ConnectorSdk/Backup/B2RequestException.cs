@@ -8,7 +8,7 @@ public sealed class B2RequestException : IOException
     public HttpStatusCode StatusCode { get; }
     public string Code { get; }
 
-    internal B2RequestException(HttpStatusCode statusCode, string code)
+    public B2RequestException(HttpStatusCode statusCode, string code)
         : base($"Backblaze B2 rejected the request ({(int)statusCode}, {code}).")
     {
         StatusCode = statusCode;

@@ -2,7 +2,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Collections.Concurrent;
 using CloudInlet.Core;
-using CloudInlet.Core.B2;
+using CloudInlet.Connectors;
+using CloudInlet.Core.Connectors;
 using CloudInlet.Core.Sync;
 using CloudInlet.Windows;
 using CloudInlet.Windows.CloudFiles;
@@ -39,7 +40,7 @@ public sealed partial class ClientController : IAsyncDisposable
     private readonly bool _manageStartup;
     private readonly Func<AppSettings, string?> _cloudPauseReason;
     private readonly CancellationTokenSource _lifetime = new();
-    private B2CloudStore? _cloud;
+    private IBackupSession? _cloud;
     private WindowsPlaceholderService? _placeholders;
     private SyncEngine? _engine;
     private readonly Task _reconnectLoop;
@@ -70,9 +71,10 @@ public sealed partial class ClientController : IAsyncDisposable
     public event EventHandler? Changed;
 
     public ClientController(ClientStorage? storage = null, Action<string>? unregisterSyncRoot = null, bool manageStartup = true,
-        Func<AppSettings, string?>? cloudPauseReason = null)
+        Func<AppSettings, string?>? cloudPauseReason = null, ConnectorManager? connectors = null)
     {
         _storage = storage ?? new();
+        Connectors = connectors ?? OpenConnectors(_storage.DirectoryPath);
         _unregisterSyncRoot = unregisterSyncRoot ?? global::Windows.Storage.Provider.StorageProviderSyncRootManager.Unregister;
         _manageStartup = manageStartup;
         _cloudPauseReason = cloudPauseReason ?? SystemIntegration.GetPauseReason;
@@ -93,6 +95,8 @@ public sealed partial class ClientController : IAsyncDisposable
     {
         if (_pendingDisconnectMode is { } pendingMode)
         {
+            if (pendingMode != DisconnectMode.DisconnectOnly && Connectors.Issue("b2") is { } reason)
+            { SetStatus(new(ClientState.Paused, reason)); return; }
             await DisconnectAsync(pendingMode, _lifetime.Token);
             return;
         }
@@ -113,6 +117,7 @@ public sealed partial class ClientController : IAsyncDisposable
             }
             var credentials = _storage.LoadCredentials();
             if (credentials is null) throw new InvalidDataException("Enter your B2 application key to reconnect this account.");
+            if (Connectors.Issue("b2") is { } missing) { SetStatus(new(ClientState.Paused, missing)); return; }
             await ReadStartupPreferenceAsync();
             await OpenConnectionAsync(credentials, Settings, _lifetime.Token);
         }
@@ -195,7 +200,7 @@ public sealed partial class ClientController : IAsyncDisposable
     private async Task OpenConnectionAsync(B2Credentials credentials, AppSettings settings, CancellationToken ct)
     {
         SetStatus(new(ClientState.Connecting, "Connecting to Backblaze B2"));
-        var cloud = new B2CloudStore(bandwidthBudget: _transferBandwidth);
+        var cloud = OpenBackup(Connectors, _transferBandwidth);
         WindowsPlaceholderService? placeholders = null;
         try
         {
@@ -203,14 +208,7 @@ public sealed partial class ClientController : IAsyncDisposable
             cloud.ConfigureResumableUploads(Path.Combine(_storage.DirectoryPath, "Uploads"));
             cloud.Diagnostic += (_, message) => AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Information, "", message));
             ValidatePersonalRoot(settings.RootPath);
-            var account = await cloud.ConnectAsync(credentials, ct);
-            var required = new[] { "listFiles", "readFiles", "writeFiles" };
-            if (required.Any(capability => !account.Capabilities.Contains(capability)))
-                throw new IOException("This application key needs listFiles, readFiles, and writeFiles access to the selected B2 bucket.");
-            var bucket = (await cloud.ListBucketsAsync(ct)).SingleOrDefault(b => b.Name == settings.BucketName)
-                ?? throw new IOException("The application key cannot access that bucket. Check its bucket restriction and List All Bucket Names permission.");
-            if (account.AllowedNamePrefix is { Length: > 0 } allowed && !settings.Prefix.StartsWith(allowed, StringComparison.Ordinal))
-                throw new IOException("The selected cloud folder is outside the application key's permitted file prefix.");
+            var (account, bucket) = await cloud.ConnectBackupAsync(credentials, settings.BucketName, settings.Prefix, ct);
             settings = settings with { AccountId = account.AccountId, BucketId = bucket.Id };
             // Each account/root/prefix retains its own baseline across registration loss.
             var identity = account.AccountId + "|" + bucket.Id + "|" + settings.Prefix + "|" + settings.RootPath.ToUpperInvariant();
@@ -747,13 +745,13 @@ public sealed partial class ClientController : IAsyncDisposable
         var settings = Settings;
         return new(settings.RootPath, null, relativePath, settings.BucketId, settings.Prefix);
     }
-    private static void ConfigureTransport(B2CloudStore cloud, AppSettings settings)
+    private static void ConfigureTransport(IBackupSession cloud, AppSettings settings)
     {
         var limits = TransferLimits.For(settings);
         cloud.Configure(settings.UploadBytesPerSecond, settings.DownloadBytesPerSecond, limits.Uploads, limits.Downloads);
     }
 
-    private async Task HydrateTrackedAsync(B2CloudStore cloud, CloudObject file, string prefix, string rootName,
+    private async Task HydrateTrackedAsync(IBackupSession cloud, CloudObject file, string prefix, string rootName,
         long offset, long length, Stream destination, CancellationToken token, ActivityLocation? location = null)
     {
         var relative = file.Key.StartsWith(prefix, StringComparison.Ordinal) ? file.Key[prefix.Length..] : file.Key;
@@ -860,7 +858,7 @@ public sealed partial class ClientController : IAsyncDisposable
             report(value);
         }
     }
-    private async Task MaintainUploadCheckpointsAsync(B2CloudStore cloud, CancellationToken token)
+    private async Task MaintainUploadCheckpointsAsync(IBackupSession cloud, CancellationToken token)
     {
         try
         {

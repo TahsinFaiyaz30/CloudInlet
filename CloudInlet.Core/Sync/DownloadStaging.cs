@@ -79,8 +79,8 @@ internal sealed class DownloadStaging : IAsyncDisposable
                 reset = saved is null || saved.Version != 1 || saved.FileId != file.FileId || saved.Key != file.Key || saved.Size != file.Size ||
                     saved.Sha1 != file.Sha1 || saved.Chunks is null || saved.Chunks.Count > 10_000 ||
                     saved.Chunks.Any(chunk => chunk is null || chunk.Offset < 0 || chunk.Length <= 0 || chunk.Offset > file.Size ||
-                        chunk.Length > file.Size - chunk.Offset || chunk.Offset % B2.B2CloudStore.GetDownloadChunkSize(file.Size) != 0 ||
-                        chunk.Length != Math.Min(B2.B2CloudStore.GetDownloadChunkSize(file.Size), file.Size - chunk.Offset) ||
+                        chunk.Length > file.Size - chunk.Offset || chunk.Offset % DownloadChunks.GetDownloadChunkSize(file.Size) != 0 ||
+                        chunk.Length != Math.Min(DownloadChunks.GetDownloadChunkSize(file.Size), file.Size - chunk.Offset) ||
                         chunk.Sha1 is not { Length: 40 } || !chunk.Sha1.All(Uri.IsHexDigit)) ||
                     saved.Chunks.Select(chunk => chunk.Offset).Distinct().Count() != saved.Chunks.Count;
                 if (!reset) entry = saved!;

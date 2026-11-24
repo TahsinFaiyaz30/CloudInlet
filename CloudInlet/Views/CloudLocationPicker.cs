@@ -47,6 +47,7 @@ internal sealed class CloudLocationPicker : IDisposable
     internal Border Surface { get; }
     internal TransferLocation? Location { get; private set; }
     internal bool IsWorking => _pending > 0;
+    internal bool CanChooseService => Location is not null || _choice is { Provider: not "local" } choice && _controller.Connectors.Issue(choice.Provider) is not null;
     internal CloudLocationSelection? Selection => _choice is null ? null : new(_choice.Provider, _choice.AccountId, Location);
 
     internal CloudLocationPicker(ClientController controller, nint owner, string heading, CancellationToken token,
@@ -95,6 +96,19 @@ internal sealed class CloudLocationPicker : IDisposable
         yield return new("local", null, "This PC", "Choose a local folder", true);
         yield return new("b2", _controller.Settings.IsConfigured ? _controller.Settings.AccountId : null, "Backblaze B2",
             _controller.Settings.IsConfigured ? _controller.Settings.BucketName : "Not connected", _controller.Settings.IsConfigured);
+        foreach (var (id, installed) in _controller.Connectors.Snapshot.Installed)
+        {
+            var m = installed.Current.Manifest;
+            if (id is "b2" or "onedrive" || !installed.Enabled || m.Kind != "provider") continue;
+            if (!m.Capabilities.HasFlag(CloudInlet.Connectors.ConnectorCapabilities.AccountSetup))
+                yield return new(id, "default", m.Name, m.Publisher, true);
+            else
+            {
+                var accounts = _controller.CustomAccounts(id);
+                foreach (var account in accounts) yield return new(id, account.Id, m.Name + " · " + account.Name, m.Publisher, true);
+                if (accounts.Count == 0) yield return new(id, null, m.Name, "Connect an account", false);
+            }
+        }
         if (_controller.OneDriveAccounts.Count == 0)
             yield return new("onedrive", null, "OneDrive", "Not connected", false);
         else
@@ -143,6 +157,13 @@ internal sealed class CloudLocationPicker : IDisposable
         change.Click += (_, _) => { if (!IsWorking) ShowChoices(); };
         Grid.SetColumn(change, 1); heading.Children.Add(change); _view.Children.Add(heading);
         _view.Children.Add(SourceImportDialog.Text(choice.Name));
+        if (choice.Provider != "local" && _controller.Connectors.Issue(choice.Provider) is { } reason)
+        {
+            _view.Children.Add(SourceImportDialog.Text(reason, true));
+            var install = SourceImportDialog.ActionButton("Install required connectors");
+            install.Click += (_, _) => _connect("install:" + choice.Provider);
+            _view.Children.Add(install); return;
+        }
         if (!choice.Connected)
         {
             _view.Children.Add(SourceImportDialog.Text("Connect this service to choose an account and folder.", true));
@@ -164,23 +185,27 @@ internal sealed class CloudLocationPicker : IDisposable
             });
             _view.Children.Add(browse); return;
         }
-        _container.Header = choice.Provider == "onedrive" ? "Drive" : "Bucket";
-        _container.PlaceholderText = choice.Provider == "onedrive" ? "Choose a drive" : "Choose a bucket";
+        _container.Header = choice.Provider switch { "onedrive" => "Drive", "b2" => "Bucket", _ => "Location" };
+        _container.PlaceholderText = "Choose a " + _container.Header.ToString()!.ToLowerInvariant();
         AutomationProperties.SetName(_container, _heading + " " + _container.Header.ToString()!.ToLowerInvariant());
-        _view.Children.Add(_container); _view.Children.Add(_path); _view.Children.Add(_folderSearch);
-        _view.Children.Add(_navigation); _view.Children.Add(_folderScroll);
-        _view.Children.Add(_empty);
+        _view.Children.Add(_container); _view.Children.Add(_path);
+        if (_controller.Connectors.Snapshot.Installed[choice.Provider].Current.Manifest.Capabilities.HasFlag(CloudInlet.Connectors.ConnectorCapabilities.Browse))
+        {
+            _view.Children.Add(_folderSearch); _view.Children.Add(_navigation);
+            _view.Children.Add(_folderScroll); _view.Children.Add(_empty);
+        }
         if (choice.Provider == "onedrive")
         {
             var another = SourceImportDialog.ActionButton("Connect another account");
             another.Click += (_, _) => _connect("onedrive"); _view.Children.Add(another);
         }
-        _path.Text = "Choose a " + (choice.Provider == "onedrive" ? "drive" : "bucket") + " to browse folders.";
+        _path.Text = "Choose a " + _container.Header.ToString()!.ToLowerInvariant() + " to browse folders.";
         _up.IsEnabled = false; _more.Visibility = Visibility.Collapsed;
         _loadingControls = true;
         try
         {
             _container.ItemsSource = null;
+            _container.DisplayMemberPath = "Name";
             if (choice.Provider == "onedrive")
             {
                 var drives = await _controller.GetOneDriveDrivesAsync(choice.AccountId!, _lifetime.Token);
@@ -188,12 +213,20 @@ internal sealed class CloudLocationPicker : IDisposable
                 _container.ItemsSource = drives;
                 _container.SelectedItem = drives.FirstOrDefault(drive => drive.Id == restore?.ContainerId);
             }
-            else
+            else if (choice.Provider == "b2")
             {
                 var buckets = await _controller.GetImportBucketsAsync(_lifetime.Token);
                 if (_disposed) return;
                 _container.ItemsSource = buckets;
                 _container.SelectedItem = buckets.FirstOrDefault(bucket => bucket.Id == restore?.ContainerId);
+            }
+            else
+            {
+                var roots = await _controller.CustomRootsAsync(choice.Provider, choice.AccountId!, _lifetime.Token);
+                if (_disposed) return;
+                _container.DisplayMemberPath = "DisplayName";
+                _container.ItemsSource = roots;
+                _container.SelectedItem = roots.FirstOrDefault(root => root.ContainerId == restore?.ContainerId);
             }
             if (_container.SelectedItem is null && _container.Items.Count == 1) _container.SelectedIndex = 0;
             _container.IsEnabled = _container.Items.Count > 0;
@@ -211,7 +244,12 @@ internal sealed class CloudLocationPicker : IDisposable
             root = await _controller.GetOneDriveRootAsync(_choice.AccountId!, drive.Id, _lifetime.Token);
         else if (_choice?.Provider == "b2" && _container.SelectedItem is CloudBucket bucket)
             root = _controller.GetB2TransferRoot(bucket.Id, bucket.Name);
+        else if (_container.SelectedItem is TransferLocation custom) root = custom;
         if (root is null) return;
+        if (!_controller.Connectors.Snapshot.Installed[root.Provider].Current.Manifest.Capabilities.HasFlag(CloudInlet.Connectors.ConnectorCapabilities.Browse))
+        {
+            Location = root; _path.Text = root.DisplayName; _changed(); return;
+        }
         if (restore is not null && restore.ContainerId == root.ContainerId && restore.AccountId == root.AccountId)
         {
             if (restore.Path != root.Path) _parents.Push(root);

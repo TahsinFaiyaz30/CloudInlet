@@ -8,7 +8,7 @@ public sealed partial class B2CloudStore
 {
     // Buffers stay 64 KiB regardless of file/chunk size. Very large files grow their chunks
     // so a durable checkpoint journal cannot grow beyond 10,000 entries.
-    public const long DownloadChunkSize = 8 * 1024 * 1024;
+    public const long DownloadChunkSize = DownloadChunks.DownloadChunkSize;
     private readonly ConcurrencyGate _downloads = new();
     private int _downloadConnections = 4;
 
@@ -21,13 +21,7 @@ public sealed partial class B2CloudStore
         _requestBudget.ConfigureDownloadRequests(connections);
     }
 
-    public static long GetDownloadChunkSize(long fileSize)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegative(fileSize);
-        var minimum = fileSize / 10_000 + (fileSize % 10_000 == 0 ? 0 : 1);
-        const long alignment = 64 * 1024;
-        return Math.Max(DownloadChunkSize, checked((minimum + alignment - 1) / alignment * alignment));
-    }
+    public static long GetDownloadChunkSize(long fileSize) => DownloadChunks.GetDownloadChunkSize(fileSize);
 
     public async Task DownloadAsync(CloudObject file, Stream destination, long offset = 0, long? length = null,
         IProgress<TransferProgress>? progress = null, CancellationToken cancellationToken = default)

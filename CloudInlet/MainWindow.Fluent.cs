@@ -26,14 +26,23 @@ public sealed partial class MainWindow
     private void InitializeCloudServices()
     {
         _cloudServicesView = new CloudServicesView();
-        _cloudServicesView.ConnectBackblazeRequested += (_, _) => ShowAccount();
-        _cloudServicesView.OpenOneDriveRequested += (_, _) => RequestNavigationRoute("settings/onedrive");
+        _cloudServicesView.ConnectBackblazeRequested += ConnectB2FromServices;
+        _cloudServicesView.OpenOneDriveRequested += ConnectOneDriveFromServices;
         ServicesPage.Content = _cloudServicesView;
         _homeServicesView = new CloudServicesView(showComingSoon: false);
-        _homeServicesView.ConnectBackblazeRequested += (_, _) => ShowAccount();
-        _homeServicesView.OpenOneDriveRequested += (_, _) => RequestNavigationRoute("settings/onedrive");
+        _homeServicesView.ConnectBackblazeRequested += ConnectB2FromServices;
+        _homeServicesView.OpenOneDriveRequested += ConnectOneDriveFromServices;
         HomeServicesHost.Content = _homeServicesView;
         RefreshCloudServices();
+    }
+
+    private async void ConnectB2FromServices(object? sender, EventArgs args)
+    {
+        if (_viewModel.Preview is not null || Manager.Issue("b2") is null || await InstallRequiredAsync("b2")) ShowAccount();
+    }
+    private async void ConnectOneDriveFromServices(object? sender, EventArgs args)
+    {
+        if (_viewModel.Preview is not null || Manager.Issue("onedrive") is null || await InstallRequiredAsync("onedrive")) RequestNavigationRoute("settings/onedrive");
     }
 
     private void RefreshCloudServices()
@@ -72,6 +81,7 @@ public sealed partial class MainWindow
         new("Activity", "activity", "transfer queue progress history speed cloud OneDrive copy move resume cancel"),
         new("Folder backup", "backup", "desktop documents pictures downloads folders custom import"),
         new("Files", "files", "explorer storage versions restore download pin free space"),
+        new("Connectors", "connectors", "install extensions packages catalog provider updates source publisher private"),
         new("Cloud services", "services", "providers connect accounts OneDrive Backblaze B2 Google Drive Dropbox S3 coming soon"),
         new("Backblaze account", "settings/account", "connect B2 bucket application key root prefix credentials"),
         new("OneDrive accounts", "settings/onedrive", "connect Microsoft personal work account sign in"),

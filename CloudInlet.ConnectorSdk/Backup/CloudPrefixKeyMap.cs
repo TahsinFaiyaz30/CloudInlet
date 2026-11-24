@@ -49,7 +49,7 @@ public sealed class CloudPrefixKeyMap
     }
     private static void Validate(string value)
     {
-        if (string.IsNullOrEmpty(value) || value != PathRules.NormalizePrefix(value) || !value.EndsWith('/') ||
+        if (string.IsNullOrEmpty(value) || value != ConnectorPaths.NormalizePrefix(value) || !value.EndsWith('/') ||
             value.StartsWith('/') || value.Contains('\\') || value.Split('/').SkipLast(1).Any(part => part is "" or "." or ".."))
             throw new ArgumentException("A normalized nonempty cloud folder is required.");
     }

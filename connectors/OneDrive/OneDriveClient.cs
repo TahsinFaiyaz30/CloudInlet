@@ -2,13 +2,12 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
-using CloudInlet.Core.B2;
 using CloudInlet.Core.Transfers;
 
 namespace CloudInlet.Core.OneDrive;
 
 /// <summary>Graph metadata and streaming transport. No payload operation opens a local file or buffers an entire response.</summary>
-public sealed class OneDriveClient
+public sealed partial class OneDriveClient
 {
     private static readonly HttpClient SharedHttp = new(new SocketsHttpHandler
     {

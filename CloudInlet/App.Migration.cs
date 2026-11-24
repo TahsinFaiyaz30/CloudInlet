@@ -1,6 +1,7 @@
 using CloudInlet.Application;
 using CloudInlet.Core;
 using CloudInlet.Core.Migration;
+using CloudInlet.Core.Connectors;
 using CloudInlet.Core.Updates;
 using CloudInlet.Views;
 using CloudInlet.Windows;
@@ -107,6 +108,9 @@ public partial class App
             if (session.Plan.Fingerprint != pending.Plan.Fingerprint ||
                 !session.Items.Select(item => item.Id).ToHashSet(StringComparer.Ordinal).SetEquals(pending.SelectedIds))
                 throw new InvalidDataException("The migration session does not match its protected consent. No further changes were started.");
+            if (session.Items.Any(item => (IsCloud(item.Id) || IsRegistration(item.Id) || IsFolder(item.Id)) && item.State is not
+                (MigrationItemState.Completed or MigrationItemState.Reverted or MigrationItemState.OriginalKept or MigrationItemState.Blocked)) &&
+                !await PrepareMigrationConnectorAsync(_migrationWindow)) return false;
             if (!reviewedNow && session.Items.Any(item => IsCloud(item.Id) && item.State is not
                 (MigrationItemState.Completed or MigrationItemState.Reverted or MigrationItemState.OriginalKept or MigrationItemState.Blocked)))
             {
@@ -134,6 +138,46 @@ public partial class App
             throw new IOException("Application data still requires recovery. Transfers remain stopped.");
         _clientDataDirectory = resolution.DataDirectory;
         return true;
+    }
+
+    private async Task<bool> PrepareMigrationConnectorAsync(MigrationWindow window)
+    {
+        var manager = ClientController.OpenConnectors(BuildInfo.DefaultDataDirectory);
+        if (manager.Issue("b2") is null) return true;
+        string message = "The saved migration needs Backblaze B2. Install the required connector to continue.";
+        while (!_lifetime.IsCancellationRequested)
+        {
+            var action = new ContentDialog { Title = "Migration is paused", Content = new TextBlock { Text = message,
+                TextWrapping = Microsoft.UI.Xaml.TextWrapping.Wrap }, PrimaryButtonText = "Install required connectors",
+                SecondaryButtonText = "Choose local packages", CloseButtonText = "Close" };
+            var choice = await window.ShowAsync(action);
+            if (choice == ContentDialogResult.None) return false;
+            try
+            {
+                ConnectorPlan plan;
+                if (choice == ContentDialogResult.Secondary)
+                {
+                    var selected = await DesktopPickers.PickFilesAsync(WinRT.Interop.WindowNative.GetWindowHandle(window),
+                        "Review packages", [".cipack"], _lifetime.Token);
+                    if (selected.Count == 0) continue;
+                    var imports = await Task.Run(() => selected.Select(ConnectorManager.InspectLocal).ToArray(), _lifetime.Token);
+                    plan = manager.Plan(["b2"], imports: imports);
+                }
+                else
+                {
+                    try { plan = manager.Plan(["b2"]); }
+                    catch (InvalidDataException) { await manager.RefreshAsync(_lifetime.Token); plan = manager.Plan(["b2"]); }
+                }
+                var review = new ConnectorInstallDialog(plan);
+                if (await window.ShowAsync(review) != ContentDialogResult.Primary) return false;
+                var approved = review.SelectedPlan;
+                await Task.Run(() => manager.InstallAsync(approved, _lifetime.Token), _lifetime.Token);
+                return true;
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            { message = e.GetBaseException().Message + " The saved migration can resume after connector recovery."; }
+        }
+        return false;
     }
 
     private IMigrationOperation CreateOperation(ClientMigrationReview.Consent consent, string id, string sessionPath, string receipts)

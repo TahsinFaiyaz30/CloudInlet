@@ -10,7 +10,6 @@ public sealed record MigrationProgress(string ItemId, string Operation, string D
     long Completed = 0, long? Total = null, string Unit = "items");
 public sealed record MigrationLogEntry(long Sequence, DateTimeOffset TimeUtc, string ItemId, string Operation, string Detail);
 
-public sealed class MigrationJournalException(string message, Exception inner) : IOException(message, inner);
 
 /// <summary>Only an adapter that has positively identified a recoverable condition may request automatic retry.</summary>
 public sealed class MigrationTransientException(string message, TimeSpan? retryAfter = null) : IOException(message)

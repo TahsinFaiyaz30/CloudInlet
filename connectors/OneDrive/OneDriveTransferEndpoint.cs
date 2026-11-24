@@ -65,7 +65,7 @@ public sealed class OneDriveTransferEndpoint : ITransferEndpoint
         {
             ValidateName(item.Name);
             var path = Join(state.Current.Path, item.Name);
-            if (CloudInlet.Core.Sync.PathRules.IsExcluded(path, exclusions)) continue;
+            if (CloudInlet.Core.Sync.ConnectorPaths.IsExcluded(path, exclusions)) continue;
             entries.Add(new(item.Id, path, item.ETag, item.IsFolder ? 0 : item.Size, item.ModifiedUtc, item.Sha1, item.IsFolder));
             if (item.IsFolder && !state.Pending.Any(folder => folder.Id == item.Id)) state.Pending.Add(new(item.Id, path));
         }

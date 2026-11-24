@@ -141,6 +141,9 @@
                 <NavigationViewItem x:Name="ServicesNavigationItem" Content="Cloud services" Tag="services" Style="{StaticResource CloudInletNavigationItemStyle}">
                     <NavigationViewItem.Icon><IconSourceElement IconSource="{views:FluentIcon Kind=cloud, Size=24}"  Width="24" Height="24" Tag="cloud" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
+                <NavigationViewItem Content="Connectors" Tag="connectors" Style="{StaticResource CloudInletNavigationItemStyle}">
+                    <NavigationViewItem.Icon><SymbolIcon Symbol="Library" /></NavigationViewItem.Icon>
+                </NavigationViewItem>
             </NavigationView.MenuItems>
             <NavigationView.PaneFooter>
                 <Border x:Name="NavigationStatusCard" Margin="20,12,20,20" Padding="16"
@@ -225,6 +228,7 @@
                         HorizontalScrollBarVisibility="Disabled"
                         HorizontalContentAlignment="Stretch">
                         <StackPanel x:Name="OverviewContent" Style="{StaticResource CloudInletPageContentStyle}">
+                            <Button x:Name="HomeConnectorRecovery" Content="Install required connectors" Visibility="Collapsed" Click="RequiredConnectors_Click" />
                             <Border x:Name="WelcomePanel">
                                 <StackPanel Spacing="20">
                                     <TextBlock Text="Start with your cloud" Style="{StaticResource SubtitleTextBlockStyle}" TextWrapping="Wrap" />
@@ -1245,6 +1249,7 @@
                                             </views:ActionWrapPanel>
                                     </StackPanel>
                                     </Border>
+                                    <StackPanel x:Name="ConnectorUpdatesPanel" Spacing="12" />
                                     <InfoBar x:Name="UpdateNotice" IsOpen="False" Visibility="Collapsed" IsClosable="False" />
                                     <settings:SettingsCard Header="CloudBay migration" Description="Review older locations and choose what to migrate.">
                                         <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=folder, Size=24}" Width="24" Height="24" Tag="folder" /></settings:SettingsCard.HeaderIcon>
@@ -1288,6 +1293,14 @@
                                     </StackPanel>
                                 </StackPanel>
                             </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                    <ScrollViewer x:Name="ConnectorsPage" Visibility="Collapsed" HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch">
+                        <StackPanel Style="{StaticResource CloudInletPageContentStyle}" Spacing="16">
+                            <TextBox x:Name="ConnectorSearch" PlaceholderText="Search connectors and features" AutomationProperties.Name="Search connectors" TextChanged="ConnectorSearch_Changed" />
+                            <views:ActionWrapPanel x:Name="ConnectorActions" />
+                            <TextBlock x:Name="ConnectorStatus" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                            <StackPanel x:Name="ConnectorRows" Spacing="12" />
                         </StackPanel>
                     </ScrollViewer>
                     <ContentControl x:Name="ServicesPage" Visibility="Collapsed" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />

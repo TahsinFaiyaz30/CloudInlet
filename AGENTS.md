@@ -5,7 +5,8 @@ Start with `docs/ASTRA_HANDOFF.md` for the repository configuration audit, curre
 ## Project map
 
 - `CloudInlet/`: unpackaged x64 WinUI 3 app, Windows integration, UI and controller.
-- `CloudInlet.Core/`: sync, B2/OneDrive adapters, transfer recovery and updater rules.
+- `CloudInlet.Core/`: shared sync, transfer orchestration, connector installation, recovery and updater rules.
+- `CloudInlet.ConnectorSdk/` and `connectors/`: public contract, Backblaze B2 and OneDrive packs, and a private connector starter. See [the connector development guide](docs/CONNECTORS.md).
 - `CloudInlet.Tests/`: managed and Windows desktop integration tests.
 - `scripts/`, `packaging/`, `.github/workflows/`: versioning, installers, Store packaging and releases.
 - `version.json`: shared product version; `docs/REBRANDING.md`: upgrade compatibility contract.

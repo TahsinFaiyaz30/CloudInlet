@@ -178,7 +178,7 @@ public sealed partial class ClientStorage
             _lastErrors.Remove(_lastErrors.MinBy(pair => pair.Value.Time).Key);
         _lastErrors[value.Path] = value;
     }
-    private static void AtomicWrite(string path, byte[] bytes)
+    internal static void AtomicWrite(string path, byte[] bytes)
     {
         var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
