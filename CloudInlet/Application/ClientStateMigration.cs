@@ -142,33 +142,64 @@ internal sealed class ClientStateMigration : IMigrationOperation, IDisposable
         if (route?.Location == "Pending") return new(null, true, route.Plan, route.Journal);
         var legacy = Directory.Exists(lease.LegacyDirectory);
         var canonical = Directory.Exists(lease.CanonicalDirectory);
+        // Empty scaffolding is not a second profile. Keep it intact, and hold directory
+        // identities while choosing a location; never delete a directory to resolve a conflict.
+        using var legacyGuard = legacy ? new PathGuards(lease.LegacyDirectory, create: false) : null;
+        using var canonicalGuard = canonical ? new PathGuards(lease.CanonicalDirectory, create: false) : null;
         if (route is null)
         {
-            if (canonical) throw new IOException("An unrecognized CloudInlet profile already exists. No profiles were merged or replaced.");
-            if (legacy) return new(lease.LegacyDirectory, false);
+            if (canonical && !IsEmptyDirectoryTree(lease.CanonicalDirectory))
+            {
+                if (legacy && !IsEmptyDirectoryTree(lease.LegacyDirectory))
+                    throw ProfileConflict(lease, "Both saved-data folders contain files, but the record selecting the active profile is missing.");
+                EnsureNoOrphanedMigration(lease);
+                // Reinstall/restore may retain a complete profile without its separate routing
+                // record. Recognize actual settings and verify accounts/databases before claiming it.
+                var settingsPath = Path.Combine(lease.CanonicalDirectory, "settings.json");
+                if (!File.Exists(settingsPath))
+                    throw ProfileConflict(lease, "The CloudInlet saved-data folder contains files that cannot be identified as a CloudInlet profile.");
+                using (var settings = JsonDocument.Parse(ReadSmall(settingsPath)))
+                {
+                    if (settings.RootElement.ValueKind != JsonValueKind.Object ||
+                        !settings.RootElement.TryGetProperty("SchemaVersion", out var schema) ||
+                        schema.ValueKind != JsonValueKind.Number || !schema.TryGetInt32(out var version) || version != 1 ||
+                        !settings.RootElement.TryGetProperty("RootPath", out var root) || root.ValueKind != JsonValueKind.String)
+                        throw ProfileConflict(lease, "The saved CloudInlet settings cannot be identified as a supported profile.");
+                }
+                if (WindowsUpdateInstaller.IsInstallationInProgress(Path.Combine(lease.CanonicalDirectory, "Updates")))
+                    throw new MigrationTransientException("An update is still using the saved profile. Wait for it to finish, then reopen CloudInlet.");
+                _ = InspectState(lease.CanonicalDirectory, null, "state", default);
+                lease.WriteRoute(new(1, lease.Home, lease.Flavor, "Canonical"));
+                return new(lease.CanonicalDirectory, false);
+            }
+            if (legacy && (!canonical || !IsEmptyDirectoryTree(lease.LegacyDirectory)))
+                return new(lease.LegacyDirectory, false);
+            EnsureNoOrphanedMigration(lease);
             // The durable claim is written before creating an empty directory. A power loss between
             // these two steps can only resume this fresh initialization, never select another profile.
             route = new(1, lease.Home, lease.Flavor, "Fresh"); lease.WriteRoute(route);
         }
         if (route.Location == "Fresh")
         {
-            if (legacy || canonical && Directory.EnumerateFileSystemEntries(lease.CanonicalDirectory).Any())
+            if (legacy && !IsEmptyDirectoryTree(lease.LegacyDirectory) || canonical && !IsEmptyDirectoryTree(lease.CanonicalDirectory))
                 throw new IOException("The new profile changed before initialization finished. Its contents were preserved.");
             using var created = new PathGuards(lease.CanonicalDirectory, create: true);
             lease.WriteRoute(route with { Location = "Canonical" });
             return new(lease.CanonicalDirectory, false);
         }
-        if (route.Location == "Canonical" && canonical && !legacy)
+        if (route.Location == "Canonical" && canonical &&
+            (!legacy || route.Plan is null && IsEmptyDirectoryTree(lease.LegacyDirectory)))
         {
             VerifyRouteObject(route, atDestination: true);
             return new(lease.CanonicalDirectory, false, route.Plan, route.Journal);
         }
-        if (route.Location == "Legacy" && legacy && !canonical)
+        if (route.Location == "Legacy" && legacy &&
+            (!canonical || route.Plan is null && IsEmptyDirectoryTree(lease.CanonicalDirectory)))
         {
             VerifyRouteObject(route, atDestination: false);
             return new(lease.LegacyDirectory, false, route.Plan, route.Journal);
         }
-        throw new IOException("The saved profile cannot be identified at exactly one owned location. Recovery is required; no empty profile was created.");
+        throw ProfileConflict(lease, "The saved profile cannot be found at its recorded location, or a second populated profile conflicts with it.");
 
         void VerifyRouteObject(Route value, bool atDestination)
         {
@@ -181,6 +212,41 @@ internal sealed class ClientStateMigration : IMigrationOperation, IDisposable
             using var move = WindowsDirectoryRelocation.Resume(value.Plan, value.ItemId!, value.Receipt!);
             (atDestination ? move.VerifyAsync(default) : move.VerifyRevertedAsync(default)).GetAwaiter().GetResult();
         }
+    }
+
+    private static IOException ProfileConflict(StateUseLease lease, string reason) => new(
+        reason + " No profiles were merged, reset or replaced.\n\nSaved-data locations:\n" +
+        lease.LegacyDirectory + "\n" + lease.CanonicalDirectory);
+
+    private static void EnsureNoOrphanedMigration(StateUseLease lease)
+    {
+        // Missing routing must not turn an interrupted move into a fresh/automatically
+        // adopted profile. Even partial receipts and temporary route writes stay recoverable.
+        foreach (var entry in Directory.EnumerateFileSystemEntries(lease.RecoveryDirectory))
+        {
+            CheckPath(entry);
+            if (Path.GetFileName(entry) is not ("state-use.lock" or "last-offered.txt"))
+                throw ProfileConflict(lease, "Saved migration evidence exists without its profile routing record. The recovery files need review before startup.");
+        }
+    }
+
+    private static bool IsEmptyDirectoryTree(string directory)
+    {
+        var pending = new Stack<string>(); pending.Push(directory);
+        var visited = 0;
+        while (pending.TryPop(out var folder))
+        {
+            // Do not walk an arbitrary large tree while deciding whether startup is fresh.
+            if (++visited > 128) return false;
+            using var guard = new PathGuards(folder, create: false);
+            foreach (var entry in Directory.EnumerateFileSystemEntries(folder))
+            {
+                CheckPath(entry);
+                if ((File.GetAttributes(entry) & FileAttributes.Directory) == 0) return false;
+                pending.Push(entry);
+            }
+        }
+        return true;
     }
 
     internal static ClientStateMigration Create(StateUseLease lease, MigrationPlan plan, string itemId, string sessionJournalPath)
