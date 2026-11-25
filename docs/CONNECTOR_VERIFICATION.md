@@ -4,6 +4,14 @@ The connector-enabled app was built and checked on Windows x64 on 25 November 20
 
 ## Published downloads
 
+### Separate connector repositories · 25 November 2026
+
+The routing change passed a Release solution build and 474 focused non-live tests. A fresh isolated profile downloaded, loaded, disabled, enabled and removed the published packs. A fixture exercised the actual publisher with separate repository credentials, a concurrent catalog change and an interruption after the catalog commit. Its replay preserved both providers' versions and completed the missing README write. [Reviewed implementation](https://github.com/TahsinFaiyaz30/CloudInlet/commit/3664f01607a6c916c8bf1cc8f72206151901d9e2)
+
+Both hosted verification runs authenticated the original public download and obtained an installation token scoped to the selected release repository. The signed catalog retained SHA-256 `1E4B236BA3C65133772EC8BD2D7F8B76A4CF20FAE4AA0EDDECBC38E1C73113CA`. All six historical assets matched their GitHub digests. The first live publication under a provider's own `v<version>` tag awaits a genuine new version. [B2 hosted verification](https://github.com/TahsinFaiyaz30/CloudInlet-Connectors/actions/runs/45543820964) · [OneDrive hosted verification](https://github.com/TahsinFaiyaz30/CloudInlet-Connectors/actions/runs/45543825889)
+
+### Original 1.0.0 packages
+
 The production catalog is 3,672 bytes. It authenticates both versioned asset URLs and archive digests. The app pins the catalog URL and the CloudInlet publisher fingerprint `D3E879A5EA4B3F3316472C9A9CFAC000DFDE296E7980D71AB0AD4C358741388A`. Both releases are immutable on GitHub and contain their pack, release notes and checksums. [Signed catalog](https://raw.githubusercontent.com/TahsinFaiyaz30/CloudInlet-Connectors/main/catalog.json)
 
 | Connector | Download and installed archive bytes | Expanded inventory bytes | SHA-256 of downloaded archive |
