@@ -54,6 +54,160 @@ public sealed class ClientStateMigrationTests
         Assert.AreEqual("Other data", File.ReadAllText(Path.Combine(lease.CanonicalDirectory, "keep")));
     }
 
+    [DataTestMethod]
+    [DataRow("Release", false)]
+    [DataRow("Release", true)]
+    [DataRow("Debug", true)]
+    public void EmptyProfileDirectoriesDoNotBlockFirstLaunch(string flavor, bool legacyToo)
+    {
+        using var fixture = new Fixture(); using var lease = fixture.Lease(flavor);
+        var emptyChild = Path.Combine(lease.CanonicalDirectory, "Empty", "Nested");
+        Directory.CreateDirectory(emptyChild);
+        if (legacyToo) Directory.CreateDirectory(lease.LegacyDirectory);
+        Assert.AreEqual(lease.CanonicalDirectory, ClientStateMigration.Resolve(lease).DataDirectory);
+        Assert.IsTrue(Directory.Exists(emptyChild), "Opening an empty profile must not delete its directories.");
+        new ClientStorage(lease.CanonicalDirectory).SaveSettings(new());
+        Assert.AreEqual(lease.CanonicalDirectory, ClientStateMigration.Resolve(lease).DataDirectory);
+    }
+
+    [TestMethod]
+    public void EmptyCanonicalDirectoryDoesNotHideExistingLegacyAccounts()
+    {
+        using var fixture = new Fixture(); using var lease = fixture.Lease(); fixture.Seed(lease);
+        Directory.CreateDirectory(Path.Combine(lease.CanonicalDirectory, "Empty"));
+        var before = Fixture.HashTree(lease.LegacyDirectory);
+        Assert.AreEqual(lease.LegacyDirectory, ClientStateMigration.Resolve(lease).DataDirectory);
+        Assert.AreEqual(before, Fixture.HashTree(lease.LegacyDirectory));
+        Assert.IsFalse(File.Exists(lease.RoutePath));
+    }
+
+    [DataTestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public void RetainedCanonicalProfileRecoversMissingRouteWithoutChangingSavedBytes(bool emptyLegacy)
+    {
+        using var fixture = new Fixture();
+        string before;
+        using (var lease = fixture.Lease())
+        {
+            fixture.Seed(lease);
+            Directory.Move(lease.LegacyDirectory, lease.CanonicalDirectory);
+            if (emptyLegacy) Directory.CreateDirectory(lease.LegacyDirectory);
+            before = Fixture.HashTree(lease.CanonicalDirectory);
+            Assert.AreEqual(lease.CanonicalDirectory, ClientStateMigration.Resolve(lease).DataDirectory);
+            Assert.AreEqual("Canonical", lease.ReadRoute()!.Location);
+            Assert.AreEqual(before, Fixture.HashTree(lease.CanonicalDirectory));
+        }
+        using (var lease = fixture.Lease())
+        {
+            Assert.AreEqual(lease.CanonicalDirectory, ClientStateMigration.Resolve(lease).DataDirectory);
+            Assert.AreEqual(before, Fixture.HashTree(lease.CanonicalDirectory));
+            Assert.AreEqual("fixture-secret", new ClientStorage(lease.CanonicalDirectory).LoadCredentials()!.ApplicationKey);
+        }
+    }
+
+    [TestMethod]
+    public void TwoPopulatedProfilesStayUnchangedWithoutAUsableRoute()
+    {
+        using var fixture = new Fixture(); using var lease = fixture.Lease(); fixture.Seed(lease);
+        new ClientStorage(lease.CanonicalDirectory).SaveSettings(new());
+        var legacy = Fixture.HashTree(lease.LegacyDirectory); var canonical = Fixture.HashTree(lease.CanonicalDirectory);
+        Assert.ThrowsException<IOException>(() => ClientStateMigration.Resolve(lease));
+        Assert.AreEqual(legacy, Fixture.HashTree(lease.LegacyDirectory));
+        Assert.AreEqual(canonical, Fixture.HashTree(lease.CanonicalDirectory));
+        Assert.IsFalse(File.Exists(lease.RoutePath));
+    }
+
+    [DataTestMethod]
+    [DataRow("pending-review.dpapi")]
+    [DataRow("session-interrupted.json")]
+    [DataRow("state-route.dpapi.interrupted.tmp")]
+    public void MissingRouteCannotBypassRetainedMigrationEvidence(string evidence)
+    {
+        using var fixture = new Fixture(); using var lease = fixture.Lease();
+        new ClientStorage(lease.CanonicalDirectory).SaveSettings(new());
+        File.WriteAllText(Path.Combine(lease.RecoveryDirectory, evidence), "Retained recovery evidence");
+        var before = Fixture.HashTree(lease.CanonicalDirectory);
+        Assert.ThrowsException<IOException>(() => ClientStateMigration.Resolve(lease));
+        Assert.AreEqual(before, Fixture.HashTree(lease.CanonicalDirectory));
+        Assert.IsFalse(File.Exists(lease.RoutePath));
+    }
+
+    [TestMethod]
+    public void HiddenFilesAreNotAnEmptyProfile()
+    {
+        using var fixture = new Fixture(); using var lease = fixture.Lease();
+        Directory.CreateDirectory(lease.CanonicalDirectory);
+        var path = Path.Combine(lease.CanonicalDirectory, "hidden-data"); File.WriteAllText(path, "Preserve");
+        File.SetAttributes(path, FileAttributes.Hidden);
+        Assert.ThrowsException<IOException>(() => ClientStateMigration.Resolve(lease));
+        Assert.AreEqual("Preserve", File.ReadAllText(path)); Assert.IsFalse(File.Exists(lease.RoutePath));
+    }
+
+    [DataTestMethod]
+    [DataRow("{}")]
+    [DataRow("{\"SchemaVersion\":\"1\"}")]
+    [DataRow("{\"SchemaVersion\":2}")]
+    [DataRow("{\"SchemaVersion\":1,\"RootPath\":null}")]
+    public void UnrecognizedSettingsCannotEstablishProfileOwnership(string json)
+    {
+        using var fixture = new Fixture(); using var lease = fixture.Lease();
+        Directory.CreateDirectory(lease.CanonicalDirectory);
+        File.WriteAllText(Path.Combine(lease.CanonicalDirectory, "settings.json"), json);
+        Assert.ThrowsException<IOException>(() => ClientStateMigration.Resolve(lease));
+        Assert.AreEqual(json, File.ReadAllText(Path.Combine(lease.CanonicalDirectory, "settings.json")));
+        Assert.IsFalse(File.Exists(lease.RoutePath));
+    }
+
+    [DataTestMethod]
+    [DataRow("credentials.dpapi")]
+    [DataRow("onedrive.dpapi")]
+    [DataRow("CloudTransfers/jobs.sqlite")]
+    public void MissingRouteDoesNotHideCorruptAccountsOrDatabases(string relative)
+    {
+        using var fixture = new Fixture(); using var lease = fixture.Lease();
+        new ClientStorage(lease.CanonicalDirectory).SaveSettings(new());
+        var path = Path.Combine(lease.CanonicalDirectory, relative);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!); File.WriteAllBytes(path, [1, 2, 3]);
+        var before = Fixture.HashTree(lease.CanonicalDirectory);
+        try { ClientStateMigration.Resolve(lease); Assert.Fail("An unverifiable account/database must stop route recovery."); }
+        catch (Exception error) when (error is CryptographicException or SqliteException) { }
+        Assert.IsFalse(File.Exists(lease.RoutePath));
+        Assert.AreEqual(before, Fixture.HashTree(lease.CanonicalDirectory));
+    }
+
+    [TestMethod]
+    public void RetainedProfileRecoveryWaitsForItsInstaller()
+    {
+        using var fixture = new Fixture(); using var lease = fixture.Lease();
+        new ClientStorage(lease.CanonicalDirectory).SaveSettings(new());
+        var updates = Path.Combine(lease.CanonicalDirectory, "Updates"); Directory.CreateDirectory(updates);
+        using (var installer = new FileStream(Path.Combine(updates, "update-install.lock"), FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
+            Assert.ThrowsException<MigrationTransientException>(() => ClientStateMigration.Resolve(lease));
+        Assert.IsFalse(File.Exists(lease.RoutePath));
+        Assert.AreEqual(lease.CanonicalDirectory, ClientStateMigration.Resolve(lease).DataDirectory);
+    }
+
+    [TestMethod]
+    public void MissingRecordedProfileIsNotSilentlyRecreated()
+    {
+        using var fixture = new Fixture(); using var lease = fixture.Lease();
+        var directory = ClientStateMigration.Resolve(lease).DataDirectory!;
+        Directory.Move(directory, directory + "-retained");
+        Assert.ThrowsException<IOException>(() => ClientStateMigration.Resolve(lease));
+        Assert.IsFalse(Directory.Exists(directory)); Assert.IsTrue(Directory.Exists(directory + "-retained"));
+    }
+
+    [TestMethod]
+    public void EmptyFoldersCannotBypassAnInterruptedMigrationWithMissingRoute()
+    {
+        using var fixture = new Fixture(); using var lease = fixture.Lease();
+        Directory.CreateDirectory(lease.CanonicalDirectory);
+        File.WriteAllText(Path.Combine(lease.RecoveryDirectory, "pending-review.dpapi"), "Retained consent");
+        Assert.ThrowsException<IOException>(() => ClientStateMigration.Resolve(lease));
+        Assert.IsFalse(File.Exists(lease.RoutePath));
+    }
+
     [TestMethod]
     public void NativeStateUseLeasePreventsAnotherControllerOrMigration()
     {

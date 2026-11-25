@@ -35,12 +35,29 @@ internal sealed class MigrationWindow : Window
         return await dialog.ShowAsync();
     }
 
-    internal Task<ContentDialogResult> ShowErrorAsync(Exception error) => ShowAsync(new ContentDialog
+    internal Task<ContentDialogResult> ShowErrorAsync(Exception error)
     {
-        Title = "Migration needs attention",
-        Content = new TextBlock { Text = error.Message + "\n\nCloudInlet has not started transfers. Resolve this problem and reopen the app to recover the saved migration.", TextWrapping = TextWrapping.Wrap },
-        CloseButtonText = "Close CloudInlet"
-    });
+        var details = "CloudInlet " + CloudInlet.Core.BuildInfo.Version + "\n" + error.Message;
+        var dialog = new ContentDialog
+        {
+            Title = "CloudInlet couldn't start",
+            Content = new TextBlock { Text = error.Message +
+                "\n\nKeep your saved-data folders intact. Send these details to tahsinfaiyaz30@gmail.com for help recovering your profile.",
+                TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true },
+            PrimaryButtonText = "Copy details", CloseButtonText = "Close CloudInlet"
+        };
+        dialog.PrimaryButtonClick += (_, args) =>
+        {
+            args.Cancel = true;
+            try
+            {
+                var data = new global::Windows.ApplicationModel.DataTransfer.DataPackage(); data.SetText(details);
+                global::Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(data);
+            }
+            catch (Exception) { /* The selectable message remains available if the clipboard is busy. */ }
+        };
+        return ShowAsync(dialog);
+    }
 
     internal void Finish() { _allowClose = true; Close(); }
 }

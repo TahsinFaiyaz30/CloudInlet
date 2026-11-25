@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "version": "1.2.2",
+  "previousTag": "v1.2.1",
+  "summary": "Fix startup being blocked by empty saved-data folders or a verified retained profile whose location record is missing.",
+  "categories": [
+    {
+      "title": "Startup and profile recovery",
+      "items": [
+        {
+          "text": "Open normally when pre-existing empty CloudInlet folders would previously trigger an unrecognized-profile migration error. Preserve existing CloudBay accounts when the other profile location contains only empty folders.",
+          "commits": ["f11dec85250ada36a72355023206e36ce1c92cee"]
+        },
+        {
+          "text": "Recover a missing location record for a single retained CloudInlet profile after verifying its settings, encrypted accounts and databases. Keep conflicting profiles, corrupt records, active installers and orphaned migration evidence protected from automatic adoption.",
+          "commits": ["f11dec85250ada36a72355023206e36ce1c92cee"]
+        },
+        {
+          "text": "Show clearer startup failure details with affected profile paths, a Copy details button and direct support guidance instead of assuming every startup failure is an unfinished migration.",
+          "commits": ["f11dec85250ada36a72355023206e36ce1c92cee"]
+        }
+      ]
+    },
+    {
+      "title": "Release packaging",
+      "collapsed": true,
+      "items": [
+        {
+          "text": "Retain Microsoft Store build logs separately from the validated installer publication inventory.",
+          "commits": ["912a5fa71d900ab09938f7080ef789775805928b"]
+        }
+      ]
+    }
+  ],
+  "installationNotes": [
+    "This is a maintenance update to the existing non-modular app. Backblaze B2 and OneDrive remain built in; no connector packs are required.",
+    "Microsoft Store installations receive updates through Microsoft Store after approval and rollout. EXE and MSI installations keep their existing update channel and build flavor.",
+    "Keep saved-data folders and recovery records intact. This update does not merge conflicting profiles, reset accounts or remove personal files. GitHub source archives are source code, not app installers."
+  ],
+  "validation": {
+    "items": [
+      "The original startup error was reproduced in five isolated pre-fix cases. The fixed Release solution built with zero warnings or errors; 52 focused routing and recovery cases, 1,299 hosted-compatible regression cases and 141 release-script assertions passed locally.",
+      "The local focused checks include native profile routing, protected accounts, interrupted migration, hidden files, conflicting data, active installers and byte-preservation checks. The broader run excludes LiveProvider and other Native-named desktop tests.",
+      "The affected customer's machine and new production Store delivery have not been tested. This maintenance release does not claim new live-provider or full desktop acceptance coverage."
+    ],
+    "links": [
+      { "label": "Windows CI", "url": "https://github.com/TahsinFaiyaz30/CloudInlet/actions/workflows/windows.yml" },
+      { "label": "Release build and package verification", "url": "https://github.com/TahsinFaiyaz30/CloudInlet/actions/workflows/release.yml" }
+    ]
+  },
+  "storeStatus": "CloudInlet is available in Microsoft Store. Version 1.2.2 requires a new Microsoft certification and rollout; the included unsigned MSIX is not a trusted Store installer."
+}
