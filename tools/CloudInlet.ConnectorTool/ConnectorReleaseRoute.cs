@@ -2,10 +2,12 @@ using System.Text.RegularExpressions;
 using CloudInlet.Core.Connectors;
 
 internal sealed record ConnectorReleaseRoute(string ProviderRepository, string Repository, string Tag,
-    string Title, string SourceFolder, string Filename, bool Historical)
+    string Title, string SourceFolder, string Filename, string? OriginalDownload)
 {
+    public bool Historical => OriginalDownload is not null;
     public string Release => $"https://github.com/{Repository}/releases/tag/{Tag}";
     public string Download => $"https://github.com/{Repository}/releases/download/{Tag}/{Filename}";
+    internal string[] Locations => OriginalDownload is { } original ? [Download, original] : [Download];
 
     internal static ConnectorReleaseRoute For(string id, string version)
     {
@@ -18,9 +20,11 @@ internal sealed record ConnectorReleaseRoute(string ProviderRepository, string R
         if (ConnectorFormat.VersionOf(version) < new Version(1, 0, 0))
             throw new InvalidDataException("Official connector history begins at 1.0.0.");
         var provider = $"TahsinFaiyaz30/CloudInlet-Connector-{suffix}";
-        var historical = version == "1.0.0";
-        return new(provider, historical ? OfficialRelease.Central : provider, historical ? $"{id}-v{version}" : $"v{version}",
-            $"{display} Connector {version}", folder, $"{id}-{version}.cipack", historical);
+        var filename = $"{id}-{version}.cipack";
+        var original = version == "1.0.0"
+            ? $"https://github.com/{OfficialRelease.Central}/releases/download/{id}-v{version}/{filename}"
+            : null;
+        return new(provider, provider, $"v{version}", $"{display} Connector {version}", folder, filename, original);
     }
 
     internal static async Task WriteDirectoryAsync(string pin, string catalog, string directory, string guideRevision, string output)
@@ -49,14 +53,16 @@ internal sealed record ConnectorReleaseRoute(string ProviderRepository, string R
                 lines.AddRange([$"# {latest.Name} Connector for CloudInlet", "",
                     $"This repository distributes the **{latest.Name}** provider connector. Its current version is **{latest.Version}**. The SDK and provider implementation live in CloudInlet. [Source for {latest.Version}]({source}/tree/{latest.SourceRevision}/connectors/{route.SourceFolder})",
                     "", "## Release history", "",
-                    $"Each row links to the original signed download. Version 1.0.0 is hosted in the historical distribution repository. Subsequent versions have their own tags here. [GitHub releases](https://github.com/{route.ProviderRepository}/releases)", ""]);
+                    $"Each version has its own signed download and release notes. [GitHub releases](https://github.com/{route.ProviderRepository}/releases)", ""]);
             }
             foreach (var offer in directory == "central" ? history.Take(1) : history)
             {
                 var m = offer.Manifest;
                 var r = For(id, m.Version);
                 var platform = string.Join(", ", m.Platforms.Select(p => p == "windows" ? "Windows" : p)) + " " + string.Join(", ", m.Architectures);
-                table.Add($"| [{m.Name}](https://github.com/{r.ProviderRepository}) | {m.Version} | {platform} | ≥ {m.Sdk.Min}, < {m.Sdk.Max} | [{r.Filename}]({offer.Locations[0]}) | [Release notes]({r.Release}) |");
+                var notes = offer.Locations[0] == r.OriginalDownload
+                    ? $"{central}/releases/tag/{id}-v{m.Version}" : r.Release;
+                table.Add($"| [{m.Name}](https://github.com/{r.ProviderRepository}) | {m.Version} | {platform} | ≥ {m.Sdk.Min}, < {m.Sdk.Max} | [{r.Filename}]({offer.Locations[0]}) | [Release notes]({notes}) |");
             }
         }
         if (directory == "central")
@@ -64,7 +70,7 @@ internal sealed record ConnectorReleaseRoute(string ProviderRepository, string R
                 "The signed catalog lists each official connector independently. Select a connector to see its complete release history. The original 1.0.0 downloads remain available here. [Historical releases](" + central + "/releases)", ""]);
         lines.AddRange(table);
         lines.AddRange(["", "## Install and update", "",
-            "In a connector-enabled CloudInlet build, open **Connectors**, select the provider, review the publisher and download, and choose **Install**. Open **Settings → Updates and about** to update an installed connector. The published CloudInlet 1.2.1 app predates the Connectors page. [Run the connector-enabled host](" + docs + "/CONNECTORS.md#try-the-published-connectors)", "",
+            "In CloudInlet 1.2.5 or later, open **Connectors**, select the provider, review the publisher and download, and choose **Install**. Open **Settings → Updates and about** to update an installed connector. [Connector guide](" + docs + "/CONNECTORS.md)", "",
             $"CloudInlet verifies the signed catalog and package. The official publisher fingerprint is `{offers[0].Manifest.Fingerprint}`. [Central directory]({central}) · [Signed catalog]({OfficialRelease.Discovery}) · [Connector development guide]({docs}/CONNECTORS.md)"]);
         if (directory == "central")
             lines.AddRange(["", "## Maintainers", "",

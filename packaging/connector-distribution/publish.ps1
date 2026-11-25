@@ -47,19 +47,31 @@ function Get-Catalog {
     return @{ file=$file; head=$head; readme=($tree.tree | Where-Object path -ceq 'README.md').sha }
 }
 $catalogUrl = (Get-Content -Raw -LiteralPath $pin | ConvertFrom-Json).location
+$expected = @($filename, 'release-notes.md', 'SHA256SUMS.txt')
 if ($route.historical) {
-    if (!$VerifyHistorical) { throw '1.0.0 is immutable. Use -VerifyHistorical to authenticate its original download.' }
     $publicCatalog = Join-Path $work 'historical-catalog.json'
     Save-Public $catalogUrl $publicCatalog
-    Save-Public $route.download $pack
+    Save-Public $route.originalDownload $pack
     Invoke-Tool release-check-entry $pin $publicCatalog $Connector $Version $SourceCommit $pack
-    Write-Output "Verified historical release $($route.release)"
-    return
+    if ($VerifyHistorical) { return }
 }
 if ($VerifyHistorical -or $repo -ceq $central -or !$env:CONNECTOR_RELEASE_TOKEN -or !$env:GH_TOKEN) { throw 'Missing scoped publisher access or invalid release destination.' }
-$inputPath = (Resolve-Path $InputDirectory).Path
-$manifest = Get-Content -Raw -LiteralPath (Join-Path $inputPath 'connector.json') | ConvertFrom-Json
-if ($manifest.id -cne $Connector -or $manifest.version -cne $Version) { throw 'The release input differs from the selected source manifest.' }
+if ($route.historical) {
+    $original = Invoke-GitHub api "repos/$central/releases/tags/$Connector-v$Version" | ConvertFrom-Json
+    if (!$original.immutable -or $original.draft -or $original.prerelease -or $original.assets.Count -ne $expected.Count) { throw 'Invalid original immutable release.' }
+    foreach ($name in $expected) {
+        $asset = $original.assets | Where-Object name -ceq $name
+        $url = "https://github.com/$central/releases/download/$Connector-v$Version/$name"
+        if ($asset.browser_download_url -cne $url) { throw "Missing original release asset: $name" }
+        $file = Join-Path $work $name
+        if ($name -cne $filename) { Save-Public $url $file }
+        if ($asset.digest -ine ("sha256:" + (Hash $file)) -or $asset.size -ne (Get-Item -LiteralPath $file).Length) { throw "Original release bytes differ: $name" }
+    }
+} else {
+    $inputPath = (Resolve-Path $InputDirectory).Path
+    $manifest = Get-Content -Raw -LiteralPath (Join-Path $inputPath 'connector.json') | ConvertFrom-Json
+    if ($manifest.id -cne $Connector -or $manifest.version -cne $Version) { throw 'The release input differs from the selected source manifest.' }
+}
 $guideRevision = (git -C $ToolRoot rev-parse HEAD)
 if ($LASTEXITCODE -or $guideRevision -cnotmatch '\A[0-9a-f]{40}\z') { throw 'Missing reviewed publisher revision.' }
 # Repository admins enable immutability at provisioning. The contents-only token verifies each published release below.
@@ -68,25 +80,26 @@ $tags = @(Invoke-Provider api --paginate "$api/releases?per_page=100" --jq '.[].
 $release = if ($tag -cin $tags) { Invoke-Provider release view $tag --repo $repo --json 'isDraft,assets,name' | ConvertFrom-Json }
 if ($release -and $release.name -cne $route.title) { throw 'Existing release title differs from the reviewed connector identity.' }
 $assetNames = @($release.assets | Where-Object { $_ } | ForEach-Object name)
-$expected = @($filename, 'release-notes.md', 'SHA256SUMS.txt')
 if (@($assetNames | Where-Object { $_ -cnotin $expected }).Count) { throw 'Existing release contains unexpected assets.' }
-if ($filename -cin $assetNames) {
-    Invoke-Provider release download $tag --repo $repo --pattern $filename --dir $work
-    Invoke-Tool release-verify $Connector $SourceCommit $inputPath $pin $pack
-} else {
-    if ($release -and !$release.isDraft) { throw 'Published release has no matching package.' }
-    Invoke-Tool release-pack $Connector $SourceCommit $inputPath $pin $pack
+if (!$route.historical) {
+    if ($filename -cin $assetNames) {
+        Invoke-Provider release download $tag --repo $repo --pattern $filename --dir $work
+        Invoke-Tool release-verify $Connector $SourceCommit $inputPath $pin $pack
+    } else {
+        if ($release -and !$release.isDraft) { throw 'Published release has no matching package.' }
+        Invoke-Tool release-pack $Connector $SourceCommit $inputPath $pin $pack
+    }
+    Write-ReleaseText 'release-notes.md' @(
+        $manifest.releaseNotes, '',
+        "Install from **Connectors** in a compatible CloudInlet build. SDK range [$($manifest.sdk.min), $($manifest.sdk.max)).",
+        '', "[Exact connector source](https://github.com/TahsinFaiyaz30/CloudInlet/tree/$SourceCommit/connectors/$($route.sourceFolder))"
+    )
+    Write-ReleaseText 'SHA256SUMS.txt' @("$(Hash $pack)  $filename", "$(Hash (Join-Path $work 'release-notes.md'))  release-notes.md")
 }
 $prior = Get-Catalog
 $prospective = Join-Path $work 'prospective.json'
 Invoke-Tool release-catalog $pin $prior.file $pack $prospective
 Invoke-Tool release-readme $pin $prospective central $guideRevision (Join-Path $work 'prospective.md')
-Write-ReleaseText 'release-notes.md' @(
-    $manifest.releaseNotes, '',
-    "Install from **Connectors** in a compatible CloudInlet build. SDK range [$($manifest.sdk.min), $($manifest.sdk.max)).",
-    '', "[Exact connector source](https://github.com/TahsinFaiyaz30/CloudInlet/tree/$SourceCommit/connectors/$($route.sourceFolder))"
-)
-Write-ReleaseText 'SHA256SUMS.txt' @("$(Hash $pack)  $filename", "$(Hash (Join-Path $work 'release-notes.md'))  release-notes.md")
 if (!$release) {
     $refs = @(Invoke-Provider api "$api/git/matching-refs/tags/$tag" --jq '.[].ref')
     if ("refs/tags/$tag" -cin $refs) { throw 'The release tag already exists without a corresponding release.' }
@@ -122,7 +135,7 @@ foreach ($name in $expected) {
     $publicFile = Join-Path $work ("download-" + $name)
     Save-Public $url $publicFile
     if ((Hash $publicFile) -ne (Hash (Join-Path $work $name)) -or $asset.digest -ine ("sha256:" + (Hash $publicFile))) { throw "Public release bytes differ: $name" }
-    if ($name -eq $filename) { Invoke-Tool release-verify $Connector $SourceCommit $inputPath $pin $publicFile }
+    if ($name -eq $filename) { Invoke-Tool release-check-entry $pin $prospective $Connector $Version $SourceCommit $publicFile }
 }
 # Commit the signed feed and its directory together against the exact branch tip we read.
 $commitMutation = 'mutation($input:CreateCommitOnBranchInput!){createCommitOnBranch(input:$input){commit{oid}}}'
@@ -156,7 +169,7 @@ for ($attempt = 1; $attempt -le 4; $attempt++) {
     Invoke-Tool release-readme $pin $latestCatalog.file $Connector $guideRevision $readme
     $contents = [Convert]::ToBase64String([IO.File]::ReadAllBytes($readme))
     if (($current.content -replace '\s','') -ceq $contents) { break }
-    $body = @{message="Refresh $($manifest.name) release history"; branch='main'; sha=$current.sha; content=$contents}
+    $body = @{message="Refresh $($route.title) release history"; branch='main'; sha=$current.sha; content=$contents}
     $request = Join-Path $work 'directory-request.json'
     $body | ConvertTo-Json -Compress | Set-Content -LiteralPath $request -Encoding utf8NoBOM
     try { Invoke-Provider api --method PUT "$api/contents/README.md" --input $request --silent; break }

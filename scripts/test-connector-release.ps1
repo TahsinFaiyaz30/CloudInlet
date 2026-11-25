@@ -58,6 +58,23 @@ try {
     Reject-Tool release-route b2 'v1.0.1'
     $central = 'TahsinFaiyaz30/CloudInlet-Connectors'
     $historicalCatalog = $prior
+    # Exercise the exact original feed shape and migrate one signed location at a time.
+    $legacy = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($envelope.payload)) | ConvertFrom-Json
+    foreach ($entry in $legacy.packages) { $entry.locations = @($entry.locations[1]) }
+    $bytes = [Text.Encoding]::UTF8.GetBytes(($legacy | ConvertTo-Json -Depth 12 -Compress))
+    $envelope.payload = [Convert]::ToBase64String($bytes)
+    $envelope.signature = [Convert]::ToBase64String($fixture.SignData($bytes, [Security.Cryptography.HashAlgorithmName]::SHA256))
+    $legacyFile = Join-Path $work 'legacy-locations.json'
+    $envelope | ConvertTo-Json | Set-Content -LiteralPath $legacyFile -Encoding utf8NoBOM
+    $moved = Join-Path $work 'moved-b2.json'
+    Check-Tool release-catalog $pin $legacyFile (Join-Path $work 'b2.cipack') $moved
+    Check-Tool release-check-entry $pin $moved b2 1.0.0 $revision (Join-Path $work 'b2.cipack')
+    $updated = Get-Content -Raw $moved | ConvertFrom-Json
+    $entries = ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($updated.payload)) | ConvertFrom-Json).packages
+    if (($entries[0] | ConvertTo-Json -Depth 12 -Compress) -cne ($catalog.packages[0] | ConvertTo-Json -Depth 12 -Compress) -or
+        ($entries[1] | ConvertTo-Json -Depth 12 -Compress) -cne ($legacy.packages[1] | ConvertTo-Json -Depth 12 -Compress)) {
+        throw 'Publishing the original B2 pack changed signed metadata or the other connector.'
+    }
     foreach ($case in @(
         @{id='b2'; name='Backblaze B2'; repository='CloudInlet-Connector-B2'; version='1.0.1'},
         @{id='onedrive'; name='OneDrive'; repository='CloudInlet-Connector-OneDrive'; version='1.1.0'}
@@ -65,7 +82,8 @@ try {
         $id = $case.id
         $original = Check-Tool release-route $id 1.0.0 | ConvertFrom-Json
         $route = Check-Tool release-route $id $case.version | ConvertFrom-Json
-        if (!$original.historical -or $original.repository -cne $central -or $original.tag -cne "$id-v1.0.0" -or
+        if (!$original.historical -or $original.repository -cne $route.repository -or $original.tag -cne 'v1.0.0' -or
+            $original.originalDownload -cne "https://github.com/$central/releases/download/$id-v1.0.0/$id-1.0.0.cipack" -or
             $route.historical -or $route.repository -cne "TahsinFaiyaz30/$($case.repository)" -or $route.tag -cne "v$($case.version)" -or
             $route.title -cne "$($case.name) Connector $($case.version)") { throw 'Incorrect release routing.' }
         $inputPath = Join-Path $work $id

@@ -126,12 +126,12 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           "repository=$($route.providerRepository.Split('/')[1])" >> $env:GITHUB_OUTPUT
       - name: Authenticate the original published 1.0.0 download
-        if: needs.build.outputs.historical == 'true'
+        if: needs.build.outputs.historical == 'true' && inputs.validate_only
         shell: pwsh
         run: ./distribution/.github/publish.ps1 -Connector $env:CONNECTOR -SourceCommit $env:SOURCE_COMMIT -Version $env:CONNECTOR_VERSION -ToolRoot release-tools -VerifyHistorical
       - id: publisher
         name: Issue a short-lived token for this connector repository
-        if: inputs.verify_access || (inputs.validate_only != true && needs.build.outputs.historical != 'true')
+        if: inputs.verify_access || inputs.validate_only != true
         uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc
         with:
           client-id: ${{ vars.CONNECTOR_RELEASE_APP_CLIENT_ID }}
@@ -154,7 +154,7 @@ jobs:
           name: unsigned-input
           path: input
       - name: Sign, publish immutable assets and advance the complete catalog
-        if: inputs.validate_only != true && needs.build.outputs.historical != 'true'
+        if: inputs.validate_only != true
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}

@@ -4,7 +4,7 @@ The x64 EXE, MSI, portable and MSIX builds use the same in-app catalog and downl
 
 ## Try the published connectors
 
-Use the connector-enabled host from this branch to try the public packs. The published 1.2.1 app predates the Connectors page. From the source checkout on Windows x64 with .NET 8, publish to a fresh directory and launch the isolated lab profile. This profile has its own accounts, checkpoints, instance and connector storage.
+Open Connectors in CloudInlet 1.2.5 or later to install the public packs. From the source checkout on Windows x64 with .NET 8, publish to a fresh directory and launch the isolated lab profile. This profile has its own accounts, checkpoints, instance and connector storage.
 
 ```powershell
 dotnet publish CloudInlet/CloudInlet.csproj -c Release -r win-x64 --self-contained true -p:PublishTrimmed=false "-p:CloudInletLiveDirectory=$PWD/artifacts/connector-try/marker" -o artifacts/connector-try/App

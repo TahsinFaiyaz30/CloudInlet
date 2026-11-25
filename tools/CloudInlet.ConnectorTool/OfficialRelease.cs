@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CloudInlet.Core.Connectors;
 
 internal static class OfficialRelease
@@ -98,7 +99,8 @@ internal static class OfficialRelease
             var m = offer.Manifest;
             var route = ConnectorReleaseRoute.For(m.Id, m.Version);
             if (m.Publisher != "CloudInlet" || m.Kind != "provider" || m.SourceRevision is null ||
-                offer.Locations.Length != 1 || offer.Locations[0] != route.Download)
+                !(offer.Locations.SequenceEqual(route.Locations) ||
+                  (route.OriginalDownload is { } original && offer.Locations is [var only] && only == original)))
                 throw new InvalidDataException("Invalid publisher, provenance or immutable location in the official catalog.");
         }
         if (offers.GroupBy(o => (o.Manifest.Id, o.Manifest.Version)).Any(g => g.Count() != 1))
@@ -139,19 +141,31 @@ internal static class OfficialRelease
                 entries.Add(raw.Clone());
             }
         }
+        var route = ConnectorReleaseRoute.For(verified.Manifest.Id, verified.Manifest.Version);
         var same = offers.SingleOrDefault(e => e.Manifest.Id == verified.Manifest.Id && e.Manifest.Version == verified.Manifest.Version);
         if (same is not null)
         {
             if (same.Hash != verified.Hash || !Encode(same.Manifest).AsSpan().SequenceEqual(Encode(verified.Manifest)))
                 throw new InvalidDataException("This version already identifies different bytes or metadata.");
-            File.Copy(previous, output);
-            return;
+            if (same.Locations.SequenceEqual(route.Locations))
+            {
+                File.Copy(previous, output);
+                return;
+            }
+            // Only the two original downloads can reach here. Preserve all authenticated metadata.
+            var index = offers.IndexOf(same);
+            var original = JsonNode.Parse(entries[index].GetRawText())!.AsObject();
+            original["locations"] = JsonSerializer.SerializeToNode(route.Locations);
+            entries[index] = JsonSerializer.SerializeToElement(original);
         }
-        var entry = new CatalogEntry(verified.Manifest, verified.Hash, [ConnectorReleaseRoute.For(verified.Manifest.Id, verified.Manifest.Version).Download]);
-        offers.Add(new(entry.Manifest, entry.Hash, Discovery, entry.Locations));
-        ConnectorResolver.Plan([entry.Manifest.Id], new(), offers, ConnectorFormat.Fingerprint(pin.PublicKey),
-            requestedHashes: new Dictionary<string, string> { [entry.Manifest.Id] = entry.Hash });
-        entries.Add(JsonSerializer.SerializeToElement(entry, ConnectorFormat.Json));
+        else
+        {
+            var entry = new CatalogEntry(verified.Manifest, verified.Hash, route.Locations);
+            offers.Add(new(entry.Manifest, entry.Hash, Discovery, entry.Locations));
+            ConnectorResolver.Plan([entry.Manifest.Id], new(), offers, ConnectorFormat.Fingerprint(pin.PublicKey),
+                requestedHashes: new Dictionary<string, string> { [entry.Manifest.Id] = entry.Hash });
+            entries.Add(JsonSerializer.SerializeToElement(entry, ConnectorFormat.Json));
+        }
         var payload = Encode(new { schema = 1, packages = entries });
         using var key = SigningKey(pin.PublicKey);
         File.WriteAllBytes(output, Encode(new SignedConnectorCatalog(pin.PublicKey, Convert.ToBase64String(payload),
