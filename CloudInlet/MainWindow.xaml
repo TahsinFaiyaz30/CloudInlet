@@ -1229,6 +1229,7 @@
                                 <StackPanel x:Name="AboutSettingsDetail" Spacing="24" Visibility="Collapsed">
                                     <Border Style="{StaticResource CloudInletSurfaceStyle}" Padding="24">
                                     <StackPanel Spacing="16">
+                                    <TextBlock Text="CloudInlet app update" Style="{StaticResource SubtitleTextBlockStyle}" />
                                     <Grid x:Name="UpdateHero" ColumnSpacing="16">
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                         <IconSourceElement IconSource="{views:FluentIcon Kind=sync, Size=40}"  Width="40" Height="40" Tag="sync" />

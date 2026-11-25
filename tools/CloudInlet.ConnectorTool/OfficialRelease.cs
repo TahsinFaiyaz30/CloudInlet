@@ -5,8 +5,8 @@ using CloudInlet.Core.Connectors;
 
 internal static class OfficialRelease
 {
-    private const string Repository = "TahsinFaiyaz30/CloudInlet-Connectors";
-    private const string Discovery = "https://raw.githubusercontent.com/" + Repository + "/main/catalog.json";
+    internal const string Central = "TahsinFaiyaz30/CloudInlet-Connectors";
+    internal const string Discovery = "https://raw.githubusercontent.com/" + Central + "/main/catalog.json";
     private static byte[] Encode<T>(T value) => JsonSerializer.SerializeToUtf8Bytes(value, ConnectorFormat.Json);
 
     private static ConnectorSource Pin(string file)
@@ -89,8 +89,33 @@ internal static class OfficialRelease
         Console.WriteLine($"{id} {manifest.Version} · {revision} · SHA-256 {inspected.Hash}");
     }
 
-    private static string Location(ConnectorManifest m) =>
-        $"https://github.com/{Repository}/releases/download/{m.Id}-v{m.Version}/{m.Id}-{m.Version}.cipack";
+    internal static async Task<ConnectorOffer[]> ReadCatalogAsync(string pinFile, string catalog)
+    {
+        var pin = Pin(pinFile);
+        var (_, offers) = await ConnectorCatalogReader.ReadAsync(new Uri(Path.GetFullPath(catalog)).AbsoluteUri, pin.PublicKey, default);
+        foreach (var offer in offers)
+        {
+            var m = offer.Manifest;
+            var route = ConnectorReleaseRoute.For(m.Id, m.Version);
+            if (m.Publisher != "CloudInlet" || m.Kind != "provider" || m.SourceRevision is null ||
+                offer.Locations.Length != 1 || offer.Locations[0] != route.Download)
+                throw new InvalidDataException("Invalid publisher, provenance or immutable location in the official catalog.");
+        }
+        if (offers.GroupBy(o => (o.Manifest.Id, o.Manifest.Version)).Any(g => g.Count() != 1))
+            throw new InvalidDataException("Duplicate connector versions in the official catalog.");
+        return offers;
+    }
+
+    internal static async Task VerifyListedAsync(string pinFile, string catalog, string id, string version, string revision, string package)
+    {
+        var offers = await ReadCatalogAsync(pinFile, catalog);
+        var offer = offers.Single(o => o.Manifest.Id == id && o.Manifest.Version == version);
+        var inspected = ConnectorPackage.Inspect(package);
+        if (offer.Manifest.SourceRevision != revision || offer.Hash != inspected.Hash ||
+            !Encode(offer.Manifest).AsSpan().SequenceEqual(Encode(inspected.Manifest)))
+            throw new InvalidDataException("The downloaded package or requested source revision differs from the signed catalog.");
+        Console.WriteLine($"{id} {version} · {revision} · SHA-256 {offer.Hash}");
+    }
 
     internal static async Task MergeCatalogAsync(string pinFile, string previous, string package, string output)
     {
@@ -101,7 +126,7 @@ internal static class OfficialRelease
         var offers = new List<ConnectorOffer>();
         if (previous != "-")
         {
-            var (_, old) = await ConnectorCatalogReader.ReadAsync(new Uri(Path.GetFullPath(previous)).AbsoluteUri, pin.PublicKey, default);
+            var old = await ReadCatalogAsync(pinFile, previous);
             var envelope = ConnectorFormat.Parse<SignedConnectorCatalog>(File.ReadAllBytes(previous));
             var historical = Convert.FromBase64String(envelope.Payload);
             ConnectorFormat.Verify(pin.PublicKey, historical, Convert.FromBase64String(envelope.Signature));
@@ -110,22 +135,19 @@ internal static class OfficialRelease
             foreach (var (o, raw) in old.Zip(rawEntries))
             {
                 // Historical SDKs may be incompatible with today's signing host. Keep their authenticated entries.
-                if (o.Manifest.SourceRevision is null || o.Locations.Length != 1 || o.Locations[0] != Location(o.Manifest))
-                    throw new InvalidDataException("Invalid immutable location in the existing official catalog.");
                 offers.Add(o);
                 entries.Add(raw.Clone());
             }
-            if (offers.GroupBy(e => (e.Manifest.Id, e.Manifest.Version)).Any(g => g.Count() != 1))
-                throw new InvalidDataException("Duplicate connector versions in prior catalog.");
         }
         var same = offers.SingleOrDefault(e => e.Manifest.Id == verified.Manifest.Id && e.Manifest.Version == verified.Manifest.Version);
         if (same is not null)
         {
-            if (same.Hash != verified.Hash) throw new InvalidDataException("This version already identifies different bytes.");
+            if (same.Hash != verified.Hash || !Encode(same.Manifest).AsSpan().SequenceEqual(Encode(verified.Manifest)))
+                throw new InvalidDataException("This version already identifies different bytes or metadata.");
             File.Copy(previous, output);
             return;
         }
-        var entry = new CatalogEntry(verified.Manifest, verified.Hash, [Location(verified.Manifest)]);
+        var entry = new CatalogEntry(verified.Manifest, verified.Hash, [ConnectorReleaseRoute.For(verified.Manifest.Id, verified.Manifest.Version).Download]);
         offers.Add(new(entry.Manifest, entry.Hash, Discovery, entry.Locations));
         ConnectorResolver.Plan([entry.Manifest.Id], new(), offers, ConnectorFormat.Fingerprint(pin.PublicKey),
             requestedHashes: new Dictionary<string, string> { [entry.Manifest.Id] = entry.Hash });

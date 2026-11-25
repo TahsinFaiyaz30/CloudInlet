@@ -269,7 +269,8 @@ public sealed partial class MainWindow
             var m = installed.Current.Manifest;
             var latest = Manager.Offers.Where(o => o.Manifest.Id == id && o.Source == installed.Current.Source && o.Manifest.PublicKey == m.PublicKey)
                 .OrderByDescending(o => ConnectorFormat.VersionOf(o.Manifest.Version)).FirstOrDefault()?.Manifest;
-            ConnectorUpdatesPanel.Children.Add(SourceImportDialog.Text($"{m.Name} · Installed {m.Version} · Latest {latest?.Version ?? (installed.Current.Source == ConnectorManager.Local ? "local import" : "check catalog")}"));
+            ConnectorUpdatesPanel.Children.Add(SourceImportDialog.Heading($"{m.Name} connector update"));
+            ConnectorUpdatesPanel.Children.Add(SourceImportDialog.Text($"Installed {m.Version} · Latest {latest?.Version ?? (installed.Current.Source == ConnectorManager.Local ? "local import" : "check catalog")}"));
             var release = latest ?? m;
             ConnectorUpdatesPanel.Children.Add(SourceImportDialog.Text(release.ReleaseNotes + " " + release.CompatibilityIssue, true));
             if (Manager.NeedsRestart(id)) ConnectorUpdatesPanel.Children.Add(SourceImportDialog.Text("Restart required to activate this version."));

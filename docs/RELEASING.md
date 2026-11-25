@@ -127,4 +127,4 @@ On a desktop with Windows Developer Mode already enabled, `test-store-runtime.ps
 
 ## Provider connector releases
 
-The independently versioned Backblaze B2 and OneDrive packs use the distribution repository, its protected publisher environment and a cumulative signed catalog. The app release does not publish those assets. [Official connector release procedure](CONNECTOR_RELEASES.md)
+Backblaze B2 and OneDrive each publish new versions to their own release repository. The central protected publisher maintains one cumulative signed catalog. CloudInlet app releases use the application workflow above. [Official connector release procedure](CONNECTOR_RELEASES.md)

@@ -2,6 +2,8 @@
 
 ## Provider distribution · 25 November 2026
 
+Each provider has its own release repository for future versions. The central signed catalog and both original 1.0.0 downloads retain their URLs. Its protected publisher routes each new version to the selected repository and refreshes the directories from signed metadata. [Central directory](https://github.com/TahsinFaiyaz30/CloudInlet-Connectors) · [Backblaze B2 history](https://github.com/TahsinFaiyaz30/CloudInlet-Connector-B2) · [OneDrive history](https://github.com/TahsinFaiyaz30/CloudInlet-Connector-OneDrive)
+
 The connector-enabled host and provider source are on `codex/separate-provider-packs`. Backblaze B2 and OneDrive 1.0.0 are publicly available as independent signed packs. All four local base formats contain only the shared host and common components. A separate local-validation MSIX acquired both published connectors under Windows package identity. The existing 1.2.1 app release predates the connector host. Microsoft certification of this delivery model remains open. [Verification and package measurements](CONNECTOR_VERIFICATION.md) · [Connector release procedure](CONNECTOR_RELEASES.md) · [Store assessment](STORE_CONNECTORS.md)
 
 ## Version 1.2.1 published and Store resubmission completed — 2026-11-18

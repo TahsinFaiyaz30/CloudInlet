@@ -30,6 +30,15 @@ try
         case ["release-pack" or "release-verify", var id, var revision, var input, var pin, var package]:
             OfficialRelease.Package(args[0] == "release-pack", id, revision, input, pin, package);
             break;
+        case ["release-route", var id, var version]:
+            Console.WriteLine(JsonSerializer.Serialize(ConnectorReleaseRoute.For(id, version), ConnectorFormat.Json));
+            break;
+        case ["release-readme", var pin, var catalog, var directory, var revision, var output]:
+            await ConnectorReleaseRoute.WriteDirectoryAsync(pin, catalog, directory, revision, output);
+            break;
+        case ["release-check-entry", var pin, var catalog, var id, var version, var revision, var package]:
+            await OfficialRelease.VerifyListedAsync(pin, catalog, id, version, revision, package);
+            break;
         case ["release-catalog", var pin, var previous, var pack, var output]:
             await OfficialRelease.MergeCatalogAsync(pin, previous, pack, output);
             break;
@@ -103,7 +112,7 @@ try
             break;
         }
         default:
-            Console.Error.WriteLine("keygen KEY | pack MANIFEST BUILD_DIR KEY OUTPUT | validate PACKAGE | catalog KEY OUTPUT [--locations MAP] PACKAGE... | bootstrap SIGNED_CATALOG CATALOG_URI OUTPUT | assert-core APP | release-pack/release-verify ID COMMIT INPUT PIN PACKAGE | release-catalog PIN PRIOR_OR_DASH PACKAGE OUTPUT");
+            Console.Error.WriteLine("keygen KEY | pack MANIFEST BUILD_DIR KEY OUTPUT | validate PACKAGE | catalog KEY OUTPUT [--locations MAP] PACKAGE... | bootstrap SIGNED_CATALOG CATALOG_URI OUTPUT | assert-core APP | release-pack/release-verify ID COMMIT INPUT PIN PACKAGE | release-catalog PIN PRIOR_OR_DASH PACKAGE OUTPUT | release-route ID VERSION | release-readme PIN CATALOG central/ID DOCS_COMMIT OUTPUT | release-check-entry PIN CATALOG ID VERSION COMMIT PACKAGE");
             return 2;
     }
     return 0;

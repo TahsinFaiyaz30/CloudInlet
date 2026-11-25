@@ -13,7 +13,11 @@ on:
         type: string
         required: true
       validate_only:
-        description: Build and test the release input without using the signing environment
+        description: Test without publishing (1.0.0 verifies the original public download)
+        type: boolean
+        default: false
+      verify_access:
+        description: Also check the protected publisher's access to the selected repository
         type: boolean
         default: false
 permissions:
@@ -26,6 +30,9 @@ jobs:
   build:
     if: github.repository == 'TahsinFaiyaz30/CloudInlet-Connectors' && github.ref == 'refs/heads/main'
     runs-on: windows-2025
+    outputs:
+      version: ${{ steps.manifest.outputs.version }}
+      historical: ${{ steps.manifest.outputs.historical }}
     steps:
       - name: Validate the requested commit
         shell: pwsh
@@ -37,26 +44,42 @@ jobs:
           ref: ${{ inputs.source_commit }}
           path: source
           persist-credentials: false
+      - id: manifest
+        name: Read the version from the selected source commit
+        shell: pwsh
+        run: |
+          if ((git -C source rev-parse HEAD) -cne $env:SOURCE_COMMIT) { throw 'Source revision mismatch.' }
+          $folder = @{b2='BackblazeB2'; onedrive='OneDrive'}[$env:CONNECTOR]
+          if (!$folder) { throw 'Unknown official connector.' }
+          $spec = Get-Content -Raw "source/connectors/$folder/connector.json" | ConvertFrom-Json
+          if ($spec.id -cne $env:CONNECTOR -or $spec.version -cnotmatch '\A(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\z') { throw 'Invalid connector identity.' }
+          "version=$($spec.version)" >> $env:GITHUB_OUTPUT
+          "historical=$(($spec.version -ceq '1.0.0').ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+        if: steps.manifest.outputs.historical != 'true'
         with:
           dotnet-version: 8.0.426
       - name: Use the release SDK
+        if: steps.manifest.outputs.historical != 'true'
         shell: pwsh
         run: dotnet new globaljson --sdk-version 8.0.426 --roll-forward disable
       - name: Check connector contracts and provider behavior
+        if: steps.manifest.outputs.historical != 'true'
         shell: pwsh
         run: dotnet test source/CloudInlet.Tests/CloudInlet.Tests.csproj -c Release --filter 'TestCategory!=LiveProvider&FullyQualifiedName!~Native&(FullyQualifiedName~ConnectorSystemTests|FullyQualifiedName~OneDrive|FullyQualifiedName~B2)' -v:minimal
       - name: Build just the selected provider
+        if: steps.manifest.outputs.historical != 'true'
         shell: pwsh
         run: ./source/scripts/build-connector-input.ps1 -Connector $env:CONNECTOR -SourceCommit $env:SOURCE_COMMIT -OutputDirectory "$env:RUNNER_TEMP/input"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: steps.manifest.outputs.historical != 'true'
         with:
           name: unsigned-input
           path: ${{ runner.temp }}/input/
           if-no-files-found: error
           retention-days: 5
   publish:
-    if: inputs.validate_only != true
+    if: needs.build.outputs.historical == 'true' || inputs.validate_only != true || inputs.verify_access
     needs: build
     runs-on: windows-2025
     environment: connector-production
@@ -65,6 +88,8 @@ jobs:
       queue: max
     permissions:
       contents: write
+    env:
+      CONNECTOR_VERSION: ${{ needs.build.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -92,13 +117,47 @@ jobs:
           dotnet new globaljson --sdk-version 8.0.426 --roll-forward disable
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           dotnet build release-tools/tools/CloudInlet.ConnectorTool/CloudInlet.ConnectorTool.csproj -c Release -v:minimal
+      - id: route
+        name: Resolve the reviewed release destination
+        shell: pwsh
+        run: |
+          $tool = 'release-tools/tools/CloudInlet.ConnectorTool/bin/Release/net8.0-windows/CloudInlet.ConnectorTool.dll'
+          $route = dotnet $tool release-route $env:CONNECTOR $env:CONNECTOR_VERSION | ConvertFrom-Json
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          "repository=$($route.providerRepository.Split('/')[1])" >> $env:GITHUB_OUTPUT
+      - name: Authenticate the original published 1.0.0 download
+        if: needs.build.outputs.historical == 'true'
+        shell: pwsh
+        run: ./distribution/.github/publish.ps1 -Connector $env:CONNECTOR -SourceCommit $env:SOURCE_COMMIT -Version $env:CONNECTOR_VERSION -ToolRoot release-tools -VerifyHistorical
+      - id: publisher
+        name: Issue a short-lived token for this connector repository
+        if: inputs.verify_access || (inputs.validate_only != true && needs.build.outputs.historical != 'true')
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc
+        with:
+          client-id: ${{ vars.CONNECTOR_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CONNECTOR_RELEASE_APP_PRIVATE_KEY }}
+          owner: TahsinFaiyaz30
+          repositories: ${{ steps.route.outputs.repository }}
+          permission-contents: write
+      - name: Check the token's repository scope
+        if: steps.publisher.outcome == 'success'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.publisher.outputs.token }}
+          EXPECTED_REPO: ${{ steps.route.outputs.repository }}
+        run: |
+          $scope = gh api installation/repositories | ConvertFrom-Json
+          if ($LASTEXITCODE -or $scope.total_count -ne 1 -or $scope.repositories[0].full_name -cne "TahsinFaiyaz30/$env:EXPECTED_REPO") { throw 'Unexpected publisher installation scope.' }
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: inputs.validate_only != true && needs.build.outputs.historical != 'true'
         with:
           name: unsigned-input
           path: input
       - name: Sign, publish immutable assets and advance the complete catalog
+        if: inputs.validate_only != true && needs.build.outputs.historical != 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          CONNECTOR_RELEASE_TOKEN: ${{ steps.publisher.outputs.token }}
           CLOUDINLET_CONNECTOR_SIGNING_KEY: ${{ secrets.CONNECTOR_PUBLISHER_PKCS8 }}
-        run: ./distribution/.github/publish.ps1 -Connector $env:CONNECTOR -SourceCommit $env:SOURCE_COMMIT -InputDirectory input -ToolRoot release-tools
+        run: ./distribution/.github/publish.ps1 -Connector $env:CONNECTOR -SourceCommit $env:SOURCE_COMMIT -Version $env:CONNECTOR_VERSION -InputDirectory input -ToolRoot release-tools

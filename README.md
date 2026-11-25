@@ -12,6 +12,8 @@ The local `legacy` branch retains the previous mounted-drive migration helper at
 
 The connector-enabled EXE, MSI, portable and MSIX builds start with the shared engine. Open **Connectors → Install** to download Backblaze B2 or OneDrive. You can also import a signed private pack. **Settings → Updates and about** manages connector updates. [Try the public packs](docs/CONNECTORS.md#try-the-published-connectors) · [Measured package sizes](docs/CONNECTOR_VERIFICATION.md) · [Distribution workflow](docs/CONNECTOR_RELEASES.md) · [Store policy and certification](docs/STORE_CONNECTORS.md)
 
+The central directory lists the current version and SDK compatibility of each provider. [Connector directory](https://github.com/TahsinFaiyaz30/CloudInlet-Connectors) · [Backblaze B2 release history](https://github.com/TahsinFaiyaz30/CloudInlet-Connector-B2) · [OneDrive release history](https://github.com/TahsinFaiyaz30/CloudInlet-Connector-OneDrive)
+
 ## Features
 
 - Notification area icon and activity flyout with live per-file uploads/downloads, waiting counts, recent history, pause/resume, quick settings, and full settings. Activity includes All activity, In progress, Queued, and History filters.
