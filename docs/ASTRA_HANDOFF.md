@@ -1,5 +1,21 @@
 # CloudInlet configuration and verification handoff
 
+## Version 1.2.2 startup fix published and submitted — 2026-11-25
+
+[CloudInlet 1.2.2](https://github.com/TahsinFaiyaz30/CloudInlet/releases/tag/v1.2.2)
+is published from `337c399d35b43d3a7571e2d6b631dbb87f29e59d`. This is the
+non-modular maintenance line: empty profile folders no longer block startup,
+and a retained supported profile with a missing route is verified before reuse.
+Saved data remains protected; startup failures provide copyable support details.
+The separate connector branch is unchanged.
+
+Windows CI, Release/Debug packaging, Store packaging and publication all passed.
+The exact public MSIX (1.2.2.0, x64) was validated and submitted to Partner Center.
+Submission 2 is **In certification / Pre-processing**, with automatic publication
+after approval. See [the publication record](RELEASE_1.2.2_PUBLICATION.md) for
+workflow links, package hash and validation limits. Store approval and customer
+delivery remain pending; no additional native test batch is queued.
+
 ## Version 1.2.1 published and Store resubmission completed — 2026-11-18
 
 [CloudInlet 1.2.1](https://github.com/TahsinFaiyaz30/CloudInlet/releases/tag/v1.2.1)
