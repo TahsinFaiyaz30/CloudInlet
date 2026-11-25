@@ -1,9 +1,21 @@
 using System.Net;
 using System.Security.Cryptography;
+using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace CloudInlet.Core.Connectors;
 
-public sealed record CatalogEntry(ConnectorManifest Manifest, string Hash, string[] Locations);
+public sealed record ConnectorStorePackage(string ProductId, string PackageFamilyName)
+{
+    public void Validate()
+    {
+        if (ProductId is null || !Regex.IsMatch(ProductId, @"\A[A-Z0-9]{12}\z") ||
+            PackageFamilyName is null || !Regex.IsMatch(PackageFamilyName, @"\A[A-Za-z0-9.-]{3,50}_[a-z0-9]{13}\z"))
+            throw new InvalidDataException("Invalid Microsoft Store product ID or package family name.");
+    }
+}
+public sealed record CatalogEntry(ConnectorManifest Manifest, string Hash, string[] Locations,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ConnectorStorePackage? Store = null);
 public sealed record ConnectorCatalog(int Schema, CatalogEntry[] Packages);
 public sealed record SignedConnectorCatalog(string PublicKey, string Payload, string Signature);
 
@@ -37,7 +49,8 @@ public static class ConnectorCatalogReader
                     throw new InvalidDataException("Unpermitted connector download location.");
                 return endpoint.AbsoluteUri;
             }).ToArray();
-            packages.Add(new(entry.Manifest, entry.Hash, uri.AbsoluteUri, locations));
+            entry.Store?.Validate();
+            packages.Add(new(entry.Manifest, entry.Hash, uri.AbsoluteUri, locations, entry.Store));
         }
         return (new(uri.AbsoluteUri, envelope.PublicKey), packages.ToArray());
     }

@@ -36,14 +36,9 @@ internal static class OfficialRelease
 
     private static void CheckOfficial(ConnectorManifest m, string key)
     {
-        var expected = m.Id switch
-        {
-            "b2" => ("CloudInlet.Connectors.BackblazeB2.dll", "CloudInlet.Core.B2.B2Connector"),
-            "onedrive" => ("CloudInlet.Connectors.OneDrive.dll", "CloudInlet.Core.OneDrive.OneDriveConnector"),
-            _ => throw new InvalidDataException("Only the two approved first-party connectors can be published.")
-        };
+        var expected = OfficialProvider.Get(m.Id);
         if (m.Kind != "provider" || m.Publisher != "CloudInlet" || m.PublicKey != key || m.SourceRevision is null ||
-            m.Assembly != expected.Item1 || m.EntryPoint != expected.Item2 || m.CompatibilityIssue is not null)
+            m.Assembly != expected.Assembly || m.EntryPoint != expected.EntryPoint || m.CompatibilityIssue is not null)
             throw new InvalidDataException("Wrong official connector identity, contract, source revision or publisher.");
     }
 
@@ -117,6 +112,40 @@ internal static class OfficialRelease
             !Encode(offer.Manifest).AsSpan().SequenceEqual(Encode(inspected.Manifest)))
             throw new InvalidDataException("The downloaded package or requested source revision differs from the signed catalog.");
         Console.WriteLine($"{id} {version} · {revision} · SHA-256 {offer.Hash}");
+    }
+
+    internal static async Task SetStorePackagesAsync(string pinFile, string catalog, string mappingFile, string output)
+    {
+        var pin = Pin(pinFile);
+        var (_, offers) = await ConnectorCatalogReader.ReadAsync(new Uri(Path.GetFullPath(catalog)).AbsoluteUri, pin.PublicKey, default);
+        var mappings = ConnectorFormat.Parse<Dictionary<string, ConnectorStorePackage>>(File.ReadAllBytes(mappingFile));
+        foreach (var (hash, binding) in mappings)
+        {
+            if (!ConnectorFormat.Digest(hash) || binding is null || !offers.Any(o => o.Hash == hash))
+                throw new InvalidDataException("Store bindings must identify exact packages already present in the signed catalog.");
+            binding.Validate();
+        }
+        if (offers.All(o => o.Store == mappings.GetValueOrDefault(o.Hash)))
+        {
+            File.Copy(catalog, output);
+            return;
+        }
+        var envelope = ConnectorFormat.Parse<SignedConnectorCatalog>(File.ReadAllBytes(catalog));
+        var bytes = Convert.FromBase64String(envelope.Payload);
+        ConnectorFormat.Verify(pin.PublicKey, bytes, Convert.FromBase64String(envelope.Signature));
+        var document = JsonNode.Parse(bytes)!.AsObject();
+        foreach (var node in document["packages"]!.AsArray())
+        {
+            var entry = node!.AsObject();
+            var hash = entry["hash"]!.GetValue<string>();
+            if (mappings.TryGetValue(hash, out var binding)) entry["store"] = JsonSerializer.SerializeToNode(binding, ConnectorFormat.Json);
+            else entry.Remove("store");
+        }
+        var payload = Encode(document);
+        using var key = SigningKey(pin.PublicKey);
+        File.WriteAllBytes(output, Encode(new SignedConnectorCatalog(pin.PublicKey, Convert.ToBase64String(payload),
+            Convert.ToBase64String(key.SignData(payload, HashAlgorithmName.SHA256)))));
+        await ConnectorCatalogReader.ReadAsync(new Uri(Path.GetFullPath(output)).AbsoluteUri, pin.PublicKey, default);
     }
 
     internal static async Task MergeCatalogAsync(string pinFile, string previous, string package, string output)

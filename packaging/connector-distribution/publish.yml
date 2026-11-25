@@ -5,8 +5,7 @@ on:
     inputs:
       connector:
         description: Official provider
-        type: choice
-        options: [b2, onedrive]
+        type: string
         required: true
       source_commit:
         description: Full reviewed CloudInlet source commit
@@ -38,6 +37,11 @@ jobs:
         shell: pwsh
         run: |
           if ($env:SOURCE_COMMIT -cnotmatch '^[0-9a-f]{40}$') { throw 'Supply the exact lowercase Git SHA.' }
+          "CLOUDINLET_CONNECTOR_PROVIDERS=$env:GITHUB_WORKSPACE/distribution/providers.json" >> $env:GITHUB_ENV
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: distribution
+          persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: TahsinFaiyaz30/CloudInlet
@@ -49,12 +53,13 @@ jobs:
         shell: pwsh
         run: |
           if ((git -C source rev-parse HEAD) -cne $env:SOURCE_COMMIT) { throw 'Source revision mismatch.' }
-          $folder = @{b2='BackblazeB2'; onedrive='OneDrive'}[$env:CONNECTOR]
-          if (!$folder) { throw 'Unknown official connector.' }
+          $provider = (Get-Content -Raw -LiteralPath $env:CLOUDINLET_CONNECTOR_PROVIDERS | ConvertFrom-Json -AsHashtable)[$env:CONNECTOR]
+          $folder = $provider.folder
+          if ($folder -cnotmatch '^[A-Za-z0-9][A-Za-z0-9.-]*$') { throw 'Unknown official connector.' }
           $spec = Get-Content -Raw "source/connectors/$folder/connector.json" | ConvertFrom-Json
           if ($spec.id -cne $env:CONNECTOR -or $spec.version -cnotmatch '\A(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\z') { throw 'Invalid connector identity.' }
           "version=$($spec.version)" >> $env:GITHUB_OUTPUT
-          "historical=$(($spec.version -ceq '1.0.0').ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "historical=$(($provider.originalCentralRelease -and $spec.version -ceq '1.0.0').ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
         if: steps.manifest.outputs.historical != 'true'
         with:
@@ -100,6 +105,7 @@ jobs:
         shell: pwsh
         run: |
           $revision = (Get-Content -Raw distribution/.github/publisher.json | ConvertFrom-Json).toolRevision
+          "CLOUDINLET_CONNECTOR_PROVIDERS=$env:GITHUB_WORKSPACE/distribution/providers.json" >> $env:GITHUB_ENV
           if ($revision -cnotmatch '^[0-9a-f]{40}$') { throw 'Unexpected publisher configuration.' }
           "revision=$revision" >> $env:GITHUB_OUTPUT
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

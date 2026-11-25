@@ -42,6 +42,9 @@ try
         case ["release-catalog", var pin, var previous, var pack, var output]:
             await OfficialRelease.MergeCatalogAsync(pin, previous, pack, output);
             break;
+        case ["release-store-bindings", var pin, var previous, var mappings, var output]:
+            await OfficialRelease.SetStorePackagesAsync(pin, previous, mappings, output);
+            break;
         case ["keygen", var path]:
         {
             using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);

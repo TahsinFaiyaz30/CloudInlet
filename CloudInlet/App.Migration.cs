@@ -168,10 +168,12 @@ public partial class App
                     try { plan = manager.Plan(["b2"]); }
                     catch (InvalidDataException) { await manager.RefreshAsync(_lifetime.Token); plan = manager.Plan(["b2"]); }
                 }
-                var review = new ConnectorInstallDialog(plan);
+                var delivery = await StoreConnectorDelivery.ReviewAsync(plan, WinRT.Interop.WindowNative.GetWindowHandle(window), _lifetime.Token);
+                var review = new ConnectorInstallDialog(plan, delivery);
                 if (await window.ShowAsync(review) != ContentDialogResult.Primary) return false;
                 var approved = review.SelectedPlan;
-                await Task.Run(() => manager.InstallAsync(approved, _lifetime.Token), _lifetime.Token);
+                var files = await delivery.AcquireAsync(approved, true, _lifetime.Token);
+                await Task.Run(() => manager.InstallAsync(approved, _lifetime.Token, storeFiles: files), _lifetime.Token);
                 return true;
             }
             catch (Exception e) when (e is not OperationCanceledException)

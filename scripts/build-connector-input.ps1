@@ -1,6 +1,6 @@
 #Requires -Version 7.0
 param(
-    [Parameter(Mandatory)][ValidateSet('b2','onedrive')][string]$Connector,
+    [Parameter(Mandatory)][ValidatePattern('^[a-z][a-z0-9.-]{0,95}$')][string]$Connector,
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{40}$')][string]$SourceCommit,
     [Parameter(Mandatory)][string]$OutputDirectory
 )
@@ -10,7 +10,9 @@ $head = git -C $repo rev-parse HEAD
 if ($LASTEXITCODE -or $head -cne $SourceCommit) { throw 'Check out the requested exact source commit first.' }
 $dirty = git -C $repo status --porcelain --untracked-files=normal
 if ($LASTEXITCODE -or $dirty) { throw 'Official build input must come from a clean checkout.' }
-$folder = if ($Connector -eq 'b2') { 'BackblazeB2' } else { 'OneDrive' }
+$registry = $env:CLOUDINLET_CONNECTOR_PROVIDERS ?? (Join-Path $repo 'packaging/connector-distribution/providers.json')
+$folder = (Get-Content -Raw -LiteralPath $registry | ConvertFrom-Json -AsHashtable)[$Connector].folder
+if ($folder -cnotmatch '^[A-Za-z0-9][A-Za-z0-9.-]*$') { throw 'Missing or invalid provider folder in the distribution registry.' }
 $provider = Join-Path $repo "connectors/$folder"
 $manifest = Get-Content -Raw -LiteralPath (Join-Path $provider 'connector.json') | ConvertFrom-Json
 if ($manifest.id -cne $Connector -or $manifest.version -cnotmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') { throw 'Unexpected provider metadata.' }

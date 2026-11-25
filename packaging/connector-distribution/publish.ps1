@@ -1,6 +1,6 @@
 #Requires -Version 7.0
 param(
-    [Parameter(Mandatory)][ValidateSet('b2','onedrive')][string]$Connector,
+    [Parameter(Mandatory)][ValidatePattern('^[a-z][a-z0-9.-]{0,95}$')][string]$Connector,
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{40}$')][string]$SourceCommit,
     [Parameter(Mandatory)][string]$Version,
     [string]$InputDirectory,

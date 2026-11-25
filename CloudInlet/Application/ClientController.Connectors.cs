@@ -125,7 +125,13 @@ public sealed partial class ClientController
         {
             await Connectors.RefreshAsync(token);
             var ids = AvailableConnectorUpdates(true);
-            if (ids.Length > 0) await Connectors.InstallAsync(Connectors.Plan(ids, update: true), token, automatic: true);
+            if (ids.Length > 0)
+            {
+                var plan = Connectors.Plan(ids, update: true);
+                var delivery = await StoreConnectorDelivery.ReviewAsync(plan, 0, token);
+                var files = await delivery.AcquireAsync(plan, false, token);
+                await Connectors.InstallAsync(plan, token, automatic: true, storeFiles: files);
+            }
         }
         catch (Exception e) when (e is not OperationCanceledException)
         { AddActivity(new(DateTimeOffset.UtcNow, ActivityKind.Error, "", "Connector update needs attention: " + e.Message)); }

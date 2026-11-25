@@ -109,7 +109,7 @@ public sealed partial class MainWindow
         var required = _controller.RequiredConnectors();
         if (required.Length > 0)
             ConnectorActions.Children.Add(ConnectorButton("Install required connectors", async () => await RecoverConnectorsAsync(required)));
-        var ids = new[] { "b2", "onedrive" }.Concat(state.Installed.Keys).Concat(offers.Select(o => o.Manifest.Id)).Distinct();
+        var ids = offers.Select(o => o.Manifest.Id).Concat(state.Installed.Keys).Concat(required).Distinct();
         foreach (var id in ids)
         {
             var installed = state.Installed.GetValueOrDefault(id);
@@ -125,8 +125,8 @@ public sealed partial class MainWindow
                 catch (InvalidDataException e) { planIssue = e.Message; }
             }
             var m = candidate?.Manifest ?? installed?.Current.Manifest ?? latest?.Manifest;
-            var name = m?.Name ?? (id == "b2" ? "Backblaze B2" : "OneDrive");
-            var features = m is null ? (id == "b2" ? "Object storage, folder backup, verified transfers" : "Drive browsing, verified transfers") :
+            var name = m?.Name ?? id;
+            var features = m is null ? "Refresh the catalog to see this connector’s details." :
                 string.Join(" · ", ConnectorFeatures.Where(f => m.Capabilities.HasFlag(f.Capability)).Select(f => f.Label));
             if (!(name + " " + id + " " + features + " " + m?.Publisher).Contains(ConnectorSearch.Text.Trim(), StringComparison.OrdinalIgnoreCase)) continue;
             var panel = new StackPanel { Spacing = 8 };
@@ -164,7 +164,10 @@ public sealed partial class MainWindow
                 if (installed.Previous is not null) actions.Children.Add(ConnectorButton("Roll back", () => { _controller.ChangeConnector(id, "rollback"); return Task.CompletedTask; }));
                 actions.Children.Add(ConnectorButton("Uninstall", async () =>
                 {
-                    if (await ConfirmConnectorAsync($"Uninstall {name}?", SourceImportDialog.Text("Remove this connector's code. CloudInlet retains its accounts, settings and transfer checkpoints."), "Uninstall"))
+                    if (!await ConfirmConnectorAsync($"Uninstall {name}?", SourceImportDialog.Text("Remove this connector's code. CloudInlet retains its accounts, settings and transfer checkpoints."), "Uninstall")) return;
+                    var snapshot = Manager.Snapshot;
+                    ConnectorManager.CheckRemoval(snapshot, id, true, _controller.ConnectorInUse);
+                    if (await StoreConnectorDelivery.RemoveAsync(id, snapshot, PickerOwner, ConnectorToken))
                         _controller.ChangeConnector(id, "uninstall");
                 }));
             }
@@ -195,10 +198,12 @@ public sealed partial class MainWindow
     }
     private async Task<bool> ReviewInstallAsync(ConnectorPlan plan)
     {
-        var dialog = new ConnectorInstallDialog(plan) { XamlRoot = RootGrid.XamlRoot, RequestedTheme = RootGrid.RequestedTheme };
+        var delivery = await StoreConnectorDelivery.ReviewAsync(plan, PickerOwner, ConnectorToken);
+        var dialog = new ConnectorInstallDialog(plan, delivery) { XamlRoot = RootGrid.XamlRoot, RequestedTheme = RootGrid.RequestedTheme };
         if (await ShowModalAsync(dialog) != ContentDialogResult.Primary) return false;
         var selected = dialog.SelectedPlan;
-        await Task.Run(() => Manager.InstallAsync(selected, ConnectorToken), ConnectorToken);
+        var files = await delivery.AcquireAsync(selected, true, ConnectorToken);
+        await Task.Run(() => Manager.InstallAsync(selected, ConnectorToken, storeFiles: files), ConnectorToken);
         await _controller.StartAsync();
         return true;
     }

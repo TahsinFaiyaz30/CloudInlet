@@ -1,0 +1,18 @@
+{
+  "b2": {
+    "name": "Backblaze B2",
+    "repository": "CloudInlet-Connector-B2",
+    "folder": "BackblazeB2",
+    "assembly": "CloudInlet.Connectors.BackblazeB2.dll",
+    "entryPoint": "CloudInlet.Core.B2.B2Connector",
+    "originalCentralRelease": true
+  },
+  "onedrive": {
+    "name": "OneDrive",
+    "repository": "CloudInlet-Connector-OneDrive",
+    "folder": "OneDrive",
+    "assembly": "CloudInlet.Connectors.OneDrive.dll",
+    "entryPoint": "CloudInlet.Core.OneDrive.OneDriveConnector",
+    "originalCentralRelease": true
+  }
+}

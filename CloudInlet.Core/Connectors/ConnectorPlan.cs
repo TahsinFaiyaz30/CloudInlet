@@ -1,7 +1,8 @@
 namespace CloudInlet.Core.Connectors;
 
 /// <summary>Source identifies the subscribed catalog or a manual import. Mirrors belong to that signed catalog.</summary>
-public sealed record ConnectorOffer(ConnectorManifest Manifest, string Hash, string Source, string[] Locations);
+public sealed record ConnectorOffer(ConnectorManifest Manifest, string Hash, string Source, string[] Locations,
+    ConnectorStorePackage? Store = null);
 public sealed record InstalledConnector(ConnectorOffer Current, bool Enabled = true, bool Automatic = true, ConnectorOffer? Previous = null);
 public sealed record ConnectorOwner(string Fingerprint, string Publisher);
 public sealed record ConnectorSource(string Location, string PublicKey);

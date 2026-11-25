@@ -1,0 +1,63 @@
+name: Sign Microsoft Store connector locations
+on:
+  push:
+    branches: [main]
+    paths: [store-packages.json]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  catalog:
+    if: github.repository == 'TahsinFaiyaz30/CloudInlet-Connectors' && github.ref == 'refs/heads/main'
+    runs-on: windows-2025
+    environment: connector-production
+    concurrency:
+      group: official-connector-catalog
+      queue: max
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          path: distribution
+          persist-credentials: false
+      - id: tools
+        shell: pwsh
+        run: |
+          $revision = (Get-Content -Raw distribution/.github/publisher.json | ConvertFrom-Json).toolRevision
+          if ($revision -cnotmatch '^[0-9a-f]{40}$') { throw 'Invalid signing tool revision.' }
+          "revision=$revision" >> $env:GITHUB_OUTPUT
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: TahsinFaiyaz30/CloudInlet
+          ref: ${{ steps.tools.outputs.revision }}
+          path: tools
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+        with:
+          dotnet-version: 8.0.426
+      - name: Build the reviewed catalog tool
+        shell: pwsh
+        run: |
+          dotnet new globaljson --sdk-version 8.0.426 --roll-forward disable
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          dotnet build tools/tools/CloudInlet.ConnectorTool -c Release -v:q
+      - name: Sign the reviewed Store bindings against the current catalog
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLOUDINLET_CONNECTOR_SIGNING_KEY: ${{ secrets.CONNECTOR_PUBLISHER_PKCS8 }}
+        run: |
+          $tool = 'tools/tools/CloudInlet.ConnectorTool/bin/Release/net8.0-windows/CloudInlet.ConnectorTool.dll'
+          $head = git -C distribution rev-parse HEAD
+          $prior = 'distribution/catalog.json'
+          dotnet $tool release-store-bindings tools/connectors/official-source.json $prior distribution/store-packages.json signed.json
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ((Get-FileHash $prior).Hash -ceq (Get-FileHash signed.json).Hash) { return }
+          $mutation = 'mutation($input:CreateCommitOnBranchInput!){createCommitOnBranch(input:$input){commit{oid}}}'
+          $change = @{branch=@{repositoryNameWithOwner=$env:GITHUB_REPOSITORY; branchName='main'}; expectedHeadOid=$head
+            message=@{headline='Publish reviewed Microsoft Store connector locations'}
+            fileChanges=@{additions=@(@{path='catalog.json'; contents=[Convert]::ToBase64String([IO.File]::ReadAllBytes('signed.json'))})}}
+          @{query=$mutation; variables=@{input=$change}} | ConvertTo-Json -Depth 8 -Compress | gh api graphql --input - --silent
+          if ($LASTEXITCODE) { throw 'The distribution branch changed. Rerun this workflow to apply the latest mapping.' }

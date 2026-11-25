@@ -9,6 +9,8 @@
 
 The stable discovery URL and public signing identity apply across all four app distributions. A personal or community publisher can use its own key, repository and catalog. [Signed catalog](https://raw.githubusercontent.com/TahsinFaiyaz30/CloudInlet-Connectors/main/catalog.json) · [Private and community development](CONNECTORS.md)
 
+Register a new official provider in `providers.json` in the central distribution repository. Specify its display name, release repository, reviewed source folder, assembly and entry point. Grant the existing publisher GitHub App access to that provider's repository and dispatch the normal publishing workflow. The host discovers compatible providers, versions, download URLs and optional Microsoft Store locations from the signed catalog on refresh. A provider using the existing SDK can ship independently of the app.
+
 ## Prepare a version
 
 1. Change only the affected provider's independent version, notes and supported SDK range in `connectors/BackblazeB2/connector.json` or `connectors/OneDrive/connector.json`. Versions have three numeric components. The existing first-party ID, publisher key and previous assets identify upgrades of saved connections. Review the provider changes and their dependencies together.

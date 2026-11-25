@@ -55,9 +55,33 @@ try {
     Reject-Tool release-catalog $pin $bad $pack (Join-Path $work 'forged.json')
     Reject-Tool release-readme $pin $bad central $revision (Join-Path $work 'forged.md')
     Reject-Tool release-route personal 1.0.1
+    $registryPath = Join-Path $work 'future-providers.json'
+    $registry = Get-Content -Raw (Join-Path $repo 'packaging/connector-distribution/providers.json') | ConvertFrom-Json -AsHashtable
+    $registry['example'] = @{name='Example';repository='CloudInlet-Connector-Example';folder='Example';assembly='Example.dll';entryPoint='Example.Provider'}
+    $registry | ConvertTo-Json | Set-Content $registryPath -Encoding utf8NoBOM
+    $previousRegistry = $env:CLOUDINLET_CONNECTOR_PROVIDERS
+    try {
+        $env:CLOUDINLET_CONNECTOR_PROVIDERS = $registryPath
+        $newRoute = Check-Tool release-route example 1.0.0 | ConvertFrom-Json
+        if ($newRoute.repository -cne 'TahsinFaiyaz30/CloudInlet-Connector-Example' -or $newRoute.historical) { throw 'A new provider must use its own release history from version 1.0.0.' }
+    } finally { $env:CLOUDINLET_CONNECTOR_PROVIDERS = $previousRegistry }
     Reject-Tool release-route b2 'v1.0.1'
     $central = 'TahsinFaiyaz30/CloudInlet-Connectors'
     $historicalCatalog = $prior
+    $bindings = Join-Path $work 'store-packages.json'
+    $bound = Join-Path $work 'store-bound.json'
+    $b2Hash = $catalog.packages[0].hash
+    @{ $b2Hash = @{productId='9TEST0000001';packageFamilyName='Fixture.B2_0123456789abc'} } | ConvertTo-Json | Set-Content $bindings
+    Check-Tool release-store-bindings $pin $prior $bindings $bound
+    Check-Tool release-check-entry $pin $bound b2 1.0.0 $revision (Join-Path $work 'b2.cipack')
+    $boundBytes = [Convert]::FromBase64String((Get-Content -Raw $bound | ConvertFrom-Json).payload)
+    $boundCatalog = [Text.Encoding]::UTF8.GetString($boundBytes) | ConvertFrom-Json
+    if ($boundCatalog.packages[0].store.productId -cne '9TEST0000001' -or $boundCatalog.packages[1].store) { throw 'Incorrect Store routing.' }
+    $replay = Join-Path $work 'store-replay.json'
+    Check-Tool release-store-bindings $pin $bound $bindings $replay
+    if ((Get-FileHash $bound).Hash -cne (Get-FileHash $replay).Hash) { throw 'Store binding replay changed the signed catalog.' }
+    @{ ('0'*64) = @{productId='9TEST0000001';packageFamilyName='Fixture.B2_0123456789abc'} } | ConvertTo-Json | Set-Content $bindings
+    Reject-Tool release-store-bindings $pin $prior $bindings (Join-Path $work 'unknown-store-binding.json')
     # Exercise the exact original feed shape and migrate one signed location at a time.
     $legacy = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($envelope.payload)) | ConvertFrom-Json
     foreach ($entry in $legacy.packages) { $entry.locations = @($entry.locations[1]) }

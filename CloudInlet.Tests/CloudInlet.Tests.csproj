@@ -45,6 +45,7 @@
     <Compile Include="../CloudInlet/Windows/SystemIntegration.cs" Link="Native/SystemIntegration.cs" />
     <Compile Include="../CloudInlet/Windows/UpdateInstallation.cs" Link="Windows/UpdateInstallation.cs" />
     <Compile Include="../CloudInlet/Windows/StoreStateRoutingPolicy.cs" Link="Windows/StoreStateRoutingPolicy.cs" />
+    <Compile Include="../CloudInlet/Windows/StoreConnectorDelivery.cs" Link="Windows/StoreConnectorDelivery.cs" />
     <Compile Include="../CloudInlet/Windows/LegacyMigrationDiscovery.cs" Link="Windows/LegacyMigrationDiscovery.cs" />
     <Compile Include="../CloudInlet/Windows/WindowsDirectoryRelocation.cs" Link="Windows/WindowsDirectoryRelocation.cs" />
     <Compile Include="../packaging/InstallerShared/UpdateCacheLocation.cs" Link="Packaging/UpdateCacheLocation.cs" />

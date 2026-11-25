@@ -20,6 +20,7 @@
     <Compile Include="../../CloudInlet/Application/ClientController.CloudImports.cs" Link="Application/ClientController.CloudImports.cs" />
     <Compile Include="../../CloudInlet/Application/ClientController.CloudAccounts.cs" Link="Application/ClientController.CloudAccounts.cs" />
     <Compile Include="../../CloudInlet/Application/ClientController.Connectors.cs" Link="Application/ClientController.Connectors.cs" />
+    <Compile Include="../../CloudInlet/Windows/StoreConnectorDelivery.cs" Link="Windows/StoreConnectorDelivery.cs" />
     <Compile Include="../../CloudInlet/Application/ClientController.CloudTransfers.cs" Link="Application/ClientController.CloudTransfers.cs" />
     <Compile Include="../../CloudInlet/Application/ImportJournal.cs" Link="Application/ImportJournal.cs" />
     <Compile Include="../../CloudInlet/Application/CloudImportJournal.cs" Link="Application/CloudImportJournal.cs" />

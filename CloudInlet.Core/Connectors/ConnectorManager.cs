@@ -199,7 +199,8 @@ public sealed class ConnectorManager
             throw new InvalidDataException("Downloaded connector differs from the reviewed signed package.");
     }
 
-    public async Task InstallAsync(ConnectorPlan plan, CancellationToken ct = default, bool automatic = false)
+    public async Task InstallAsync(ConnectorPlan plan, CancellationToken ct = default, bool automatic = false,
+        IReadOnlyDictionary<string, string>? storeFiles = null)
     {
         using var lease = LockDirectory();
         var state = ReadRegistry();
@@ -223,7 +224,7 @@ public sealed class ConnectorManager
                 {
                     if (!Sources.Any(s => s.Location == o.Source && s.PublicKey == o.Manifest.PublicKey) ||
                         !_catalogs.TryGetValue(o.Source, out var catalog) ||
-                        !catalog.Any(entry => entry.Hash == o.Hash && o.Locations.All(entry.Locations.Contains)))
+                        !catalog.Any(entry => entry.Hash == o.Hash && entry.Store == o.Store && o.Locations.All(entry.Locations.Contains)))
                         throw new InvalidDataException("Refresh this trusted catalog and review its signed download locations.");
                 }
             }
@@ -257,7 +258,13 @@ public sealed class ConnectorManager
                 {
                     // The UI reviews the selected publisher and mirror before downloading.
                     var address = ConnectorCatalogReader.Address(o.Locations.First());
-                    Progress?.Invoke($"Downloading {o.Manifest.Name} from {address}");
+                    if (storeFiles is not null && storeFiles.TryGetValue(o.Hash, out var storeFile))
+                    {
+                        if (o.Store is null || o.Source == Local || !Path.IsPathFullyQualified(storeFile))
+                            throw new InvalidDataException("Unexpected Microsoft Store connector package.");
+                        address = new Uri(Path.GetFullPath(storeFile));
+                    }
+                    Progress?.Invoke($"Installing {o.Manifest.Name} from {(address.IsFile ? "a reviewed local package" : address.Host)}");
                     using (var f = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                     { await ConnectorCatalogReader.CopyAsync(address, f, ConnectorPackage.MaxPackageBytes, ct).ConfigureAwait(false); f.Flush(true); }
                     VerifyOffer(o, temp);
@@ -274,6 +281,14 @@ public sealed class ConnectorManager
         finally { CleanUnused(); }
     }
 
+    public static void CheckRemoval(ConnectorRegistry state, string id, bool uninstall, Func<string, string?>? inUse)
+    {
+        if (inUse?.Invoke(id) is { } reason) throw new InvalidOperationException(reason);
+        var dependent = state.Installed.Values.FirstOrDefault(i => (uninstall || i.Enabled) &&
+            i.Current.Manifest.Dependencies.Any(d => !d.Optional && d.Id == id));
+        if (dependent is not null) throw new InvalidOperationException($"{dependent.Current.Manifest.Name} requires this connector.");
+    }
+
     public void Change(string id, string action, Func<string, string?>? inUse = null)
     {
         lock (_gate)
@@ -283,10 +298,7 @@ public sealed class ConnectorManager
             var current = state.Installed.GetValueOrDefault(id) ?? throw new InvalidOperationException("Connector is not installed.");
             if (action is "disable" or "uninstall")
             {
-                if (inUse?.Invoke(id) is { } reason) throw new InvalidOperationException(reason);
-                var dependent = state.Installed.Values.FirstOrDefault(i => (action == "uninstall" || i.Enabled) &&
-                    i.Current.Manifest.Dependencies.Any(d => !d.Optional && d.Id == id));
-                if (dependent is not null) throw new InvalidOperationException($"{dependent.Current.Manifest.Name} requires this connector.");
+                CheckRemoval(state, id, action == "uninstall", inUse);
             }
             switch (action)
             {

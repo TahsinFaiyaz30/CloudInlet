@@ -1,6 +1,23 @@
 using System.Text.RegularExpressions;
 using CloudInlet.Core.Connectors;
 
+internal sealed record OfficialProvider(string Name, string Repository, string Folder, string Assembly, string EntryPoint,
+    bool OriginalCentralRelease = false)
+{
+    private static readonly Lazy<Dictionary<string, OfficialProvider>> Providers = new(() =>
+        ConnectorFormat.Parse<Dictionary<string, OfficialProvider>>(File.ReadAllBytes(
+            Environment.GetEnvironmentVariable("CLOUDINLET_CONNECTOR_PROVIDERS") ?? Path.Combine(AppContext.BaseDirectory, "official-providers.json"))));
+    internal static OfficialProvider Get(string id)
+    {
+        if (!ConnectorFormat.ValidId(id) || !Providers.Value.TryGetValue(id, out var p) || p is null ||
+            string.IsNullOrWhiteSpace(p.Name) || string.IsNullOrWhiteSpace(p.EntryPoint) || !ConnectorFormat.AssemblyFile(p.Assembly) ||
+            !Regex.IsMatch(p.Repository, @"\ACloudInlet-Connector-[A-Za-z0-9][A-Za-z0-9.-]*\z") ||
+            !Regex.IsMatch(p.Folder, @"\A[A-Za-z0-9][A-Za-z0-9.-]*\z"))
+            throw new InvalidDataException("Unknown or invalid provider in the official distribution registry.");
+        return p;
+    }
+}
+
 internal sealed record ConnectorReleaseRoute(string ProviderRepository, string Repository, string Tag,
     string Title, string SourceFolder, string Filename, string? OriginalDownload)
 {
@@ -11,20 +28,15 @@ internal sealed record ConnectorReleaseRoute(string ProviderRepository, string R
 
     internal static ConnectorReleaseRoute For(string id, string version)
     {
-        var (suffix, display, folder) = id switch
-        {
-            "b2" => ("B2", "Backblaze B2", "BackblazeB2"),
-            "onedrive" => ("OneDrive", "OneDrive", "OneDrive"),
-            _ => throw new InvalidDataException("Unknown official connector ID.")
-        };
+        var registration = OfficialProvider.Get(id);
         if (ConnectorFormat.VersionOf(version) < new Version(1, 0, 0))
             throw new InvalidDataException("Official connector history begins at 1.0.0.");
-        var provider = $"TahsinFaiyaz30/CloudInlet-Connector-{suffix}";
+        var provider = $"TahsinFaiyaz30/{registration.Repository}";
         var filename = $"{id}-{version}.cipack";
-        var original = version == "1.0.0"
+        var original = registration.OriginalCentralRelease && version == "1.0.0"
             ? $"https://github.com/{OfficialRelease.Central}/releases/download/{id}-v{version}/{filename}"
             : null;
-        return new(provider, provider, $"v{version}", $"{display} Connector {version}", folder, filename, original);
+        return new(provider, provider, $"v{version}", $"{registration.Name} Connector {version}", registration.Folder, filename, original);
     }
 
     internal static async Task WriteDirectoryAsync(string pin, string catalog, string directory, string guideRevision, string output)
@@ -35,7 +47,7 @@ internal sealed record ConnectorReleaseRoute(string ProviderRepository, string R
         var docs = $"{source}/blob/{guideRevision}/docs";
         var central = $"https://github.com/{OfficialRelease.Central}";
         var lines = new List<string>();
-        var ids = directory == "central" ? new[] { "b2", "onedrive" } : new[] { directory };
+        var ids = directory == "central" ? offers.Select(o => o.Manifest.Id).Distinct().Order().ToArray() : new[] { directory };
         var table = new List<string>
         {
             "| Connector | Version | Platform | Connector SDK | Package | Release notes |",
@@ -45,7 +57,8 @@ internal sealed record ConnectorReleaseRoute(string ProviderRepository, string R
         {
             var history = offers.Where(o => o.Manifest.Id == id).OrderByDescending(o => ConnectorFormat.VersionOf(o.Manifest.Version)).ToArray();
             if (history.Length == 0) throw new InvalidDataException($"The signed directory has no entry for {id}.");
-            if (!history.Any(o => o.Manifest.Version == "1.0.0")) throw new InvalidDataException($"The original {id} release is missing.");
+            if (OfficialProvider.Get(id).OriginalCentralRelease && !history.Any(o => o.Manifest.Version == "1.0.0"))
+                throw new InvalidDataException($"The original {id} release is missing.");
             var latest = history[0].Manifest;
             var route = For(id, latest.Version);
             if (directory != "central")
@@ -74,6 +87,7 @@ internal sealed record ConnectorReleaseRoute(string ProviderRepository, string R
             $"CloudInlet verifies the signed catalog and package. The official publisher fingerprint is `{offers[0].Manifest.Fingerprint}`. [Central directory]({central}) · [Signed catalog]({OfficialRelease.Discovery}) · [Connector development guide]({docs}/CONNECTORS.md)"]);
         if (directory == "central")
             lines.AddRange(["", "## Maintainers", "",
+                "Register providers in `providers.json`. Map an approved Microsoft Store download to its exact connector SHA-256 in `store-packages.json`. The protected workflow signs location changes in the catalog. Compatible connectors and download locations can change independently of CloudInlet.", "",
                 $"Dispatch **Publish a signed connector** with one provider and its reviewed source commit. The protected central workflow signs the package, verifies its public download and updates this directory from the complete signed catalog. [Release procedure]({docs}/CONNECTOR_RELEASES.md) · [Host package measurements]({docs}/CONNECTOR_VERIFICATION.md)"]);
         lines.AddRange(["", "<!-- Generated from the verified official catalog by CloudInlet.ConnectorTool release-readme. -->"]);
         File.WriteAllText(output, string.Join('\n', lines) + "\n");

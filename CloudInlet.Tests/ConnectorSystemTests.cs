@@ -51,12 +51,37 @@ public sealed class ConnectorSystemTests
     }
     private void Catalog(params ConnectorOffer[] offers)
     {
-        var entries = offers.Select(o => new CatalogEntry(o.Manifest, o.Hash, [Path.GetFileName(new Uri(o.Locations[0]).LocalPath)])).ToArray();
+        var entries = offers.Select(o => new CatalogEntry(o.Manifest, o.Hash, [Path.GetFileName(new Uri(o.Locations[0]).LocalPath)], o.Store)).ToArray();
         var bytes = JsonSerializer.SerializeToUtf8Bytes(new ConnectorCatalog(1, entries), ConnectorFormat.Json);
         File.WriteAllBytes(CatalogPath, JsonSerializer.SerializeToUtf8Bytes(new SignedConnectorCatalog(PublicKey,
             Convert.ToBase64String(bytes), Convert.ToBase64String(_key.SignData(bytes, HashAlgorithmName.SHA256))), ConnectorFormat.Json));
     }
     private ConnectorDependency Dep(string id, bool optional = false) => new(id, ConnectorFormat.Fingerprint(PublicKey), V1, optional);
+    [TestMethod]
+    public async Task StoreDeliveryUsesTheSignedCatalogAndRejectsDifferentPackageBytes()
+    {
+        var provider = Pack<StorageComponent>("fixture.future") with { Store = new("9TEST0000001", "Fixture.Provider_0123456789abc") };
+        Catalog(provider);
+        var manager = Manager();
+        await manager.RefreshAsync();
+        var plan = manager.Plan(["fixture.future"]);
+        Assert.AreEqual(provider.Store, plan.Ordered.Single().Store);
+        var storePath = Path.Combine(_root, "store.cipack");
+        File.Move(new Uri(provider.Locations.Single()).LocalPath, storePath);
+        var other = Pack<StorageComponent>("fixture.other");
+        await Assert.ThrowsExceptionAsync<InvalidDataException>(() => manager.InstallAsync(plan, storeFiles:
+            new Dictionary<string, string> { [provider.Hash] = new Uri(other.Locations[0]).LocalPath }));
+        Assert.AreEqual(0, manager.Snapshot.Installed.Count);
+        await manager.InstallAsync(plan, storeFiles: new Dictionary<string, string> { [provider.Hash] = storePath });
+        Assert.AreEqual(provider.Store, manager.Snapshot.Installed["fixture.future"].Current.Store);
+        Catalog(other);
+        await manager.RefreshAsync();
+        var fromFeed = manager.Plan(["fixture.other"]);
+        Assert.IsNull(fromFeed.Ordered.Single().Store);
+        await manager.InstallAsync(fromFeed);
+        Assert.AreEqual(2, manager.Snapshot.Installed.Count);
+    }
+
     [TestMethod]
     public async Task SharedComponentResolvesBeforeProviderAndPreventsRemoval()
     {
