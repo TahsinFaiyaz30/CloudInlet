@@ -2,7 +2,18 @@
 
 The x64 EXE, MSI, portable and MSIX builds use the same in-app catalog and download provider code on demand. Open **Connectors**, choose **Backblaze B2** or **OneDrive**, select **Install**, and review its publisher and source. A new profile contains zero providers. Opening this page fetches signed metadata. Installing the reviewed plan fetches the selected provider and its required dependencies. Backblaze B2 and OneDrive use the same signed package format and transfer SDK. This PC is part of the host. S3, Azure Blob Storage, Google Cloud Storage and Google Drive are prospective connectors.
 
-## Try the desktop development build
+## Try the published connectors
+
+Use the connector-enabled host from this branch to try the public packs. The published 1.2.1 app predates the Connectors page. From the source checkout on Windows x64 with .NET 8, publish to a fresh directory and launch the isolated lab profile. This profile has its own accounts, checkpoints, instance and connector storage.
+
+```powershell
+dotnet publish CloudInlet/CloudInlet.csproj -c Release -r win-x64 --self-contained true -p:PublishTrimmed=false "-p:CloudInletLiveDirectory=$PWD/artifacts/connector-try/marker" -o artifacts/connector-try/App
+& .\artifacts\connector-try\App\CloudInlet.exe --connector-lab --page=connectors
+```
+
+Select a provider and choose **Install**. The dialog shows the signed publisher and immutable release URL. Discovery and installation work before connecting an account. The app downloads each chosen pack into its writable profile. [Public catalog](https://raw.githubusercontent.com/TahsinFaiyaz30/CloudInlet-Connectors/main/catalog.json) · [Package sizes and verification](CONNECTOR_VERIFICATION.md)
+
+## Try the local development fixtures
 
 From the repository root, run PowerShell 7 on Windows with the .NET 8 SDK.
 

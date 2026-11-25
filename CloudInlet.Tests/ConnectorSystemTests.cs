@@ -188,6 +188,28 @@ public sealed class ConnectorSystemTests
         }
     }
     [TestMethod]
+    public async Task ConfiguredSyncRootPreventsDisablingOrRemovingItsProvider()
+    {
+        var manager = Manager();
+        var pack = Pack<B2Connector>("b2");
+        await manager.InstallAsync(manager.Plan(["b2"], imports: [pack]));
+        var storage = new ClientStorage(Path.Combine(_root, "saved-account"));
+        var root = Path.Combine(_root, "backup");
+        storage.SaveSettings(new()
+        {
+            KeyId = "fixture-key", AccountId = "account", BucketId = "bucket", BucketName = "bucket",
+            RootPath = root, RootBindings = [new(root, new string('A', 24), false, "account", "bucket", "")]
+        });
+        var settingsFile = Path.Combine(storage.DirectoryPath, "settings.json");
+        var saved = File.ReadAllBytes(settingsFile);
+        await using var controller = new ClientController(storage, _ => Assert.Fail("Unexpected root removal"), false, _ => null, manager);
+        foreach (var action in new[] { "disable", "uninstall" })
+            StringAssert.Contains(Assert.ThrowsException<InvalidOperationException>(() => controller.ChangeConnector("b2", action)).Message, "sync root");
+        CollectionAssert.AreEqual(saved, File.ReadAllBytes(settingsFile));
+        Assert.IsTrue(manager.Snapshot.Installed["b2"].Enabled);
+    }
+
+    [TestMethod]
     public async Task PrivatePackageCopiesThroughControllerAndUninstallRetainsAccountsAndJournal()
     {
         var manager = Manager(); var p = Pack<ExampleProvider>("example.readonly");

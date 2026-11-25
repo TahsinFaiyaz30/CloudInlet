@@ -1,51 +1,46 @@
 # Connector verification
 
-The following 24 November measurements and fixture results describe the intermediate implementation. The MSIX described in this historical comparison contained both packs. The current source downloads them separately in all editions. [Current distribution procedure](CONNECTOR_RELEASES.md)
+The connector-enabled app was built and checked on Windows x64 on 25 November 2026. The app version is 1.2.1, the SDK is 1.0.0, and the first two connector releases are independently versioned 1.0.0. The tested host is on the source repository's `codex/separate-provider-packs` branch. The published app release and live Store submission were outside this change. [Tested host source](https://github.com/TahsinFaiyaz30/CloudInlet/commit/b55ef1d2bec684ecf521308f72d206acc8c7e940) · [Source signed into both first releases](https://github.com/TahsinFaiyaz30/CloudInlet/commit/8f0e1f465da739b3235fb8590849ee50beb52f77)
 
-Verified on Windows x64 on 24 November 2026 using .NET SDK 8.0.426 and PowerShell 7. The baseline was the clean checkout at `67d5a6b`. Both builds use product version 1.2.1. The version of the connector contract and both first-party packs is 1.0.0.
+## Published downloads
 
-## Download and installed payload sizes
+The production catalog is 3,672 bytes. It authenticates both versioned asset URLs and archive digests. The app pins the catalog URL and the CloudInlet publisher fingerprint `D3E879A5EA4B3F3316472C9A9CFAC000DFDE296E7980D71AB0AD4C358741388A`. Both releases are immutable on GitHub and contain their pack, release notes and checksums. [Signed catalog](https://raw.githubusercontent.com/TahsinFaiyaz30/CloudInlet-Connectors/main/catalog.json)
 
-These are actual byte lengths from locally built Release artifacts. Both sides use the repository's x64, self-contained, untrimmed WinUI publish, identical installer tools, helper, notices and portable packaging settings. The desktop modular column uses the core with an embedded bootstrap for the local signed test catalog. The expanded payload is the sum of the app's release files before installation. NTFS allocation, the uninstaller and user profiles are outside this measure. The Store comparison uses unsigned, local-validation MSIX packages and includes both official provider packs in the modular package.
+| Connector | Download and installed archive bytes | Expanded inventory bytes | SHA-256 of downloaded archive |
+| --- | ---: | ---: | --- |
+| [Backblaze B2 1.0.0](https://github.com/TahsinFaiyaz30/CloudInlet-Connectors/releases/download/b2-v1.0.0/b2-1.0.0.cipack) | 132,453 | 351,391 | `0981A72D6D321135F9702A974D01ADF1CC4FCC0EA17247456E055E93C9C5C692` |
+| [OneDrive 1.0.0](https://github.com/TahsinFaiyaz30/CloudInlet-Connectors/releases/download/onedrive-v1.0.0/onedrive-1.0.0.cipack) | 50,548 | 122,028 | `23811B2777D4FF1564082AC6B235DEDC8AB8DE653C4893D331B5BF9E5654DC85` |
 
-| Artifact | Baseline bytes | Modular bytes | Change in bytes |
+Each publishing job ran 357 focused non-live tests. The signer used the production environment, validated each package against its exact build inputs, downloaded the public assets, and authenticated the resulting catalog. A B2 release replay preserved the signed bytes and the cumulative two-provider catalog. The initial 1.0.0 DLLs retain build-environment-specific debug identifiers. Their signed payloads matched the hosted inputs. The newer unsigned build checks compared both DLLs, licenses and manifest templates byte-for-byte between a clean independent workstation clone and Windows Actions. The signing jobs were skipped on those checks. [B2 publication, first attempt](https://github.com/TahsinFaiyaz30/CloudInlet-Connectors/actions/runs/45456567363/attempts/1) · [OneDrive publication](https://github.com/TahsinFaiyaz30/CloudInlet-Connectors/actions/runs/45457169345) · [Successful B2 replay](https://github.com/TahsinFaiyaz30/CloudInlet-Connectors/actions/runs/45532753152) · [B2 build comparison](https://github.com/TahsinFaiyaz30/CloudInlet-Connectors/actions/runs/45533441607) · [OneDrive build comparison](https://github.com/TahsinFaiyaz30/CloudInlet-Connectors/actions/runs/45533446941)
+
+## Base package sizes
+
+Actual Release byte lengths for the original `67d5a6b` host and the tested connector-enabled host are below. Both use x64 self-contained, untrimmed WinUI/.NET publishing, the installer helper, release notices and the project's compression settings. The MSIX comparison uses unsigned local-validation packages. Expanded sizes sum the app files before installation and exclude NTFS allocation, user data and the Windows uninstaller.
+
+| Artifact | Original bytes | Separate-download bytes | Change |
 | --- | ---: | ---: | ---: |
-| Desktop EXE installer | 64,337,232 | 64,272,256 | −64,976 |
-| Desktop MSI installer | 74,481,646 | 74,486,246 | +4,600 |
-| Portable ZIP | 91,258,269 | 91,171,049 | −87,220 |
-| Expanded desktop payload | 226,726,391 | 226,366,324 | −360,067 |
-| Store MSIX with both providers | 90,972,027 | 91,063,576 | +91,549 |
+| EXE installer | 64,337,232 | 64,260,278 | −76,954 |
+| MSI installer | 74,481,646 | 74,437,094 | −44,552 |
+| Portable ZIP | 91,258,269 | 91,165,427 | −92,842 |
+| MSIX | 90,972,027 | 90,874,292 | −97,735 |
+| Expanded desktop payload | 226,726,391 | 226,362,123 | −364,268 |
 
-| Optional desktop download | Download and installed archive bytes | Expanded inventory bytes |
-| --- | ---: | ---: |
-| Backblaze B2 | 132,438 | 351,305 |
-| OneDrive | 50,533 | 121,942 |
-| Read-only example | 7,052 | 14,299 |
+The intermediate bundled MSIX measured 91,063,576 bytes. The final MSIX saves 189,284 bytes against that build and contains zero providers. The 102,400-byte SDK ships once. B2 and OneDrive each contain one managed provider DLL and a license, alongside the signed manifest. Installing both adds 183,001 compressed bytes and small registry records. Shared Windows App SDK and .NET runtime files account for most of the base footprint.
 
-Installed packs remain compressed and add a small registry record. Each measured pack contains its manifest, signature, provider DLL and license. The 102,400-byte SDK DLL is shared once in the desktop payload. The original providers used direct HTTP clients, so extracting them leaves the shared Windows App SDK and .NET runtimes as the largest part of the download. The modular desktop payload contains 667 files, compared with 664 before.
+The base scanner inspected archives, assembly metadata and managed host resources. An independent comparison decoded all 226,362,117 bytes in the EXE's solid application payload and checked 667 source files, including its installer-specific identity. It compared all 667 decoded MSI cabinet members, all 667 portable ZIP entries, and all 674 local MSIX entries against the publish tree and expected package metadata. EXE and MSI verification used offline decoding. The package audit also rejects a renamed connector DLL or a renamed signed archive. [Package verification commands](CONNECTOR_RELEASES.md#verify-the-base-packages)
 
-## Startup and memory
+## Runtime and recovery
 
-Three launches per build opened the same isolated WinUI Overview/Updates fixture. Each launched a new process and account profile on the same machine. The measurement sampled the process working set and private bytes when Windows first reported its main window. The modular build had zero installed connectors. The runs were consecutive without flushing the Windows file cache.
+- The Release solution built with zero warnings and errors. All **1,640 non-live tests** passed with zero skips, including the desktop native tests. An additional focused controller test passed for rejecting both disable and uninstall while a saved sync-root binding uses the connector. The separate release automation suite passed **141 assertions**. Connector tests cover required and optional components, compatible version fallback, disabled or missing dependencies, conflicts and cycles, package integrity, stale plans, and staged update, interruption and rollback. Packaging fixtures also cover a duplicate immutable version, incorrect signing identity, incorrect source commit and a forged prior catalog.
+- Real OneDrive and B2 connector assemblies completed a verified streaming transfer against simulated Graph and B2 HTTP transports. Both endpoints used the shared job engine. Account-vault, saved-root, missing-provider and journal cases used isolated data. A failed or removed installation retained the existing credential and checkpoint bytes. Live provider accounts and customer upgrade data were outside these checks.
+- The production desktop acquisition check fetched the real signed catalog with zero installed packs, installed and loaded one provider, disabled, re-enabled and removed it, then repeated the sequence for the other. The WinUI test searched, reviewed the publisher and download source, installed and disabled B2, inspected Settings, removed it, then installed both missing endpoints from a single transfer recovery action. The UI fixture used a local copy of the production signed catalog and the real public asset URLs.
+- Windows registered the separate `CloudInlet.LocalValidation` MSIX and activated its packaged host. The host fetched the production HTTPS catalog and exercised the same selective acquisition, activation and removal for each provider under the package's writable LocalState. Windows reported the Store update channel, the existing application ID and startup task. Cleanup removed the test registration and confirmed preservation of account settings, credential bytes and Windows folder mappings. The test used the machine's existing Developer Mode and certificate trust.
+- A developer generated a standalone sample outside the source checkout using the scaffolder. It built against the SDK, signed and validated with a personal DPAPI-protected key and produced a private catalog. Earlier isolated acceptance also imported a standalone pack and verified its sample file through the transfer engine, covered HTTPS mirror selection and a 1.0.0 → 1.1.0 update, and captured 226 screens in the Light WinUI regression. No sample was published as an official connector.
 
-| Measurement | Baseline | Modular |
-| --- | ---: | ---: |
-| First window, all three runs | 1,852 / 1,417 / 1,007 ms | 1,222 / 970 / 1,100 ms |
-| Median time to first window | 1,417 ms | 1,100 ms |
-| Median working set | 147.05 MiB | 149.02 MiB |
-| Median private bytes | 55.24 MiB | 56.25 MiB |
+Three isolated Overview launches per build measured the first top-level window on the same machine. Baseline times were 1,852, 1,417 and 1,007 ms. The final host with zero installed providers took 2,307, 1,038 and 1,009 ms. Median working set was 147.05 MiB before and 149.12 MiB after. Median private bytes were 55.24 MiB before and 55.38 MiB after. These small samples used the normal Windows file cache and cover first-window startup only.
 
-Working set rose about 2 MiB in this sample. These observations cover first-window startup on one machine. A longer cold-start study and resident-memory sampling under a production workload would be needed to generalize them.
+## Evidence and acceptance
 
-## Checks and evidence
+Local records are under `artifacts/connector-delivery/`. See `verified-final.trx`, `final-build.log`, `release-scripts.log`, `public-downloads/`, and `final/` for package sizes and hashes, decoded inventories, private publication checks, startup samples, WinUI captures, packaged activation and cleanup. Baseline evidence and the earlier isolated transport, WinUI and upgrade fixtures are under `artifacts/connector-dev/`.
 
-- The Release and Debug solution builds passed with zero warnings and errors. All 16 connector cases also passed in Debug. The full Release non-live suite passed **1,640 of 1,640** including the desktop native tests. Sixteen cases in `ConnectorSystemTests` exercise package loading, dependency plans, SDK compatibility, signatures, source and publisher continuity, and update and transfer recovery. The repository release-script suite passed **141 assertions**.
-- A job using the separately loaded production OneDrive and B2 assemblies issued range reads against a simulated Graph server, uploaded to a simulated B2 destination, verified the destination digest and completed through the shared journaled transfer engine. Existing provider suites cover authorization, upload sessions, multipart retries, verification and recovery.
-- Isolated profile tests verified that a failed multi-package installation retained the original version, a running provider survived a staged replacement, a restart activated the new version, and rollback restored the previous one. They also covered optional and required dependencies, a compiled component dependency, cycle and publisher rejection, reinstall after disable, protected custom accounts, and byte preservation of existing credentials and checkpoints.
-- A WinUI smoke run searched for B2, reviewed the publisher and source, installed, disabled and uninstalled it, and inspected installed/latest versions in Settings. A transfer draft with both endpoints missing opened a single reviewed plan that installed B2 and OneDrive. The existing full Light-theme WinUI regression run also completed, including its connection-draft restoration checks and 226 captures. The connector flow used an isolated profile and a signed local catalog.
-- The private tutorial generated a standalone project, compiled the starter, signed and validated the archive using a DPAPI-protected personal key, and signed a private catalog. The published manifest schema validated both official archives and private examples. A starter built outside the repository was imported as its own signed pack and copied and verified its file through the real engine.
-- A loopback HTTPS server exercised GitHub-style catalog and asset redirects, a failed primary download, selection of a signed mirror and a staged update from 1.0.0 to 1.1.0 with the previous version retained. The fixture trusted an ephemeral CA in the test process only.
-- The portable archive and MSI file table contain the SDK and desktop bootstrap. Neither contains provider packs. Both official archives inside the local MSIX were byte-identical to the independently downloadable desktop packs. The Store image excluded the desktop feed bootstrap and private signing keys. The Store manifest check passed for the durable application and startup identities, Cloud Files registration and virtualization scope.
-- One intermediate run hit a sharing violation in the existing `NativeConcurrentReadersNeverSeePartialWrites` installer-journal test. It passed three targeted retries and the final full run.
-
-Local evidence is under `artifacts/connector-dev/`. The Release test result is `final-acceptance.trx`. The signed preview and catalog are under `verified/`, and the four connector UI captures are under `ui-final/artifacts/ui-smoke-connectors/`. The comparable installer trees are `distribution/before/` and `distribution/final/`, with the final MSIX under `distribution/final/store-validated/`. The first-window samples are in `baseline-window.json` and `modular-window.json`.
+The connector-enabled host is available as source and local builds. First-party packs are publicly downloadable. Microsoft certification of this extension model, live cloud-account acceptance and a real customer upgrade remain external acceptance work. The private source protocol supports local catalogs and reachable HTTPS endpoints. An authenticated network or VPN can serve a private feed. Interactive HTTP credentials and private GitHub API tokens are outside v1. [Store policy assessment and certification material](STORE_CONNECTORS.md) · [Private connector tutorial](CONNECTORS.md)

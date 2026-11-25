@@ -42,3 +42,26 @@ For an independent end-to-end check from a clean profile, run the verification c
 dotnet build tools/CloudInlet.ConnectorTool -c Release
 dotnet tools/CloudInlet.ConnectorTool/bin/Release/net8.0-windows/CloudInlet.ConnectorTool.dll test-acquisition connectors/official-source.json artifacts/new-acquisition-check
 ```
+
+## Verify the base packages
+
+The release scripts scan the publish directory for provider implementations and embedded packs. To compare the actual EXE, MSI, portable ZIP and local-validation MSIX against that tree, run the independent inventory check below in PowerShell 7. It uses Python 3.9+ and the repository's pinned WiX compiler. It reads the self-contained installer data without installing either desktop product. Set the first three variables to your freshly built candidate directories. The paths below are the recorded verification build.
+
+```powershell
+$app = 'artifacts/connector-delivery/final/App'
+$packages = 'artifacts/connector-delivery/final/packages'
+$store = 'artifacts/connector-delivery/final/store'
+$exe = (Get-ChildItem $packages -Filter '*.exe').FullName
+$msi = (Get-ChildItem $packages -Filter '*.msi').FullName
+$zip = (Get-ChildItem $packages -Filter '*.zip').FullName
+$msix = (Get-ChildItem $store -Filter '*.msix').FullName
+$staging = (Get-ChildItem $packages -Directory -Force -Filter '.installer-*').FullName
+$inspection = Join-Path $PWD ('artifacts/msi-inspect-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $inspection | Out-Null
+& ./scripts/assert-core-payload.ps1 -AppFolder $app
+& ./artifacts/tools/installers/wix/wix.exe msi decompile $msi -x "$inspection/files" -o "$inspection/installer.wxs"
+python scripts/test-connector-distribution-payloads.py --app $app --exe $exe --portable $zip --msix $msix --installer-staging $staging --msi-files "$inspection/files/File"
+& ./scripts/test-store-manifest.ps1 -PackagePath $msix
+```
+
+On a Windows desktop with Developer Mode already enabled, `pwsh -File scripts/test-store-runtime.ps1 -PackagePath $msix -VerifyConnectors` registers only the separate local-validation identity, checks actual public acquisition in package-local storage, then removes that registration. The helper refuses to replace an existing local-validation registration. Keep the official catalog reachable for this test. The EXE audit follows the pinned Inno compiler's solid LZMA2 format and call-instruction transform. [Inno Setup format implementation](https://github.com/jrsoftware/issrc/blob/is-6_7_3/Projects/Src/Compression.Base.pas)

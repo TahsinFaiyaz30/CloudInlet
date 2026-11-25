@@ -9,6 +9,7 @@ dotnet build $sdk -c Release -v:q
 if ($LASTEXITCODE) { throw 'SDK build failed.' }
 $dest = [IO.Path]::GetFullPath($Destination)
 New-Item -ItemType Directory -Path (Join-Path $dest 'sdk') -Force | Out-Null
+@('bin/', 'obj/', '*.dpapi', '*.cipack') | Set-Content -LiteralPath (Join-Path $dest '.gitignore') -Encoding utf8NoBOM
 Copy-Item -LiteralPath (Join-Path $repo 'CloudInlet.ConnectorSdk/bin/Release/net8.0/CloudInlet.ConnectorSdk.dll') -Destination (Join-Path $dest 'sdk')
 $example = Join-Path $repo 'connectors/Example'
 (Get-Content -Raw -LiteralPath (Join-Path $example 'ExampleConnector.csproj')).Replace('<None Include="../../LICENSE"', '<None Update="LICENSE"').Replace('<ProjectReference Include="../../CloudInlet.ConnectorSdk/CloudInlet.ConnectorSdk.csproj" Private="false" />','<Reference Include="CloudInlet.ConnectorSdk"><HintPath>sdk/CloudInlet.ConnectorSdk.dll</HintPath><Private>false</Private></Reference>') | Set-Content -LiteralPath (Join-Path $dest "$Id.csproj") -Encoding utf8NoBOM

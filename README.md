@@ -10,7 +10,7 @@ The local `legacy` branch retains the previous mounted-drive migration helper at
 
 ## Provider connectors
 
-The connector-enabled EXE, MSI, portable and MSIX builds start with the shared engine. Open **Connectors → Install** to download Backblaze B2 or OneDrive. You can also import a signed private pack. **Settings → Updates and about** manages connector updates. [Connector guide](docs/CONNECTORS.md) · [Distribution workflow](docs/CONNECTOR_RELEASES.md) · [Store policy and certification](docs/STORE_CONNECTORS.md)
+The connector-enabled EXE, MSI, portable and MSIX builds start with the shared engine. Open **Connectors → Install** to download Backblaze B2 or OneDrive. You can also import a signed private pack. **Settings → Updates and about** manages connector updates. [Try the public packs](docs/CONNECTORS.md#try-the-published-connectors) · [Measured package sizes](docs/CONNECTOR_VERIFICATION.md) · [Distribution workflow](docs/CONNECTOR_RELEASES.md) · [Store policy and certification](docs/STORE_CONNECTORS.md)
 
 ## Features
 
