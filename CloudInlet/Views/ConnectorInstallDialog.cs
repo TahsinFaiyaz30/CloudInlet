@@ -23,6 +23,9 @@ internal sealed class ConnectorInstallDialog : ContentDialog
             var m = offer.Manifest;
             panel.Children.Add(SourceImportDialog.Heading($"{m.Name} {m.Version}"));
             panel.Children.Add(SourceImportDialog.Text($"{m.Publisher}\nSHA-256 publisher fingerprint {m.Fingerprint}\n{offer.Source}", true));
+            if (m.Kind == "provider") panel.Children.Add(SourceImportDialog.Text($"Features · {m.Capabilities}", true));
+            foreach (var dependency in m.Dependencies)
+                panel.Children.Add(SourceImportDialog.Text($"{(dependency.Optional ? "Optional" : "Requires")} {dependency.Id} [{dependency.Versions.Min}, {dependency.Versions.Max}) · {dependency.PublisherKey}", true));
             if (offer.Locations.Length > 1)
             {
                 var list = new ComboBox { Header = "Download source", ItemsSource = offer.Locations, SelectedIndex = 0,

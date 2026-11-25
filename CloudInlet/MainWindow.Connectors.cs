@@ -116,8 +116,15 @@ public sealed partial class MainWindow
             var available = offers.Where(o => o.Manifest.Id == id &&
                 (installed is null || o.Source == installed.Current.Source && o.Manifest.Fingerprint == installed.Current.Manifest.Fingerprint))
                 .OrderByDescending(o => ConnectorFormat.VersionOf(o.Manifest.Version)).ToArray();
-            var candidate = available.FirstOrDefault();
-            var m = candidate?.Manifest ?? installed?.Current.Manifest;
+            var latest = available.FirstOrDefault();
+            ConnectorOffer? candidate = null;
+            string? planIssue = null;
+            if (latest is not null)
+            {
+                try { candidate = Manager.Plan([id], update: true).Ordered.Single(o => o.Manifest.Id == id); }
+                catch (InvalidDataException e) { planIssue = e.Message; }
+            }
+            var m = candidate?.Manifest ?? installed?.Current.Manifest ?? latest?.Manifest;
             var name = m?.Name ?? (id == "b2" ? "Backblaze B2" : "OneDrive");
             var features = m is null ? (id == "b2" ? "Object storage, folder backup, verified transfers" : "Drive browsing, verified transfers") :
                 string.Join(" · ", ConnectorFeatures.Where(f => m.Capabilities.HasFlag(f.Capability)).Select(f => f.Label));
@@ -125,23 +132,21 @@ public sealed partial class MainWindow
             var panel = new StackPanel { Spacing = 8 };
             panel.Children.Add(SourceImportDialog.Heading(name));
             panel.Children.Add(SourceImportDialog.Text(features, true));
-            var source = installed?.Current.Source ?? candidate?.Source;
+            var source = installed?.Current.Source ?? candidate?.Source ?? latest?.Source;
             panel.Children.Add(SourceImportDialog.Text($"{m?.Publisher ?? "CloudInlet"} · {source ?? "Catalog unavailable"}", true));
             if (m is not null) panel.Children.Add(SourceImportDialog.Text($"SDK [{m.Sdk.Min}, {m.Sdk.Max}) · {string.Join(", ", m.Platforms)} {string.Join(", ", m.Architectures)}", true));
-            if (installed is not null || candidate is not null)
-                panel.Children.Add(SourceImportDialog.Text($"Installed {installed?.Current.Manifest.Version ?? "—"} · Latest {candidate?.Manifest.Version ?? installed?.Current.Manifest.Version}"));
-            var issue = installed is null ? m?.CompatibilityIssue : Manager.Issue(id);
-            if (candidate is not null && installed is null)
-            {
-                try { _ = Manager.Plan([id]); }
-                catch (Exception e) { issue = e.Message; }
-            }
+            if (installed is not null || latest is not null)
+                panel.Children.Add(SourceImportDialog.Text($"Installed {installed?.Current.Manifest.Version ?? "—"} · Latest {latest?.Manifest.Version ?? installed?.Current.Manifest.Version}"));
+            if (candidate is not null && candidate.Manifest.Version != latest?.Manifest.Version)
+                panel.Children.Add(SourceImportDialog.Text($"Compatible version {candidate.Manifest.Version}. {latest?.Manifest.CompatibilityIssue}", true));
+            if (planIssue is not null) panel.Children.Add(SourceImportDialog.Text(planIssue));
+            var issue = installed is null ? null : Manager.Issue(id);
             if (issue is not null) panel.Children.Add(SourceImportDialog.Text(issue));
             if (Manager.NeedsRestart(id)) panel.Children.Add(SourceImportDialog.Text("Restart CloudInlet to activate this change."));
             var actions = new ActionWrapPanel();
             if (installed is null && candidate is not null && issue is null)
                 actions.Children.Add(ConnectorButton("Install", async () => await ReviewInstallAsync(Manager.Plan([id]))));
-            else if (installed is null && candidate is null)
+            else if (installed is null && latest is null)
                 panel.Children.Add(SourceImportDialog.Text("Refresh the configured publisher catalog to install this connector.", true));
             if (installed is not null)
             {
@@ -268,7 +273,17 @@ public sealed partial class MainWindow
             var release = latest ?? m;
             ConnectorUpdatesPanel.Children.Add(SourceImportDialog.Text(release.ReleaseNotes + " " + release.CompatibilityIssue, true));
             if (Manager.NeedsRestart(id)) ConnectorUpdatesPanel.Children.Add(SourceImportDialog.Text("Restart required to activate this version."));
-            if (updates.Contains(id)) ConnectorUpdatesPanel.Children.Add(ConnectorButton("Update " + m.Name, async () => await ReviewInstallAsync(Manager.Plan([id], true))));
+            if (updates.Contains(id))
+            {
+                try
+                {
+                    var target = Manager.Plan([id], true).Ordered.Single(o => o.Manifest.Id == id).Manifest;
+                    if (target.Version != release.Version)
+                        ConnectorUpdatesPanel.Children.Add(SourceImportDialog.Text($"Compatible update {target.Version} · {target.ReleaseNotes}", true));
+                    ConnectorUpdatesPanel.Children.Add(ConnectorButton("Update " + m.Name, async () => await ReviewInstallAsync(Manager.Plan([id], true))));
+                }
+                catch (InvalidDataException e) { ConnectorUpdatesPanel.Children.Add(SourceImportDialog.Text(e.Message)); }
+            }
             if (installed.Current.Source == ConnectorManager.Local) continue;
             var preference = new CheckBox { Content = "Automatically update " + m.Name, IsChecked = installed.Automatic, IsEnabled = !_connectorBusy };
             preference.Click += async (_, _) => await RunConnectorActionAsync(() => { Manager.Change(id, "automatic"); return Task.CompletedTask; });

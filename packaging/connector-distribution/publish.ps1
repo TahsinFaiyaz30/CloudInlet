@@ -40,7 +40,7 @@ function Get-Catalog {
 # Repository admins enable immutability at provisioning. The contents-only token verifies each published release below.
 # Listing every page distinguishes an absent tag from a failed request, and includes drafts.
 $tags = @(Invoke-GitHub api --paginate "$api/releases?per_page=100" --jq '.[].tag_name')
-$release = if ($tag -cin $tags) { Invoke-GitHub release view $tag --repo $repo --json isDraft,assets | ConvertFrom-Json }
+$release = if ($tag -cin $tags) { Invoke-GitHub release view $tag --repo $repo --json 'isDraft,assets' | ConvertFrom-Json }
 $assetNames = @($release.assets | Where-Object { $_ } | ForEach-Object name)
 $expected = @($filename, 'release-notes.md', 'SHA256SUMS.txt')
 if (@($assetNames | Where-Object { $_ -cnotin $expected }).Count) { throw 'Existing release contains unexpected assets.' }

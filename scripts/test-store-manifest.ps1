@@ -3,11 +3,11 @@ $ErrorActionPreference = 'Stop'
 $path = [IO.Path]::GetFullPath($PackagePath)
 $archive = [IO.Compression.ZipFile]::OpenRead($path)
 try {
-    if ($archive.GetEntry('CloudInlet.ConnectorSdk.dll')) {
-        if (!$archive.GetEntry('connector-source.json')) { throw 'The signed catalog bootstrap is missing.' }
-        if ($archive.Entries.FullName -match '(?i)(\.cipack$|\.dpapi$|^StoreConnectors/|(?:^|/)CloudInlet\.Connectors\..*\.dll$|(?:^|/)ExampleConnector\.dll$)') {
-            throw 'The MSIX contains provider code or private signing material.'
-        }
+    if (!$archive.GetEntry('CloudInlet.ConnectorSdk.dll') -or !$archive.GetEntry('connector-source.json')) {
+        throw 'Every base MSIX requires the shared SDK and signed-catalog bootstrap.'
+    }
+    if ($archive.Entries.FullName -match '(?i)(\.cipack$|\.dpapi$|^StoreConnectors/|(?:^|/)CloudInlet\.Connectors\..*\.dll$|(?:^|/)ExampleConnector\.dll$)') {
+        throw 'The MSIX contains provider code or private signing material.'
     }
     $entry = $archive.GetEntry('AppxManifest.xml')
     if (!$entry) { throw 'Package manifest missing.' }

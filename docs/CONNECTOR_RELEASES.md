@@ -5,7 +5,7 @@ The CloudInlet repository owns the SDK, host, provider implementation, build too
 ## Prepare a version
 
 1. Change only the affected provider's independent version, notes and supported SDK range in `connectors/BackblazeB2/connector.json` or `connectors/OneDrive/connector.json`. Versions have three numeric components. The existing first-party ID, publisher key and previous assets identify upgrades of saved connections. Review the provider changes and their dependencies together.
-2. Check out the full reviewed commit in a clean Windows x64 checkout with PowerShell 7 and the .NET 8.0.426 SDK. Run the build and non-live tests described in AGENTS.md. To reproduce the unsigned input for one provider, use the following commands. The build includes the connector DLL and declared license. The source commit goes in the signed manifest and its documentation link.
+2. Check out the full reviewed commit in a clean Windows x64 checkout with PowerShell 7 and the .NET 8.0.426 SDK. Run the build and non-live tests described in AGENTS.md. Use the following commands to build one provider's release input. New releases use deterministic IL, omit developer-machine PDB identifiers, and normalize packaged text to LF. The source commit goes in the signed manifest and its documentation link. For the initial 1.0.0 packs, the exact Windows Actions build inputs include portable-PDB identifiers. Retrieve the original workflow artifact or rerun its build from the signed commit for a byte-for-byte comparison.
 
    ```powershell
    $revision = git rev-parse HEAD
@@ -19,6 +19,8 @@ The CloudInlet repository owns the SDK, host, provider implementation, build too
    gh workflow run publish.yml --repo TahsinFaiyaz30/CloudInlet-Connectors --ref main -f connector=b2 -f source_commit=$revision
    gh run list --repo TahsinFaiyaz30/CloudInlet-Connectors --workflow publish.yml --limit 4
    ```
+
+   Add `-f validate_only=true` for an unsigned build and test run. Download its `unsigned-input` artifact with `gh run download RUN_ID --repo TahsinFaiyaz30/CloudInlet-Connectors --name unsigned-input --dir artifacts/unsigned-input`. To verify a published pack against its signed source revision and complete build inventory, run `dotnet $tool release-verify b2 $revision artifacts/unsigned-input connectors/official-source.json PATH_TO_PACK`, where `$tool` is the Release ConnectorTool DLL below. Release replay compares the existing package and catalog before completing successfully. Publisher jobs queue while another job is committing the catalog. [GitHub Actions concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
 
 ## Signing and repository configuration
 

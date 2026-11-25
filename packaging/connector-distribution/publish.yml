@@ -1,5 +1,5 @@
 name: Publish a signed connector
-run-name: Publish ${{ inputs.connector }} from ${{ inputs.source_commit }}
+run-name: ${{ inputs.validate_only && 'Verify' || 'Publish' }} ${{ inputs.connector }} from ${{ inputs.source_commit }}
 on:
   workflow_dispatch:
     inputs:
@@ -12,11 +12,12 @@ on:
         description: Full reviewed CloudInlet source commit
         type: string
         required: true
+      validate_only:
+        description: Build and test the release input without using the signing environment
+        type: boolean
+        default: false
 permissions:
   contents: read
-concurrency:
-  group: official-connector-catalog
-  cancel-in-progress: false
 env:
   SOURCE_COMMIT: ${{ inputs.source_commit }}
   CONNECTOR: ${{ inputs.connector }}
@@ -55,9 +56,13 @@ jobs:
           if-no-files-found: error
           retention-days: 5
   publish:
+    if: inputs.validate_only != true
     needs: build
     runs-on: windows-2025
     environment: connector-production
+    concurrency:
+      group: official-connector-catalog
+      queue: max
     permissions:
       contents: write
     steps:

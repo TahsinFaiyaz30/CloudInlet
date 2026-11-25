@@ -102,7 +102,8 @@ public sealed class ConnectorSystemTests
     {
         var current = Pack<ExampleProvider>("example.readonly");
         var future = Pack<DependentProvider>("fixture.future");
-        Catalog(current, future);
+        var nextMajor = Pack<ExampleProvider>("example.readonly", "2.0.0", sdk: new("2.0.0", "3.0.0"));
+        Catalog(current, future, nextMajor);
         var envelope = ConnectorFormat.Parse<SignedConnectorCatalog>(File.ReadAllBytes(CatalogPath));
         var payload = System.Text.Json.Nodes.JsonNode.Parse(Convert.FromBase64String(envelope.Payload))!;
         payload["packages"]![1]!["manifest"]!["capabilities"] = "Browse, FutureFeature";
@@ -112,6 +113,7 @@ public sealed class ConnectorSystemTests
         var manager = Manager();
         await manager.RefreshAsync();
         StringAssert.Contains(Assert.ThrowsException<InvalidDataException>(() => manager.Plan(["fixture.future"])).Message, "Update CloudInlet");
+        Assert.AreEqual(current.Hash, manager.Plan(["example.readonly"], update: true).Ordered.Single().Hash);
         await manager.InstallAsync(manager.Plan(["example.readonly"]));
         Assert.AreEqual("example.readonly", manager.Provider("example.readonly").Id);
         Assert.IsFalse(ConnectorFormat.ValidId("con.private"));

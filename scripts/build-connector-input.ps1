@@ -16,11 +16,18 @@ $manifest = Get-Content -Raw -LiteralPath (Join-Path $provider 'connector.json')
 if ($manifest.id -cne $Connector -or $manifest.version -cnotmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') { throw 'Unexpected provider metadata.' }
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 if (Test-Path -LiteralPath $output) { throw 'Select a new output directory.' }
-dotnet build (Join-Path $provider "CloudInlet.Connectors.$folder.csproj") -c Release -v:minimal "-p:Version=$($manifest.version)" -p:ContinuousIntegrationBuild=true "-p:PathMap=$repo=/_/source" "-p:SourceRevisionId=$SourceCommit"
+# Portable PDB checksums can incorporate compiler inputs specific to the build host.
+# Distribute deterministic IL and keep the exact source revision in the package.
+dotnet build (Join-Path $provider "CloudInlet.Connectors.$folder.csproj") -c Release --no-incremental -v:minimal "-p:Version=$($manifest.version)" -p:ContinuousIntegrationBuild=true -p:Deterministic=true -p:DebugType=None -p:DebugSymbols=false "-p:PathMap=$repo=/_/source" "-p:SourceRevisionId=$SourceCommit"
 if ($LASTEXITCODE) { throw 'Connector compilation failed.' }
 New-Item -ItemType Directory -Path $output | Out-Null
 Copy-Item -LiteralPath (Join-Path $provider 'connector.json') -Destination $output
 foreach ($name in $manifest.files.PSObject.Properties.Name) {
     if ($name -cnotmatch '^(?:[a-zA-Z0-9_.-]+\.dll|LICENSE\.txt|README\.md)$' -or $name.StartsWith('.')) { throw 'Unexpected payload filename.' }
-    Copy-Item -LiteralPath (Join-Path $provider "bin/Release/net8.0/$name") -Destination $output
+    $built = Join-Path $provider "bin/Release/net8.0/$name"
+    if ($name.EndsWith('.dll')) {
+        Copy-Item -LiteralPath $built -Destination $output
+    } else {
+        [IO.File]::WriteAllText((Join-Path $output $name), [IO.File]::ReadAllText($built).ReplaceLineEndings("`n"), [Text.UTF8Encoding]::new($false))
+    }
 }
