@@ -6,7 +6,6 @@ using CloudInlet.Core;
 using CloudInlet.Core.B2;
 using CloudInlet.Core.Migration;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
-using Microsoft.Win32.SafeHandles;
 
 namespace CloudInlet.Tests;
 
@@ -38,7 +37,7 @@ public sealed class CloudPrefixExternalWriterAcceptanceTests
         var token = deadline.Token;
         using var transport = new CloudPrefixAcceptanceTransport(directory);
         using var store = new B2CloudStore(transport);
-        var guards = new List<SafeFileHandle>();
+        IDisposable? directoryGuard = null;
         var stage = "preflight";
         var succeeded = false;
         var visibleConflict = false;
@@ -48,7 +47,7 @@ public sealed class CloudPrefixExternalWriterAcceptanceTests
         CloudPrefixAcceptanceFailure? providerFailure = null;
         try
         {
-            ClientRegistrationMigration.PinAncestors(directory, guards);
+            directoryGuard = SavedProfileLocation.PinDirectory(directory);
             var account = await store.ConnectAsync(ReadCredentials(), token);
             var buckets = await store.ListBucketsAsync(token);
             Assert.AreEqual(1, buckets.Count);
@@ -207,7 +206,7 @@ public sealed class CloudPrefixExternalWriterAcceptanceTests
                 }, new JsonSerializerOptions { WriteIndented = true }));
                 TestContext.AddResultFile(path);
             }
-            finally { foreach (var guard in guards) guard.Dispose(); }
+            finally { directoryGuard?.Dispose(); }
         }
     }
 

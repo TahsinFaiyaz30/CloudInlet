@@ -17,6 +17,8 @@ public partial class App : Microsoft.UI.Xaml.Application
 {
     public static MainWindow? MainWindow { get; private set; }
     private ClientController? _controller;
+    private string _clientDataDirectory = BuildInfo.DefaultDataDirectory;
+    private StartupIssueWindow? _startupIssue;
     private UpdateCoordinator? _updates;
     private TrayWindow? _trayWindow;
     private TrayContextMenuWindow? _trayContextMenu;
@@ -64,16 +66,6 @@ public partial class App : Microsoft.UI.Xaml.Application
     protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
         var commandLine = Environment.GetCommandLineArgs();
-        if (commandLine.Any(value => value.StartsWith("--exe-migration-progress=", StringComparison.Ordinal)))
-        {
-            await InstallationRecoveryObserver.RunAsync(commandLine);
-            Exit(); return;
-        }
-        if (commandLine.Any(value => value.StartsWith("--installer-progress=", StringComparison.Ordinal)))
-        {
-            await InstallerProgressObserver.RunAsync(commandLine);
-            Exit(); return;
-        }
         if (commandLine.FirstOrDefault(value => value.StartsWith("--wait-for-exit=", StringComparison.Ordinal)) is { } waitArgument)
         {
             var fields = waitArgument[16..].Split(',');
@@ -250,17 +242,13 @@ public partial class App : Microsoft.UI.Xaml.Application
         }
         try
         {
-            if (!(isSmoke || isLive) && await InstallationRecoveryObserver.OpenPendingAsync())
-            { Exit(); return; }
-            if (!(isSmoke || isLive) && !await PrepareClientStateAsync(commandLine.Contains("--review-migration")))
-            { await QuitAsync(); return; }
             if (!(isSmoke || isLive))
             {
+                _startupStage = "Open saved profile";
+                _clientDataDirectory = SavedProfileLocation.Resolve(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    BuildInfo.Flavor, UpgradeBaseline.Require);
                 RegisterNotifications();
                 ReadNotificationLifecycleActivation();
-                try { SystemIntegration.MigrateLegacyStartupRegistration(); }
-                catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Security.SecurityException)
-                { /* The legacy apphost keeps the original startup entry usable if Windows blocks migration. */ }
             }
             _startupStage = "Initialize client state";
             // Validation/live tools share this private legacy path and pipe protocol across apphost aliases.
@@ -270,8 +258,6 @@ public partial class App : Microsoft.UI.Xaml.Application
             _controller = new ClientController(isolatedStorage, manageStartup: !(isSmoke || isLive));
             _startupStage = "Create main window";
             MainWindow = new MainWindow(_controller);
-            _migrationWindow?.Finish(); _migrationWindow = null;
-            if (_migrationInventoryNotice is not null) MainWindow.ShowMigrationInventoryNotice(_migrationInventoryNotice);
             if (!(isSmoke || isLive))
             {
                 try
@@ -280,14 +266,13 @@ public partial class App : Microsoft.UI.Xaml.Application
                     var updateDirectory = Path.Combine(_clientDataDirectory, "Updates");
                     var installer = installation.CanInstall ? new WindowsUpdateInstaller(installation, updateDirectory,
                         ReadRestartPreferenceAsync,
-                        () => MainWindow.DispatcherQueue.TryEnqueue(() => _ = QuitAsync()), ReviewInstallationMigrationAsync) : null;
+                        () => MainWindow.DispatcherQueue.TryEnqueue(() => _ = QuitAsync())) : null;
                     _updates = new UpdateCoordinator(installation.Identity, updateDirectory, installer,
                         verifyMaintenance: () => WindowsUpdateInstaller.EnsureRecoveryAllowsCleanup(updateDirectory, BuildInfo.Flavor));
                     _updates.CheckConnectorUpdates = _controller.CheckAutomaticConnectorsAsync;
                     _notificationCanInstallUpdates = installation.CanInstall;
                     _updates.Changed += Updates_NotificationChanged;
                     MainWindow.AttachUpdates(_updates, installation, updateDirectory);
-                    MainWindow.MigrationReviewRequested += () => _ = RestartForMigrationAsync();
                     _ = StartUpdatesAsync();
                 }
                 catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException)
@@ -342,8 +327,8 @@ public partial class App : Microsoft.UI.Xaml.Application
         }
         catch (Exception error)
         {
-            _migrationWindow ??= new MigrationWindow();
-            try { await _migrationWindow.ShowErrorAsync(error); }
+            _startupIssue ??= new StartupIssueWindow();
+            try { await _startupIssue.ShowErrorAsync(error); }
             finally { await QuitAsync(); }
             return;
         }
@@ -360,7 +345,6 @@ public partial class App : Microsoft.UI.Xaml.Application
             try
             {
                 if (commandLine.Contains("--ui-smoke-connectors")) await MainWindow.RunConnectorUiValidationAsync(output);
-                else if (commandLine.Contains("--ui-smoke-migration")) await MainWindow.RunMigrationUiValidationAsync(output);
                 else if (commandLine.Contains("--ui-smoke-updates")) await MainWindow.RunUpdateOnlyUiValidationAsync(output);
                 else if (commandLine.Contains("--ui-smoke-layout")) await MainWindow.RunResponsiveUiValidationAsync(output);
                 else
@@ -386,7 +370,6 @@ public partial class App : Microsoft.UI.Xaml.Application
         "CloudBay", "UiLive", "Client");
     private static string UiSmokeOutput => Path.Combine(Environment.CurrentDirectory, "artifacts",
         Environment.GetCommandLineArgs().Contains("--ui-smoke-connectors") ? "ui-smoke-connectors" :
-        Environment.GetCommandLineArgs().Contains("--ui-smoke-migration") ? "ui-smoke-migration" :
         Environment.GetCommandLineArgs().Contains("--ui-smoke-updates") ? "ui-smoke-updates" :
         Environment.GetCommandLineArgs().Contains("--ui-smoke-tray") ? "ui-smoke-tray" : "ui-smoke");
 
@@ -485,7 +468,6 @@ public partial class App : Microsoft.UI.Xaml.Application
                 if (Environment.GetCommandLineArgs().Contains("--ui-smoke-updates")) launch.ArgumentList.Add("--ui-smoke-updates");
                 if (Environment.GetCommandLineArgs().Contains("--ui-smoke-layout")) launch.ArgumentList.Add("--ui-smoke-layout");
                 if (Environment.GetCommandLineArgs().Contains("--ui-smoke-connectors")) launch.ArgumentList.Add("--ui-smoke-connectors");
-                if (Environment.GetCommandLineArgs().Contains("--ui-smoke-migration")) launch.ArgumentList.Add("--ui-smoke-migration");
                 var initialPage = Environment.GetCommandLineArgs().FirstOrDefault(arg => arg.StartsWith("--page=", StringComparison.Ordinal));
                 if (initialPage is not null) launch.ArgumentList.Add(initialPage);
                 using var process = Process.Start(launch) ?? throw new InvalidOperationException("Could not launch the isolated UI validation process.");
@@ -619,8 +601,7 @@ public partial class App : Microsoft.UI.Xaml.Application
         _trayContextMenu?.Close();
         if (_updates is not null) { _updates.Changed -= Updates_NotificationChanged; await _updates.DisposeAsync(); }
         if (_controller is not null) await _controller.DisposeAsync();
-        _stateLease?.Dispose(); _stateLease = null;
-        _migrationWindow?.Finish(); _migrationWindow = null;
+        _startupIssue?.Finish();
         _trayWindow?.Close();
         if (MainWindow is not null) { MainWindow.AllowClose = true; MainWindow.Close(); }
         _singleInstance?.Dispose();
@@ -634,7 +615,7 @@ public partial class App : Microsoft.UI.Xaml.Application
             try
             {
                 var failure = await Task.Run(() => WindowsUpdateInstaller.ReadFailureAndPruneHosts(
-                    Path.Combine(_clientDataDirectory, "Updates"), InstallerProgressHost.RuntimeRoot(BuildInfo.Flavor), BuildInfo.Flavor), _lifetime.Token);
+                    Path.Combine(_clientDataDirectory, "Updates"), BuildInfo.Flavor), _lifetime.Token);
                 if (failure is not null) MainWindow?.ShowUpdateInitializationError(failure);
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or System.Security.Cryptography.CryptographicException)

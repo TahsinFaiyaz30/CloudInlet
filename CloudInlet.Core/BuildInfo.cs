@@ -21,9 +21,9 @@ public static class BuildInfo
     // Published installations and Store registrations already own these identities.
     public const string StartupTaskId = "CloudBayStartup";
     public static string Version => typeof(BuildInfo).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
-    // Preserve secure accounts, recovery journals and cached old-updater handoffs in place.
+    // Existing profiles select their established location at startup.
     public static string DefaultDataDirectory => Flavor == "Debug"
-        ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CloudBay", "Debug", "Client")
-        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CloudBay", "Client");
+        ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CloudInlet", "Debug", "Client")
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CloudInlet", "Client");
     public static string DefaultRootPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ProductName);
 }

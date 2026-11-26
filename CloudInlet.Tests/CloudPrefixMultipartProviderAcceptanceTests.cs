@@ -5,7 +5,6 @@ using CloudInlet.Core;
 using CloudInlet.Core.B2;
 using CloudInlet.Core.Migration;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
-using Microsoft.Win32.SafeHandles;
 
 namespace CloudInlet.Tests;
 
@@ -39,8 +38,8 @@ public sealed partial class CloudPrefixMultipartProviderAcceptanceTests
         var directory = Path.Combine(evidenceRoot!, "cloud-prefix-multipart-acceptance-" + run.ToString("N"));
         if (Directory.Exists(directory)) throw new IOException("Fresh multipart evidence directory already exists.");
         Directory.CreateDirectory(directory);
-        var guards = new List<SafeFileHandle>();
-        ClientRegistrationMigration.PinAncestors(directory, guards);
+        IDisposable? directoryGuard = null;
+        directoryGuard = SavedProfileLocation.PinDirectory(directory);
         using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(40));
         var token = deadline.Token;
         var seed = new byte[CloudPrefixMultipartAcceptanceTransport.SeedLength];
@@ -213,7 +212,7 @@ public sealed partial class CloudPrefixMultipartProviderAcceptanceTests
                 }, new JsonSerializerOptions { WriteIndented = true }));
                 TestContext.AddResultFile(Path.Combine(directory, "report.json"));
             }
-            finally { CryptographicOperations.ZeroMemory(seed); foreach (var guard in guards) guard.Dispose(); }
+            finally { CryptographicOperations.ZeroMemory(seed); directoryGuard?.Dispose(); }
         }
     }
 

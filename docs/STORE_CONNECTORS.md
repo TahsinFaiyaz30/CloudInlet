@@ -12,6 +12,8 @@ MSIX writes archives, registry and staging files under `ApplicationData.Current.
 
 ## CloudInlet 1.2.5 submission notes
 
+The existing `unvirtualizedResources` capability lets upgraded Store installations continue using the same saved accounts, backup configuration and Explorer folder registrations as 1.2.2. The host reads historical profile-location records to find the existing data. Connector code is installed separately in package-local storage.
+
 Suggested first listing sentence: “CloudInlet downloads the storage connector you select before connecting to Backblaze B2 or OneDrive. An internet connection and an account with the selected provider are required for cloud operations.”
 
 Describe the Connectors page, private connector trust prompt, free downloads, and optional source-specific automatic updates in the listing. Explain the access of provider code in the privacy documentation. For certification, provide an isolated test account through Partner Center's private certification notes and verify both catalog and immutable assets are reachable. Ask the reviewer to install one provider, check the displayed publisher and source, disable and remove it, and verify that the other provider stays available for separate download. An in-progress transfer should pause with **Install required connectors** if its provider is missing. A newly enabled connector can then resume the preserved job. Product identity and Windows folder integration retain their existing contracts. [Store testability and disclosure requirements](https://learn.microsoft.com/en-us/windows/apps/publish/store-policies)

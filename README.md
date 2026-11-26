@@ -2,11 +2,10 @@
 
 For removal and recovery, see [uninstalling CloudInlet and managing retained data](docs/UNINSTALL.md).
 
-Previously CloudBay. **Version 1.1.2** updates existing installations to the new name while preserving accounts, backups and transfer recovery. See [upgrade compatibility](docs/REBRANDING.md).
+New users can install CloudInlet 1.2.5 directly. If you still use CloudBay, complete the upgrade to CloudInlet 1.2.2 first. Version 1.2.5 opens an existing CloudInlet profile in place. [Upgrade instructions](docs/REBRANDING.md)
 
 CloudInlet is a native Windows backup, sync and file transfer client. Install the free **Backblaze B2** connector for backup and sync, or add **OneDrive** for file transfers. It runs in the background, uses **WinUI 3 Mica Alt**, and integrates with File Explorer through the Windows Cloud Files API. Mountain Duck is not required.
 
-The local `legacy` branch retains the previous mounted-drive migration helper at `03656fb`. The published repository contains the current native client.
 
 ## Provider connectors
 
@@ -79,7 +78,7 @@ Choose whether a rule matches files, folders and their contents, or both, then c
 
 ## Data and recovery
 
-State lives in `%LOCALAPPDATA%\CloudBay\Client`: settings and prior copies, DPAPI-protected credentials, root-specific SQLite sync baselines, backup intent, activity history, and Recovery. Some atomic recovery copies live under the sync root's excluded `.cloudbay\Recovery`. These copies are retained for review; CloudInlet does not delete them automatically.
+New profiles live in `%LOCALAPPDATA%\CloudInlet\Client`. Existing profiles use the location selected in 1.2.2, which can be `%LOCALAPPDATA%\CloudBay\Client`. That folder holds settings, protected credentials, sync databases, backup selections and activity history. Recovery copies under the sync root’s excluded `.cloudbay\Recovery` remain available for review.
 
 Uploads of **64 MiB or larger** use streaming multipart transfer. Confirmed B2 parts survive an interruption and app restart when the source is unchanged; smaller uploads are atomic and retry that file from its beginning. Download staging saves confirmed chunks under the excluded `.cloudbay\transfers` directory, verifies saved bytes before reuse, and verifies the completed file before installation. Native on-demand reads can resume from Windows' retained cache after provider restart. Before releasing clean cloud data to an app, CloudInlet checks the assembled native cache, including the retained prefix, against the cloud version's whole-file checksum. A failed check gets one automatic fresh download; another failure stops the read. Unsent local edits are preserved. Foreign legacy versions without a whole-file checksum receive transport, identity, and length checks but cannot receive the same checksum guarantee.
 

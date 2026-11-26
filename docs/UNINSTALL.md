@@ -32,8 +32,8 @@ files already transferred to a cloud provider.
 Windows removes the installed application and its package/installer-owned
 components. CloudInlet does not delete cloud content or ordinary local files
 during uninstall. It retains Windows folder mappings and its shared Release state at
-`%LOCALAPPDATA%\CloudBay\Client`, or `%LOCALAPPDATA%\CloudInlet\Client` after a
-verified, explicitly selected migration. Fresh profiles use the CloudInlet location.
+`%LOCALAPPDATA%\CloudInlet\Client` or the older location selected in 1.2.2,
+`%LOCALAPPDATA%\CloudBay\Client`. Fresh profiles use the CloudInlet location.
 Debug uses its separate `Debug\Client` directory under the selected brand.
 Migration routing and recovery records under `%LOCALAPPDATA%\CloudInlet\Migration`
 also remain; keep them with the profile so a reinstall can identify its location.

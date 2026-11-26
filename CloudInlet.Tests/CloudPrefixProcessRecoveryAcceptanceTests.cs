@@ -7,7 +7,6 @@ using CloudInlet.Core;
 using CloudInlet.Core.B2;
 using CloudInlet.Core.Migration;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
-using Microsoft.Win32.SafeHandles;
 
 namespace CloudInlet.Tests;
 
@@ -49,7 +48,7 @@ public sealed class CloudPrefixProcessRecoveryAcceptanceTests
         using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(10));
         using var transport = new CloudPrefixAcceptanceTransport(requestDirectory);
         using var store = new B2CloudStore(transport);
-        var guards = new List<SafeFileHandle>();
+        IDisposable? directoryGuard = null;
         var stage = "preflight";
         var succeeded = false;
         var differentProcess = false;
@@ -57,7 +56,7 @@ public sealed class CloudPrefixProcessRecoveryAcceptanceTests
         CloudPrefixAcceptanceFailure? providerFailure = null;
         try
         {
-            ClientRegistrationMigration.PinAncestors(directory, guards);
+            directoryGuard = SavedProfileLocation.PinDirectory(directory);
             var credentialPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CloudBay", "Validation", "credentials.dpapi");
             var plain = ProtectedData.Unprotect(await File.ReadAllBytesAsync(credentialPath), "CloudBay.B2.v1"u8.ToArray(), DataProtectionScope.CurrentUser);
             B2Credentials credentials;
@@ -208,7 +207,7 @@ public sealed class CloudPrefixProcessRecoveryAcceptanceTests
                 transport.Mutations, transport.PayloadDownloads, payloadDiskWrites = 0, failureType, failureStack, providerFailure,
                 scope = "separate process after a clean durable pause; not abrupt kill, real Windows reboot or desktop binding"
             }, new JsonSerializerOptions { WriteIndented = true }));
-            foreach (var guard in guards) guard.Dispose();
+            directoryGuard?.Dispose();
         }
     }
 

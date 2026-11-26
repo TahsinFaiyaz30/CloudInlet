@@ -2,7 +2,7 @@ using System.Xml;
 
 namespace CloudInlet.Windows;
 
-/// <summary>Only packages that deliberately share both state locations and routing receipts may relocate them.</summary>
+/// <summary>Checks that the Store manifest exposes saved profiles and historical routing records.</summary>
 internal static class StoreStateRoutingPolicy
 {
     internal static readonly string[] RequiredDirectories =

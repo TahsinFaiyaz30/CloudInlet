@@ -22,66 +22,6 @@ public static class SystemIntegration
     private static bool HasStartupCommand(RegistryKey? key, string name) =>
         key?.GetValue(name) is string command && !string.IsNullOrWhiteSpace(command);
 
-    /// <summary>Moves this installation's old startup entry without enabling a disabled or absent entry.</summary>
-    public static void MigrateLegacyStartupRegistration()
-    {
-        if (UpdateInstallation.IsPackaged) return; // The published Store startup task keeps its original identity.
-        using var run = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", writable: true);
-        if (run is null) return;
-        using var approved = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run", writable: true);
-        MigrateLegacyStartupRegistration(run, approved, StartupExecutable());
-    }
-
-    internal static void MigrateLegacyStartupRegistration(RegistryKey run, RegistryKey? approved, string executable)
-    {
-        var legacyName = BuildInfo.LegacyStartupRegistryName;
-        var newName = BuildInfo.StartupRegistryName;
-        if (run.GetValue(legacyName) is not string command || !OwnsLegacyStartupCommand(command, executable)) return;
-        var hadNewCommand = run.GetValueNames().Contains(newName, StringComparer.OrdinalIgnoreCase);
-        if (!hadNewCommand)
-        {
-            // StartupApproved contains Windows' enabled/disabled choice. Copy the opaque value verbatim;
-            // changing only the Run name would otherwise re-enable startup disabled in Task Manager.
-            if (approved is not null && !approved.GetValueNames().Contains(newName, StringComparer.OrdinalIgnoreCase) &&
-                approved.GetValueNames().Contains(legacyName, StringComparer.OrdinalIgnoreCase))
-                approved.SetValue(newName, approved.GetValue(legacyName, null, RegistryValueOptions.DoNotExpandEnvironmentNames)!,
-                    approved.GetValueKind(legacyName));
-            run.SetValue(newName, $"\"{executable}\" --background", RegistryValueKind.String);
-        }
-        // Keep the old command until the branded command and Windows approval are durable.
-        run.DeleteValue(legacyName, throwOnMissingValue: false);
-        approved?.DeleteValue(legacyName, throwOnMissingValue: false);
-    }
-
-    private static bool OwnsLegacyStartupCommand(string command, string executable)
-    {
-        var value = Environment.ExpandEnvironmentVariables(command.Trim());
-        string path;
-        if (value.StartsWith('"'))
-        {
-            var end = value.IndexOf('"', 1);
-            if (end < 0) return false;
-            path = value[1..end];
-        }
-        else
-        {
-            var end = value.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
-            if (end < 0) return false;
-            path = value[..(end + 4)];
-        }
-        if (!Path.IsPathFullyQualified(path)) return false;
-        try
-        {
-            var fullPath = Path.GetFullPath(path);
-            // Recover only an owned historical Windows startup record. Future
-            // packages do not ship the old executable; disabled approval stays intact.
-            return (Path.GetFileName(fullPath).Equals("CloudBay.exe", StringComparison.OrdinalIgnoreCase) ||
-                Path.GetFileName(fullPath).Equals("CloudInlet.exe", StringComparison.OrdinalIgnoreCase)) &&
-                string.Equals(Path.GetDirectoryName(fullPath), Path.GetDirectoryName(Path.GetFullPath(executable)), StringComparison.OrdinalIgnoreCase);
-        }
-        catch (Exception error) when (error is ArgumentException or NotSupportedException) { return false; }
-    }
-
     private static string StartupExecutable()
     {
         // Always register the canonical apphost, including test-hosted calls.

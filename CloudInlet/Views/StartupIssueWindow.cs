@@ -5,12 +5,12 @@ using Microsoft.UI.Xaml.Media;
 namespace CloudInlet.Views;
 
 /// <summary>A startup host that never creates a transfer controller while recovery is unresolved.</summary>
-internal sealed class MigrationWindow : Window
+internal sealed class StartupIssueWindow : Window
 {
     private readonly Grid _root;
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private bool _allowClose;
-    internal MigrationWindow(string theme = "System")
+    internal StartupIssueWindow(string theme = "System")
     {
         Title = "CloudInlet";
         SystemBackdrop = new MicaBackdrop();
@@ -26,7 +26,7 @@ internal sealed class MigrationWindow : Window
         AppWindow.Closing += (_, args) => { if (!_allowClose) args.Cancel = true; };
     }
 
-    internal async Task<ContentDialogResult> ShowAsync(ContentDialog dialog)
+    private async Task<ContentDialogResult> ShowAsync(ContentDialog dialog)
     {
         Activate();
         await _ready.Task;

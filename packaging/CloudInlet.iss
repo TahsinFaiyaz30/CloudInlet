@@ -113,8 +113,17 @@ begin
     if CompareText(ParamStr(I), '/UPDATE') = 0 then Result := True;
 end;
 
+function CheckPreviousVersion(Value: String): Boolean;
+var Actual: Int64;
+begin
+  if not StrToVersion(Value, Actual) then begin
+    if not StrToVersion(Value + '.0', Actual) then begin Result := False; Exit; end;
+  end;
+  Result := ComparePackedVersion(Actual, PackVersionComponents(1, 2, 2, 0)) >= 0;
+end;
+
 function InitializeSetup: Boolean;
-var OtherDirectory, CanonicalDirectory: string; HasCanonical: Boolean;
+var OtherDirectory, CanonicalDirectory, PreviousVersion, RegisteredVersion: string; HasCanonical: Boolean;
 begin
   Result := False;
   SelectedRegistryKey := '{#CanonicalRegistryKey}';
@@ -136,6 +145,12 @@ begin
   end;
   if IsUpdate and not HasPrevious then begin
     SuppressibleMsgBox('This update requires an existing EXE installation of the same CloudInlet build.', mbError, MB_OK, IDOK);
+    Exit;
+  end;
+  if HasPrevious and (not GetVersionNumbersString(AddBackslash(PreviousDirectory) + 'CloudInlet.exe', PreviousVersion) or
+     not CheckPreviousVersion(PreviousVersion) or not RegQueryStringValue(HKCU, SelectedRegistryKey, 'Version', RegisteredVersion) or
+     not CheckPreviousVersion(RegisteredVersion)) then begin
+    SuppressibleMsgBox('Install and open CloudInlet 1.2.2 before upgrading this installation. Get it from github.com/TahsinFaiyaz30/CloudInlet/releases/tag/v1.2.2.', mbError, MB_OK, IDOK);
     Exit;
   end;
   PreviousStartup := RegValueExists(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', '{#StartupName}');
@@ -197,12 +212,16 @@ begin
     Exit;
   end;
   if HasPrevious and not FileExists(AddBackslash(PreviousDirectory) + 'CloudInlet.exe') then begin
-    Result := 'Upgrade CloudBay through its published 1.1.2 bridge first, or repair the existing CloudInlet installation before updating.';
+    Result := 'Install and open CloudInlet 1.2.2 before upgrading this installation.';
     Exit;
   end;
   ExtractTemporaryFile('CloudInlet.SetupHelper.exe');
   HelperPath := ExpandConstant('{tmp}\CloudInlet.SetupHelper.exe');
-  if not Exec(HelperPath, '--flavor {#BuildFlavor} --install-directory "' + RemoveBackslashUnlessRoot(ExpandConstant('{app}')) + '"', ExpandConstant('{tmp}'), SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
+  if not Exec(HelperPath, '--flavor {#BuildFlavor} --install-directory "' + RemoveBackslashUnlessRoot(ExpandConstant('{app}')) + '"', ExpandConstant('{tmp}'), SW_HIDE, ewWaitUntilTerminated, Code) then
+    Result := 'Windows could not start the CloudInlet setup helper.'
+  else if Code = 1610 then
+    Result := 'Open CloudInlet 1.2.2 to review the previous installation before updating. Your files and accounts are preserved.'
+  else if Code <> 0 then
     Result := 'CloudInlet is still finishing a transfer or did not answer the shutdown request. Quit it from the tray menu, then try installing again.';
 end;
 

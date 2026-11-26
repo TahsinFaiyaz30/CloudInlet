@@ -5,7 +5,6 @@ using CloudInlet.Core;
 using CloudInlet.Core.B2;
 using CloudInlet.Core.Migration;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
-using Microsoft.Win32.SafeHandles;
 
 namespace CloudInlet.Tests;
 
@@ -27,7 +26,7 @@ public sealed partial class CloudPrefixMultipartProviderAcceptanceTests
         if (!Directory.Exists(directory)) throw new IOException("Existing protected multipart evidence is required.");
         var recovery = Path.Combine(directory, "recovery-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(recovery);
-        var guards = new List<SafeFileHandle>();
+        IDisposable? directoryGuard = null;
         var stage = "authenticate-saved-fixture";
         var succeeded = false;
         string? failureType = null, failureStack = null;
@@ -46,7 +45,7 @@ public sealed partial class CloudPrefixMultipartProviderAcceptanceTests
         using var cloud = new B2CloudStore(transport);
         try
         {
-            ClientRegistrationMigration.PinAncestors(directory, guards);
+            directoryGuard = SavedProfileLocation.PinDirectory(directory);
             using var copies = new ProtectedB2CloudPrefixCopyJournal(Path.Combine(directory, "copies.dpapi"), Protect, Unprotect);
             using var journal = new ProtectedCloudPrefixMigrationJournal(Path.Combine(directory, "migration.dpapi"), Protect, Unprotect);
             var before = journal.Read() ?? throw new InvalidDataException("Missing authenticated history.");
@@ -131,7 +130,7 @@ public sealed partial class CloudPrefixMultipartProviderAcceptanceTests
                     scope = "Separate process recovering a real previously interrupted 5GB multipart fixture from protected journals; original immutable destination ID retained"
                 }, new JsonSerializerOptions { WriteIndented = true }));
             }
-            finally { CryptographicOperations.ZeroMemory(seed); foreach (var guard in guards) guard.Dispose(); }
+            finally { CryptographicOperations.ZeroMemory(seed); directoryGuard?.Dispose(); }
         }
     }
 }

@@ -1,5 +1,11 @@
 # CloudInlet configuration and verification handoff
 
+## CloudInlet 1.2.5 · 26 November 2026
+
+The modular host builds from `main`. Both providers have independent 1.0.0 releases. The central signed catalog supplies their download locations and can advertise a Microsoft Store package for an approved provider version. The GitHub downloads are available now. [Connector directory](https://github.com/TahsinFaiyaz30/CloudInlet-Connectors)
+
+CloudInlet 1.2.2 was the final version that converted CloudBay installations. Current installers update in place. Fresh profiles use CloudInlet, and previously selected profiles retain their locations. Historical migration test results below describe older versions. [Upgrade compatibility](REBRANDING.md)
+
 ## Provider distribution · 25 November 2026
 
 Each provider has its own release repository for future versions. The central signed catalog and both original 1.0.0 downloads retain their URLs. Its protected publisher routes each new version to the selected repository and refreshes the directories from signed metadata. [Central directory](https://github.com/TahsinFaiyaz30/CloudInlet-Connectors) · [Backblaze B2 history](https://github.com/TahsinFaiyaz30/CloudInlet-Connector-B2) · [OneDrive history](https://github.com/TahsinFaiyaz30/CloudInlet-Connector-OneDrive)
@@ -48,7 +54,7 @@ Scope remains explicit: this proves natural native 3010 and actual restart clean
 
 ## Migration implementation and final repair closure — 2026-11-10
 
-Implementation is committed as `989517d`. Read [MIGRATION_TEST_STATUS.md](MIGRATION_TEST_STATUS.md) and `artifacts/migration-review/final-repair-summary-20261110.json`. Folder Move/Explorer/external conflict/restoration, corrected full-app synthetic MSI restart recovery, fresh missing-input Retry and scoped uninstall pass. The final standard-user locked-file maintenance attempt returned **1603**; after normal holder release and a verified Windows restart, one explicit unlocked repair returned **0**. All **617** installed files and **3,240** protected files verified, with healthy native registration and unchanged Shell mappings. The host rehashed **658** exported files and checked thirteen guest-authenticated record pairs. Normal shutdown is verified at `2026-11-10T06:59:55Z`; the VM is Off, both checkpoints remain, and the controller closed without persisting credentials.
+Implementation is committed as `989517d`. Read [MIGRATION_TEST_STATUS.md](https://github.com/TahsinFaiyaz30/CloudInlet/blob/v1.2.2/docs/MIGRATION_TEST_STATUS.md) and `artifacts/migration-review/final-repair-summary-20261110.json`. Folder Move/Explorer/external conflict/restoration, corrected full-app synthetic MSI restart recovery, fresh missing-input Retry and scoped uninstall pass. The final standard-user locked-file maintenance attempt returned **1603**; after normal holder release and a verified Windows restart, one explicit unlocked repair returned **0**. All **617** installed files and **3,240** protected files verified, with healthy native registration and unchanged Shell mappings. The host rehashed **658** exported files and checked thirteen guest-authenticated record pairs. Normal shutdown is verified at `2026-11-10T06:59:55Z`; the VM is Off, both checkpoints remain, and the controller closed without persisting credentials.
 
 The original natural **3010** acceptance expectation remains **unproven**, not waived or replaced by the passing 1603-to-repair case. The earlier normal-load update returned 0 and its pending-path verifier failed; those failures and the final locked-file failure remain retained. Existing 3010 recovery coverage uses a test-only `ScheduleReboot` action. This execution batch is finished, with no queued test or background native operation. No full-acceptance or release-ready claim is made. Do not repeat completed tests, refresh the live host app, or resume another fixture solely from an older dated plan.
 

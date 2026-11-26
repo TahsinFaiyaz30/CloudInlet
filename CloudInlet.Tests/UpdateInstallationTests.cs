@@ -128,12 +128,12 @@ public sealed class UpdateInstallationTests
 #if CLOUDINLET_DEBUG
         Assert.AreEqual("Debug", BuildInfo.Flavor); Assert.AreEqual("CloudInlet Debug", BuildInfo.ProductName);
         Assert.AreEqual(".Debug", BuildInfo.PipeSuffix); Assert.AreEqual("CloudInletDebug", BuildInfo.StartupRegistryName);
-        StringAssert.EndsWith(BuildInfo.DefaultDataDirectory, Path.Combine("CloudBay", "Debug", "Client"));
+        StringAssert.EndsWith(BuildInfo.DefaultDataDirectory, Path.Combine("CloudInlet", "Debug", "Client"));
         StringAssert.EndsWith(BuildInfo.DefaultRootPath, "CloudInlet Debug");
 #else
         Assert.AreEqual("Release", BuildInfo.Flavor); Assert.AreEqual("CloudInlet", BuildInfo.ProductName);
         Assert.AreEqual("", BuildInfo.PipeSuffix); Assert.AreEqual("CloudInlet", BuildInfo.StartupRegistryName);
-        StringAssert.EndsWith(BuildInfo.DefaultDataDirectory, Path.Combine("CloudBay", "Client"));
+        StringAssert.EndsWith(BuildInfo.DefaultDataDirectory, Path.Combine("CloudInlet", "Client"));
         StringAssert.EndsWith(BuildInfo.DefaultRootPath, "CloudInlet");
 #endif
     }

@@ -5,7 +5,6 @@ using CloudInlet.Core;
 using CloudInlet.Core.B2;
 using CloudInlet.Core.Migration;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
-using Microsoft.Win32.SafeHandles;
 
 namespace CloudInlet.Tests;
 
@@ -25,7 +24,7 @@ public sealed class CloudPrefixLostHideAcceptanceTests
         var run = Guid.NewGuid();
         var directory = Path.Combine(root!, "cloud-prefix-lost-hide-acceptance-" + run.ToString("N"));
         Assert.IsFalse(Directory.Exists(directory)); Directory.CreateDirectory(directory);
-        var guards = new List<SafeFileHandle>();
+        IDisposable? directoryGuard = null;
         using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(10));
         var token = deadline.Token;
         using var transport = new CloudPrefixAcceptanceTransport(directory);
@@ -35,7 +34,7 @@ public sealed class CloudPrefixLostHideAcceptanceTests
         CloudPrefixAcceptanceFailure? providerFailure = null;
         try
         {
-            ClientRegistrationMigration.PinAncestors(directory, guards);
+            directoryGuard = SavedProfileLocation.PinDirectory(directory);
             var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CloudBay", "Validation", "credentials.dpapi");
             var plain = ProtectedData.Unprotect(File.ReadAllBytes(path), "CloudBay.B2.v1"u8.ToArray(), DataProtectionScope.CurrentUser);
             B2Credentials credential;
@@ -129,7 +128,7 @@ public sealed class CloudPrefixLostHideAcceptanceTests
                 transport.DroppedHideAcknowledgment, remainingOwnedVersions = transport.Scope?.RemainingOwned.Count,
                 payloadDiskWrites = 0, scope = "Injected lost real B2 hide response; protected recovery declines ownership and explicitly retains original binding. Independent exact fixture teardown after verification." },
                 new JsonSerializerOptions { WriteIndented = true })); }
-            finally { foreach (var guard in guards) guard.Dispose(); }
+            finally { directoryGuard?.Dispose(); }
         }
     }
     private sealed class OriginalBinding(string fingerprint) : ICloudPrefixMigrationBinding

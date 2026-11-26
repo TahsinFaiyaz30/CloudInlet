@@ -10,12 +10,7 @@
     <Reference Include="System.Security" />
     <Compile Include="../InstallerShared/InstallerClientStop.cs" Link="InstallerClientStop.cs" />
     <Compile Include="../InstallerShared/UpdateCacheLocation.cs" Link="UpdateCacheLocation.cs" />
-    <Compile Include="../InstallerShared/InstallationMigrationPolicy.cs" Link="InstallationMigrationPolicy.cs" />
     <Compile Include="../InstallerShared/DistributionRegistration.cs" Link="DistributionRegistration.cs" />
-    <Compile Include="../InstallerShared/InstallerProgressJournal.cs" Link="InstallerProgressJournal.cs" />
-    <Compile Include="../InstallerShared/InstallerProgressHandoff.cs" Link="InstallerProgressHandoff.cs" />
-    <Compile Include="../InstallerShared/ExeInstallationMigration.cs" Link="ExeInstallationMigration.cs" />
-    <Compile Include="../InstallerShared/ExeMigrationReceipt.cs" Link="ExeMigrationReceipt.cs" />
-    <Compile Include="../InstallerShared/InstallerMigrationRecovery.cs" Link="InstallerMigrationRecovery.cs" />
+    <Compile Include="../InstallerShared/PreviousInstallation.cs" Link="PreviousInstallation.cs" />
   </ItemGroup>
 </Project>

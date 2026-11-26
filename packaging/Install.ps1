@@ -16,11 +16,11 @@ $allowedInstallRoots = @('CloudInlet', 'CloudBay') | ForEach-Object { [IO.Path]:
 $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudInlet'
 $legacyUninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudBay'
 $registration = Get-ItemProperty -LiteralPath $uninstallKey -ErrorAction SilentlyContinue
-if (Test-Path -LiteralPath $legacyUninstallKey) { throw 'Upgrade CloudBay through the published 1.1.2 bridge before installing a later CloudInlet release.' }
+if (Test-Path -LiteralPath $legacyUninstallKey) { throw 'Complete the CloudBay upgrade through its published bridge and run CloudInlet 1.2.2 before installing this release.' }
 # Portable installation must not take over a managed EXE/MSI installation or an
 # unrelated directory merely because it happens to have the product's name.
 foreach ($kind in @('Exe', 'Msi')) {
-    if (Test-Path -LiteralPath ('HKCU:\Software\CloudBay\Distribution\Release\' + $kind)) {
+    if ((Test-Path -LiteralPath ('HKCU:\Software\CloudBay\Distribution\Release\' + $kind)) -or (Test-Path -LiteralPath ('HKCU:\Software\CloudInlet\Distribution\Release\' + $kind))) {
         throw "CloudInlet is already managed by a $kind installer. Update it using the same installer format."
     }
 }
@@ -51,6 +51,18 @@ function Get-PortableRegistrationRoot($Value) {
     return $root
 }
 $previousRoot = Get-PortableRegistrationRoot $registration
+if ($previousRoot) {
+    $previous = $null
+    if (![version]::TryParse([string]$registration.DisplayVersion, [ref]$previous) -or $previous -lt [version]'1.2.2') {
+        throw 'Install and open CloudInlet 1.2.2 before upgrading this installation. See https://github.com/TahsinFaiyaz30/CloudInlet/releases/tag/v1.2.2.'
+    }
+    $previousExe = Join-Path $previousRoot "$previous/CloudInlet.exe"
+    Assert-NormalPortablePath $previousExe
+    if (!(Test-Path -LiteralPath $previousExe -PathType Leaf) -or
+        ([Diagnostics.FileVersionInfo]::GetVersionInfo($previousExe)).ProductVersion.Split('+')[0] -cne $registration.DisplayVersion) {
+        throw 'Repair the registered portable installation before updating. Its executable and recorded version do not match.'
+    }
+}
 if ($previousRoot) { $installRoot = $previousRoot }
 if ((Test-Path -LiteralPath $installRoot) -and !$previousRoot) {
     throw 'The installation folder belongs to an unregistered installation. Nothing was overwritten.'

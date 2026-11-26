@@ -36,7 +36,6 @@ New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
 if (!$HelperPrepared) { & (Join-Path $PSScriptRoot 'build-installer-helper.ps1') -AppFolder $appRoot }
 $helperFile = Join-Path $appRoot 'CloudInlet.SetupHelper.exe'
 if (!(Test-Path -LiteralPath $helperFile)) { throw 'The installer/update helper is missing from the application payload.' }
-& (Join-Path $PSScriptRoot 'write-installer-progress-payload.ps1') -AppFolder $appRoot
 $tools = & (Join-Path $PSScriptRoot 'get-installer-tools.ps1') -InnoCompiler $InnoCompiler -WixToolPath $WixToolPath
 $flavor = $Configuration.ToLowerInvariant()
 $productName = if ($Configuration -eq 'Debug') { 'CloudInlet Debug' } else { 'CloudInlet' }
