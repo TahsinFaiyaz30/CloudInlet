@@ -10,9 +10,14 @@ dotnet build (Join-Path $repo 'tools/CloudInlet.ConnectorTool') -c Release -v:q
 if ($LASTEXITCODE) { throw 'Tool build failed.' }
 $pin = Join-Path $work 'source.json'
 $revision = git -C $repo rev-parse HEAD
+if ($LASTEXITCODE) { throw 'Cannot identify the source commit for the connector checks.' }
 $fixture = [Security.Cryptography.ECDsa]::Create([Security.Cryptography.ECCurve+NamedCurves]::nistP256)
 function Check-Tool { & dotnet $tool @args; if ($LASTEXITCODE) { throw "Expected success from $($args[0])." } }
-function Reject-Tool { & dotnet $tool @args 2>&1 | Out-Null; if (!$LASTEXITCODE) { throw "Expected rejection from $($args[0])." } }
+function Reject-Tool {
+    $PSNativeCommandUseErrorActionPreference = $false
+    $output = & dotnet $tool @args 2>&1
+    if ($LASTEXITCODE -ne 1) { throw "Expected a validation rejection from $($args[0]), got exit $LASTEXITCODE. $output" }
+}
 try {
     $key = $fixture.ExportPkcs8PrivateKey()
     $env:CLOUDINLET_CONNECTOR_SIGNING_KEY = [Convert]::ToBase64String($key)
@@ -171,3 +176,5 @@ try {
     if ($key) { [Security.Cryptography.CryptographicOperations]::ZeroMemory($key) }
     $fixture.Dispose()
 }
+# GitHub's pwsh wrapper propagates the last native exit code, including an expected rejection.
+exit 0
