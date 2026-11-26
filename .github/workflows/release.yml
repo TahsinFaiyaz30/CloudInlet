@@ -221,3 +221,12 @@ jobs:
             artifacts/release-assets/updates-v2.json
             artifacts/release-assets/SHA256SUMS.txt
           if-no-files-found: ignore
+
+  submit-store:
+    needs: [prepare, publish, store-package]
+    if: needs.prepare.outputs.publish == 'true' && needs.publish.result == 'success' && needs.store-package.result == 'success'
+    uses: ./.github/workflows/store.yml
+    with:
+      tag: v${{ needs.prepare.outputs.version }}
+      submit: true
+      publishMode: Immediate

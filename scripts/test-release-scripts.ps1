@@ -494,12 +494,13 @@ namespace CloudInlet.ReleaseTests {
 }
 '@
     }
-    '<Package><Identity Name="Production.Identity" Publisher="CN=Production" ProcessorArchitecture="x64" /></Package>' | Set-Content -LiteralPath (Join-Path $sampleFolder 'AppxManifest.xml') -Encoding utf8NoBOM
+    '<Package><Identity Name="Production.Identity" Publisher="CN=Production" ProcessorArchitecture="x64" Version="1.0.0.0" /></Package>' | Set-Content -LiteralPath (Join-Path $sampleFolder 'AppxManifest.xml') -Encoding utf8NoBOM
     $productionFixture = Join-Path $workspace 'matching-production.msix'
     [IO.Compression.ZipFile]::CreateFromDirectory($sampleFolder, $productionFixture)
     $submissionArguments = @{ PackagePath=$productionFixture;ApplicationId='ABC123456789';TenantId='11111111-1111-1111-1111-111111111111';ClientId='22222222-2222-2222-2222-222222222222';PackageIdentityName='Production.Identity';Publisher='CN=Production' }
     $handler = [CloudInlet.ReleaseTests.StoreHandler]::new()
-    $result = & (Join-Path $PSScriptRoot 'submit-store-package.ps1') @submissionArguments -HttpHandler $handler
+    Assert-Rejected { & (Join-Path $PSScriptRoot 'submit-store-package.ps1') @submissionArguments -ExpectedVersion '1.0.1' -HttpHandler $handler } 'A mismatched release version is rejected before contacting Partner Center.' 'selected release version'
+    $result = & (Join-Path $PSScriptRoot 'submit-store-package.ps1') @submissionArguments -ExpectedVersion '1.0.0' -HttpHandler $handler
     Assert-True ($handler.RootGets -eq 1 -and $handler.Creates -eq 1 -and $handler.Updates -eq 1 -and $handler.Uploads -eq 1 -and $handler.Commits -eq 0 -and $result -match 'Commit was not requested') 'Preparing a Store draft follows the API request graph without committing implicitly.'
     $updated = $handler.UpdatedJson | ConvertFrom-Json
     Assert-True ($updated.targetPublishMode -ceq 'Manual' -and $updated.applicationPackages[0].fileStatus -ceq 'PendingDelete' -and $updated.applicationPackages[1].fileStatus -ceq 'PendingUpload' -and $updated.listings.'en-us'.description -ceq 'Existing listing') 'Store updates replace packages while preserving listing data and explicit publication mode.'

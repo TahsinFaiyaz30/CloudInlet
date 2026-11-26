@@ -1,6 +1,17 @@
 name: Microsoft Store
 
 on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      submit:
+        type: boolean
+        default: false
+      publishMode:
+        type: string
+        default: Manual
   workflow_dispatch:
     inputs:
       tag:
@@ -8,7 +19,7 @@ on:
         type: string
         required: true
       submit:
-        description: Submit to Partner Center after packaging (requires microsoft-store environment credentials)
+        description: Submit the published release MSIX to Partner Center
         type: boolean
         default: false
       publishMode:
@@ -26,7 +37,7 @@ concurrency:
 
 jobs:
   package:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && !inputs.submit
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -78,16 +89,17 @@ jobs:
           if-no-files-found: error
 
   submit:
-    needs: package
-    if: inputs.submit
+    if: github.ref == 'refs/heads/main' && inputs.submit
     runs-on: windows-2025
     environment: microsoft-store
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: CloudInlet-Microsoft-Store
-          path: artifacts/store-packages
+      - name: Download and verify the published MSIX
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: .\scripts\get-released-store-package.ps1 -Tag $env:RELEASE_TAG -OutputDirectory artifacts/store-packages
       - name: Submit the package to Partner Center
         shell: pwsh
         env:
@@ -98,7 +110,8 @@ jobs:
           CLOUDINLET_STORE_CLIENT_ID: ${{ secrets.CLOUDINLET_STORE_CLIENT_ID || secrets.CLOUDBAY_STORE_CLIENT_ID }}
           CLOUDINLET_STORE_CLIENT_SECRET: ${{ secrets.CLOUDINLET_STORE_CLIENT_SECRET || secrets.CLOUDBAY_STORE_CLIENT_SECRET }}
           STORE_PUBLISH_MODE: ${{ inputs.publishMode }}
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
           $packages = @(Get-ChildItem -LiteralPath artifacts/store-packages -Filter '*.msix' -File)
           if ($packages.Count -ne 1) { throw 'Exactly one production Store package is required.' }
-          .\scripts\submit-store-package.ps1 -PackagePath $packages[0].FullName -PublishMode $env:STORE_PUBLISH_MODE -CommitSubmission
+          .\scripts\submit-store-package.ps1 -PackagePath $packages[0].FullName -ExpectedVersion $env:RELEASE_TAG.Substring(1) -PublishMode $env:STORE_PUBLISH_MODE -CommitSubmission

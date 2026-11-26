@@ -1,5 +1,6 @@
 param(
     [Parameter(Mandatory)][string]$PackagePath,
+    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$ExpectedVersion,
     [string]$ApplicationId = $(if ($env:CLOUDINLET_STORE_APPLICATION_ID) { $env:CLOUDINLET_STORE_APPLICATION_ID } else { $env:CLOUDBAY_STORE_APPLICATION_ID }),
     [string]$TenantId = $(if ($env:CLOUDINLET_STORE_TENANT_ID) { $env:CLOUDINLET_STORE_TENANT_ID } else { $env:CLOUDBAY_STORE_TENANT_ID }),
     [string]$ClientId = $(if ($env:CLOUDINLET_STORE_CLIENT_ID) { $env:CLOUDINLET_STORE_CLIENT_ID } else { $env:CLOUDBAY_STORE_CLIENT_ID }),
@@ -27,6 +28,7 @@ try {
     try {
         $manifest = [Xml.XmlDocument]::new(); $manifest.XmlResolver = $null; $manifest.Load($reader)
         $identity = $manifest.DocumentElement.SelectSingleNode("*[local-name()='Identity']")
+        if ($ExpectedVersion -and (!$identity -or $identity.GetAttribute('Version') -cne "$ExpectedVersion.0")) { throw 'Provide the production Store package for the selected release version.' }
         if (!$identity -or $identity.GetAttribute('Name') -cne $PackageIdentityName -or $identity.GetAttribute('Publisher') -cne $Publisher -or $identity.GetAttribute('Name') -ceq 'CloudInlet.LocalValidation' -or $identity.GetAttribute('ProcessorArchitecture') -cne 'x64') { throw 'Provide the production Store package matching the reserved Partner Center identity and publisher.' }
     } finally { $reader.Dispose(); $manifestStream.Dispose() }
 } finally { $archiveInspection.Dispose() }

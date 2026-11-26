@@ -1,4 +1,7 @@
-param([Parameter(Mandatory)][string]$PackagePath)
+param(
+    [Parameter(Mandatory)][string]$PackagePath,
+    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$PublishedVersion
+)
 $ErrorActionPreference = 'Stop'
 $path = [IO.Path]::GetFullPath($PackagePath)
 $archive = [IO.Compression.ZipFile]::OpenRead($path)
@@ -36,9 +39,12 @@ if ($application.GetAttribute('Id') -cne 'CloudBay' -or $application.GetAttribut
 if ($manifest.SelectSingleNode("//*[local-name()='StartupTask']").GetAttribute('TaskId') -cne 'CloudBayStartup') { throw 'Durable startup identity changed.' }
 $cloudFiles = @($manifest.SelectNodes("//*[local-name()='Extension' and @Category='windows.cloudFiles']/*[local-name()='CloudFiles']"))
 if ($cloudFiles.Count -ne 1 -or $cloudFiles[0].GetAttribute('IconResource') -cne 'Assets\CloudInlet-32.png') { throw 'Packaged Cloud Files registration is missing or incorrect.' }
-$metadataPath = Join-Path ([IO.Path]::GetDirectoryName($path)) ([IO.Path]::GetFileNameWithoutExtension($path) + '-package-info.json')
-$metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
-Assert-Set $metadata.virtualizationPolicy.windows11.excludedDirectories $directories 'Policy metadata directories'
-Assert-Set $metadata.virtualizationPolicy.windows11.excludedRegistryKeys $keys 'Policy metadata registry keys'
-if ($manifest.SelectSingleNode('/p:Package/p:Identity',$ns).GetAttribute('Version') -cne ($metadata.version + '.0')) { throw 'Metadata version differs from the manifest.' }
-[ordered]@{ passed=$true; package=$path; version=$metadata.version; capabilities=$capabilities; externalDirectories=$directories; externalRegistryKeys=$keys; windows10Fallback='disabled'; stableIdentitiesPreserved=$true } | ConvertTo-Json -Depth 4
+if (!$PublishedVersion) {
+    $metadataPath = Join-Path ([IO.Path]::GetDirectoryName($path)) ([IO.Path]::GetFileNameWithoutExtension($path) + '-package-info.json')
+    $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
+    Assert-Set $metadata.virtualizationPolicy.windows11.excludedDirectories $directories 'Policy metadata directories'
+    Assert-Set $metadata.virtualizationPolicy.windows11.excludedRegistryKeys $keys 'Policy metadata registry keys'
+    $PublishedVersion = $metadata.version
+}
+if ($manifest.SelectSingleNode('/p:Package/p:Identity',$ns).GetAttribute('Version') -cne ($PublishedVersion + '.0')) { throw 'Expected Store version differs from the manifest.' }
+[ordered]@{ passed=$true; package=$path; version=$PublishedVersion; capabilities=$capabilities; externalDirectories=$directories; externalRegistryKeys=$keys; windows10Fallback='disabled'; stableIdentitiesPreserved=$true } | ConvertTo-Json -Depth 4
