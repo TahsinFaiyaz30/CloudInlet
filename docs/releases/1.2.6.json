@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "version": "1.2.6",
+  "previousTag": "v1.2.5",
+  "summary": "Choose your first provider in Cloud services. Installed connectors and their accounts now determine which services appear throughout CloudInlet.",
+  "categories": [
+    {
+      "title": "Cloud setup",
+      "items": [
+        {
+          "text": "On a fresh profile, Home offers one Open Cloud services button. Available now shows the providers you can use and offers Connect when an account is needed. The connector catalog below it handles discovery, installation, local imports and repair.",
+          "commits": ["922a1a464ca24559784a8b290e094ed7e7fbc96e"]
+        },
+        {
+          "text": "Navigation search, the tray setup action and Settings lead to the same services. The separate Connectors navigation item and the duplicate gallery of planned providers and modes have been removed.",
+          "commits": ["922a1a464ca24559784a8b290e094ed7e7fbc96e"]
+        }
+      ]
+    },
+    {
+      "title": "Transfer choices",
+      "items": [
+        {
+          "text": "Source and destination pickers show this PC and installed, enabled providers that support the selected operation. Read-only private connectors can appear as sources. Installed providers can be connected directly from the picker.",
+          "commits": ["922a1a464ca24559784a8b290e094ed7e7fbc96e"]
+        },
+        {
+          "text": "Import and backup setup offer direct cloud transfers when a suitable connector is available. A saved transfer that needs a missing connector keeps its endpoints and offers one installation review.",
+          "commits": ["922a1a464ca24559784a8b290e094ed7e7fbc96e"]
+        }
+      ]
+    },
+    {
+      "title": "Store delivery",
+      "items": [
+        {
+          "text": "The release workflow now passes the published MSIX to the protected Microsoft Store submission job. It verifies the release checksums, app identity and version before requesting certification.",
+          "commits": ["bd3edec95e2a32f105c644bc1991e78b3427afd2"]
+        }
+      ]
+    }
+  ],
+  "installationNotes": [
+    "Update an existing CloudInlet 1.2.5 installation in place. Open Cloud services to install a provider or connect an account. Existing connector installations, accounts and transfer checkpoints carry forward.",
+    "Use Settings → Updates and about to check for app and connector updates. Backblaze B2 and OneDrive keep their independent connector versions."
+  ],
+  "validation": {
+    "items": [
+      "An isolated WinUI profile exercised Home, both transfer pickers before and after installing B2, disabling and uninstalling a provider, and restoring the two missing connectors for a saved transfer.",
+      "Local verification passed 1,148 managed non-live, non-native tests and 142 release-script assertions. Store submission behavior was exercised against a simulated API. The published 1.2.5 MSIX also passed the new download integrity check."
+    ],
+    "links": [
+      { "label": "Windows CI", "url": "https://github.com/TahsinFaiyaz30/CloudInlet/actions/workflows/windows.yml" },
+      { "label": "Connector installation guide", "url": "https://github.com/TahsinFaiyaz30/CloudInlet/blob/922a1a464ca24559784a8b290e094ed7e7fbc96e/docs/CONNECTORS.md" }
+    ]
+  },
+  "storeStatus": "The GitHub MSIX is the unsigned package prepared for Microsoft Store submission. Microsoft manages certification and rollout of version 1.2.6."
+}
