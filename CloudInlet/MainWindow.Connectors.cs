@@ -15,6 +15,16 @@ public sealed partial class MainWindow
     private CancellationToken ConnectorToken => _backupUiLifetime.Token;
     private nint PickerOwner => WinRT.Interop.WindowNative.GetWindowHandle(this);
 
+    private void OnConnectorRegistryChanged() => DispatcherQueue.TryEnqueue(() =>
+    {
+        if (_closed || _connectorBusy) return;
+        RefreshCloudServices();
+        if (CurrentRoute == "services") RenderConnectors();
+        if (_settingsRoute == "about") RenderConnectorUpdates();
+        RefreshConnectorRecovery();
+        Refresh();
+    });
+
     private void OnConnectorProgress(string message) => DispatcherQueue.TryEnqueue(() =>
     {
         if (_closed) return;
@@ -84,7 +94,7 @@ public sealed partial class MainWindow
         finally
         {
             _connectorBusy = false;
-            if (!_closed) { RenderConnectors(); RenderConnectorUpdates(); RefreshConnectorRecovery(); }
+            if (!_closed) { RefreshCloudServices(); RenderConnectors(); RenderConnectorUpdates(); RefreshConnectorRecovery(); Refresh(); }
         }
     }
 
@@ -100,16 +110,17 @@ public sealed partial class MainWindow
 
     private void RenderConnectors()
     {
-        ConnectorRows.Children.Clear(); ConnectorActions.Children.Clear(); ConnectorStatus.Text = _connectorMessage;
+        ConnectorRows.Children.Clear(); AvailableServiceRows.Children.Clear(); ConnectorActions.Children.Clear(); ConnectorStatus.Text = _connectorMessage;
         var state = Manager.Snapshot;
         var offers = Manager.Offers;
+        var usable = Manager.AvailableProviders().ToDictionary(m => m.Id);
         ConnectorActions.Children.Add(ConnectorButton("Refresh catalog", () => Manager.RefreshAsync(ConnectorToken)));
         ConnectorActions.Children.Add(ConnectorButton("Import packages…", ImportConnectorsAsync));
         ConnectorActions.Children.Add(ConnectorButton("Add source…", AddConnectorSourceAsync));
         var required = _controller.RequiredConnectors();
         if (required.Length > 0)
             ConnectorActions.Children.Add(ConnectorButton("Install required connectors", async () => await RecoverConnectorsAsync(required)));
-        var ids = offers.Select(o => o.Manifest.Id).Concat(state.Installed.Keys).Concat(required).Distinct();
+        var ids = offers.Select(o => o.Manifest.Id).Concat(state.Installed.Keys).Concat(required).Distinct().Order();
         foreach (var id in ids)
         {
             var installed = state.Installed.GetValueOrDefault(id);
@@ -124,7 +135,7 @@ public sealed partial class MainWindow
                 try { candidate = Manager.Plan([id], update: true).Ordered.Single(o => o.Manifest.Id == id); }
                 catch (InvalidDataException e) { planIssue = e.Message; }
             }
-            var m = candidate?.Manifest ?? installed?.Current.Manifest ?? latest?.Manifest;
+            var m = installed?.Current.Manifest ?? candidate?.Manifest ?? latest?.Manifest;
             var name = m?.Name ?? id;
             var features = m is null ? "Refresh the catalog to see this connector’s details." :
                 string.Join(" · ", ConnectorFeatures.Where(f => m.Capabilities.HasFlag(f.Capability)).Select(f => f.Label));
@@ -150,11 +161,35 @@ public sealed partial class MainWindow
                 panel.Children.Add(SourceImportDialog.Text("Refresh the configured publisher catalog to install this connector.", true));
             if (installed is not null)
             {
-                if (installed.Enabled && installed.Current.Manifest.Capabilities.HasFlag(CloudInlet.Connectors.ConnectorCapabilities.AccountSetup))
-                    actions.Children.Add(ConnectorButton("Connect account", async () => await ConnectCustomAsync(id)));
+                if (usable.TryGetValue(id, out var provider))
+                {
+                    var accounts = _controller.ServiceAccounts(provider);
+                    if (id is "b2" or "onedrive" || provider.Capabilities.HasFlag(ConnectorCapabilities.AccountSetup))
+                    {
+                        panel.Children.Add(SourceImportDialog.Text(accounts.Count == 0 ? "No account connected" : string.Join(" · ", accounts.Select(a => a.Name)), true));
+                        var label = accounts.Count == 0 ? "Connect" : id is "b2" or "onedrive" ? "Manage connection" : "Connect another account";
+                        actions.Children.Add(ConnectorButton(label, async () =>
+                        {
+                            if (id == "b2") ShowAccount();
+                            else if (id == "onedrive") RequestNavigationRoute("settings/onedrive");
+                            else await ConnectCustomAsync(id);
+                        }));
+                    }
+                    else
+                    {
+                        panel.Children.Add(SourceImportDialog.Text("Ready to use", true));
+                        if (provider.Capabilities.HasFlag(ConnectorCapabilities.Read) ||
+                            provider.Capabilities.HasFlag(ConnectorCapabilities.Write | ConnectorCapabilities.Verify))
+                        {
+                            var transfer = SourceImportDialog.ActionButton("Transfer files");
+                            transfer.Click += CloudTransfer_Click;
+                            actions.Children.Add(transfer);
+                        }
+                    }
+                }
                 actions.Children.Add(ConnectorButton(installed.Enabled ? "Disable" : "Enable", async () =>
                 {
-                    if (installed.Enabled) _controller.ChangeConnector(id, installed.Enabled ? "disable" : "enable");
+                    if (installed.Enabled) _controller.ChangeConnector(id, "disable");
                     else await ReviewInstallAsync(Manager.Plan([id]));
                 }));
                 if (issue is not null && installed.Enabled)
@@ -172,9 +207,13 @@ public sealed partial class MainWindow
                 }));
             }
             panel.Children.Add(actions);
-            ConnectorRows.Children.Add(SourceImportDialog.Surface(panel));
+            (usable.ContainsKey(id) ? AvailableServiceRows : ConnectorRows).Children.Add(SourceImportDialog.Surface(panel));
         }
-        if (ConnectorRows.Children.Count == 0) ConnectorRows.Children.Add(SourceImportDialog.Text("No matching connectors."));
+        var filtering = !string.IsNullOrWhiteSpace(ConnectorSearch.Text);
+        if (AvailableServiceRows.Children.Count == 0) AvailableServiceRows.Children.Add(SourceImportDialog.Text(
+            filtering ? "No matching installed services." : "Install or enable a provider connector below to connect a cloud service.", true));
+        if (ConnectorRows.Children.Count == 0) ConnectorRows.Children.Add(SourceImportDialog.Text(filtering ? "No matching connectors."
+            : "No additional connectors to show. Refresh the catalog, add a source, or import a package.", true));
         if (string.IsNullOrWhiteSpace(ConnectorSearch.Text) && state.Sources.Count > 0)
         {
             ConnectorRows.Children.Add(SourceImportDialog.Heading("Subscribed sources"));

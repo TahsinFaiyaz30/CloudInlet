@@ -49,7 +49,6 @@ public sealed partial class MainWindow : Window
     private string _cloudImportRevision = "";
     private int _cloudImportGeneration;
     private static readonly HashSet<string> CommonBackups = new(StringComparer.OrdinalIgnoreCase) { "Desktop", "Documents", "Pictures", "Downloads" };
-    private bool _updatingCatalog;
     private AppSettings DisplaySettings => _viewModel.Preview?.Settings ?? _controller.Settings;
     private SyncSnapshot DisplaySnapshot => _viewModel.Preview?.Snapshot ?? _controller.Snapshot;
     private string _customBackupRevision = "";
@@ -92,7 +91,6 @@ public sealed partial class MainWindow : Window
     public string CurrentPageTitle => PageTitle.Text;
     public string CurrentRoute => SettingsPage.Visibility == Visibility.Visible
         ? _settingsRoute == "home" ? "settings" : $"settings/{_settingsRoute}"
-        : ConnectorsPage.Visibility == Visibility.Visible ? "connectors"
         : ServicesPage.Visibility == Visibility.Visible ? "services"
         : ActivityPage.Visibility == Visibility.Visible ? "activity"
         : BackupPage.Visibility == Visibility.Visible ? "backup"
@@ -118,8 +116,9 @@ public sealed partial class MainWindow : Window
             await _controller.UpdatePreferencesAsync(update);
         };
         RootGrid.DataContext = _viewModel;
-        InitializeCloudServices();
+        RefreshCloudServices();
         _controller.Connectors.Progress += OnConnectorProgress;
+        _controller.Connectors.RegistryChanged += OnConnectorRegistryChanged;
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
         RootGrid.ActualThemeChanged += (_, _) => UpdateCaptionTheme();
@@ -159,6 +158,7 @@ public sealed partial class MainWindow : Window
             _initialNavigationReady.TrySetCanceled();
             _controller.Changed -= Controller_Changed;
             _controller.Connectors.Progress -= OnConnectorProgress;
+            _controller.Connectors.RegistryChanged -= OnConnectorRegistryChanged;
             _uiSettings.TextScaleFactorChanged -= TextScaleFactor_Changed;
             if (_updates is not null) _updates.Changed -= Updates_Changed;
         };
@@ -220,6 +220,12 @@ public sealed partial class MainWindow : Window
         FocusSettingsAfterLayout(DisplaySettings.IsConfigured ? ApplicationKeyBox : BucketNameBox, "account");
     }
 
+    public void ShowCloudServices()
+    {
+        RequestNavigationRoute("services");
+        ShowWindow();
+    }
+
     public void ShowActivity()
     {
         ActivityFilterBox.SelectedIndex = 0;
@@ -254,7 +260,7 @@ public sealed partial class MainWindow : Window
 
     private static string NormalizeNavigationRoute(string? route) => route?.Trim() switch
     {
-        "activity" => "activity", "backup" => "backup", "files" => "files", "services" => "services", "connectors" => "connectors", "settings" or "settings/home" => "settings",
+        "activity" => "activity", "backup" => "backup", "files" => "files", "services" or "connectors" => "services", "settings" or "settings/home" => "settings",
         "settings/account" => "settings/account", "settings/onedrive" => "settings/onedrive", "settings/sync" => "settings/sync",
         "settings/network" => "settings/network", "settings/appearance" => "settings/appearance",
         "settings/general" => "settings/general", "settings/about" => "settings/about",
@@ -337,9 +343,9 @@ public sealed partial class MainWindow : Window
         FrameworkElement expectedPage = page switch
         {
             "activity" => ActivityPage, "backup" => BackupPage, "files" => FilesPage,
-            "settings" => SettingsPage, "services" => ServicesPage, "connectors" => ConnectorsPage, _ => OverviewPage
+            "settings" => SettingsPage, "services" => ServicesPage, _ => OverviewPage
         };
-        FrameworkElement[] pages = [OverviewPage, ActivityPage, BackupPage, FilesPage, SettingsPage, ServicesPage, ConnectorsPage];
+        FrameworkElement[] pages = [OverviewPage, ActivityPage, BackupPage, FilesPage, SettingsPage, ServicesPage];
         var expectedSelection = NavigationItemForRoute(route);
         if (CurrentRoute != route || expectedSelection is null || !ReferenceEquals(Navigation.SelectedItem, expectedSelection) ||
             pages.Any(item => (item.Visibility == Visibility.Visible) != ReferenceEquals(item, expectedPage)) ||
@@ -363,7 +369,7 @@ public sealed partial class MainWindow : Window
         var pages = new (string Name, FrameworkElement Element)[]
         {
             ("overview", OverviewPage), ("activity", ActivityPage), ("backup", BackupPage),
-            ("files", FilesPage), ("settings", SettingsPage), ("services", ServicesPage), ("connectors", ConnectorsPage)
+            ("files", FilesPage), ("settings", SettingsPage), ("services", ServicesPage)
         };
         var selectedFlags = string.Join(",", Navigation.MenuItems.Concat(Navigation.FooterMenuItems)
             .OfType<NavigationViewItem>().Select(item => $"{Item(item)}:{item.IsSelected}"));
@@ -405,8 +411,9 @@ public sealed partial class MainWindow : Window
             _statusStyleKey = badgeStyle;
             OverviewStatusIcon.Style = (Style)Microsoft.UI.Xaml.Application.Current.Resources[badgeStyle];
         }
-        WelcomePanel.Visibility = canPauseTransfers ? Visibility.Collapsed : Visibility.Visible;
-        ConnectedOverview.Visibility = canPauseTransfers ? Visibility.Visible : Visibility.Collapsed;
+        var hasService = canPauseTransfers || HasConnectedService;
+        WelcomePanel.Visibility = hasService ? Visibility.Collapsed : Visibility.Visible;
+        ConnectedOverview.Visibility = hasService ? Visibility.Visible : Visibility.Collapsed;
         FilesConnectPanel.Visibility = settings.IsConfigured ? Visibility.Collapsed : Visibility.Visible;
         FilesConnectedPanel.Visibility = settings.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
         RecentActivitySection.Visibility = canPauseTransfers && _viewModel.HasActivity ? Visibility.Visible : Visibility.Collapsed;
@@ -425,10 +432,10 @@ public sealed partial class MainWindow : Window
         OpenFolderButton.Style = snapshot.State == ClientState.Attention ? null : _openFolderAccentStyle;
         DisconnectButton.Visibility = settings.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
         DisconnectAccountCard.Visibility = settings.IsConfigured ? Visibility.Visible : Visibility.Collapsed;
-        RefreshStartupAvailability(settings.IsConfigured || (_viewModel.Preview?.ConnectedOneDriveAccounts ?? _connectedOneDriveAccounts) > 0);
+        RefreshStartupAvailability(HasConnectedService);
         SettingsAccountHeading.Text = "Cloud services";
-        SettingsAccountAction.Content = settings.IsConfigured ? "Manage services" : "Choose service";
-        SettingsAccountCard.Description = settings.IsConfigured ? $"Backblaze B2 · {settings.BucketName} · Explore more services" : "Choose a provider for backup and cloud transfers.";
+        SettingsAccountAction.Content = HasConnectedService ? "Manage services" : "Choose service";
+        SettingsAccountCard.Description = HasConnectedService ? "Manage your connected services and accounts." : "Choose a provider for backup and cloud transfers.";
         SyncCategory.Description = settings.FilesOnDemand ? "Files on demand is on · Windows manages downloaded files." : "Keep your files downloaded on this PC.";
         AppearanceCategory.Description = settings.Theme == "System" ? "Use your Windows theme." : $"{settings.Theme} theme";
         OpenFolderButton.IsEnabled = _viewModel.IsConfigured;
@@ -499,7 +506,7 @@ public sealed partial class MainWindow : Window
     {
         if (page != "settings") OneDriveSettingsDetail.Content = null;
         _currentPage = page;
-        FrameworkElement[] pages = [OverviewPage, ActivityPage, BackupPage, FilesPage, SettingsPage, ServicesPage, ConnectorsPage];
+        FrameworkElement[] pages = [OverviewPage, ActivityPage, BackupPage, FilesPage, SettingsPage, ServicesPage];
         foreach (var item in pages) item.Visibility = Visibility.Collapsed;
         var selected = page switch
         {
@@ -507,12 +514,12 @@ public sealed partial class MainWindow : Window
             "backup" => BackupPage,
             "files" => FilesPage,
             "settings" => SettingsPage,
-            "services" => ServicesPage, "connectors" => ConnectorsPage,
+            "services" => ServicesPage,
             _ => OverviewPage
         };
         selected.Visibility = Visibility.Visible;
         UpdatePageHeader();
-        if (page == "connectors") EnterConnectors();
+        if (page == "services") EnterConnectors();
         if (page == "overview") RefreshConnectorRecovery();
         if (page == "backup") RefreshBackups(refreshMetadata: true);
         if (page is "services" or "overview") RefreshCloudServices();
@@ -530,7 +537,6 @@ public sealed partial class MainWindow : Window
             "backup" => "Folder backup",
             "files" => "Files",
             "services" => "Cloud services",
-            "connectors" => "Connectors",
             "settings" => _settingsRoute switch
             {
                 "account" => "Account",
@@ -1198,7 +1204,9 @@ public sealed partial class MainWindow : Window
                 var endpoint = enabling
                     ? _controller.GetB2TransferRoot(DisplaySettings.BucketId, DisplaySettings.BucketName, DisplaySettings.Prefix + name + "/")
                     : _controller.GetBackupTransferLocation(name);
-                cloudChoice = await PickCloudTransferAsync(enabling ? null : endpoint, enabling ? endpoint : null);
+                // The stop-backup recovery journal currently supports OneDrive destinations.
+                cloudChoice = await PickCloudTransferAsync(enabling ? null : endpoint, enabling ? endpoint : null,
+                    destinationProvider: enabling ? null : "onedrive");
                 if (cloudChoice is null) return;
                 if (enabling)
                 {
@@ -1717,10 +1725,9 @@ public sealed partial class MainWindow : Window
         });
     }
 
-    private async void SettingsCategory_Click(object sender, RoutedEventArgs args)
+    private void SettingsCategory_Click(object sender, RoutedEventArgs args)
     {
         if (sender is not FrameworkElement { Tag: string route } element) return;
-        if (route == "catalog") { await OpenCatalogAsync(); return; }
         _settingsOrigin = element as Control;
         OpenSettingsRoute(route);
         FocusSettingsAfterLayout(PageBreadcrumb, route);
@@ -1966,60 +1973,13 @@ public sealed partial class MainWindow : Window
         CustomBackupSourceBox.IsEnabled = CustomBackupNameBox.IsEnabled = !busy;
         SyncNowButton.IsEnabled = !busy && _controller.Settings.IsConfigured;
         DashboardPauseButton.IsEnabled = !busy && CanPauseDisplayedTransfers;
-        RefreshStartupAvailability(DisplaySettings.IsConfigured || (_viewModel.Preview?.ConnectedOneDriveAccounts ?? _connectedOneDriveAccounts) > 0);
+        RefreshStartupAvailability(HasConnectedService);
         RefreshBackups();
         RefreshCustomBackups();
         UpdateBackupBusyFooter();
         UpdateFluentLayout();
     }
 
-
-    private async Task OpenCatalogAsync()
-    {
-        if (_busy) return;
-        CatalogDialog.XamlRoot = RootGrid.XamlRoot;
-        CatalogDialog.RequestedTheme = RootGrid.RequestedTheme;
-        UpdateCatalog(resetCategories: true);
-        try { await ShowModalAsync(CatalogDialog); }
-        catch (OperationCanceledException) { }
-    }
-
-    private void CatalogFilter_Changed(object sender, SelectionChangedEventArgs args)
-    {
-        if (CatalogList is null || _updatingCatalog) return;
-        UpdateCatalog(resetCategories: ReferenceEquals(sender, CatalogKind));
-    }
-
-    private void CatalogSearch_Changed(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
-    {
-        if (CatalogList is not null) UpdateCatalog();
-    }
-
-    private void UpdateCatalog(bool resetCategories = false)
-    {
-        var modes = CatalogKind.SelectedIndex == 1;
-        var options = modes ? ProductCatalog.Modes : ProductCatalog.Providers;
-        _updatingCatalog = true;
-        try
-        {
-            if (resetCategories || CatalogGroup.ItemsSource is null)
-            {
-                CatalogGroup.ItemsSource = new[] { "All categories" }.Concat(options.Select(item => item.Group).Distinct()).ToArray();
-                CatalogGroup.SelectedIndex = 0;
-            }
-            CatalogGroup.Visibility = modes ? Visibility.Collapsed : Visibility.Visible;
-            Grid.SetColumnSpan(CatalogKind, modes ? 2 : 1);
-            CatalogSearch.PlaceholderText = modes ? "Search modes" : "Search providers";
-            var category = CatalogGroup.SelectedItem as string;
-            var search = CatalogSearch.Text.Trim();
-            var matches = options.Where(item => (category is null or "All categories" || item.Group == category) &&
-                (search.Length == 0 || item.Name.Contains(search, StringComparison.OrdinalIgnoreCase) || item.Description.Contains(search, StringComparison.OrdinalIgnoreCase) || item.Group.Contains(search, StringComparison.OrdinalIgnoreCase))).ToArray();
-            CatalogList.ItemsSource = matches;
-            CatalogEmpty.Text = modes ? "No matching modes" : "No matching providers";
-            CatalogEmpty.Visibility = matches.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
-        }
-        finally { _updatingCatalog = false; }
-    }
 
     private void ShowError(Exception error)
     {
@@ -2666,31 +2626,6 @@ public sealed partial class MainWindow : Window
                 throw new InvalidOperationException("A running operation must expose its progress status.");
             SetBusy(false, "");
             SetPresentation(ClientPreview.Connected(), theme);
-            await CapturePageAsync("settings", $"settings-catalog{suffix}");
-            CatalogDialog.XamlRoot = RootGrid.XamlRoot;
-            CatalogDialog.RequestedTheme = theme;
-            CatalogKind.SelectedIndex = 0;
-            CatalogSearch.Text = "";
-            UpdateCatalog(resetCategories: true);
-            if (((ProductOption[])CatalogList.ItemsSource).Length != ProductCatalog.Providers.Count ||
-                ProductCatalog.Providers.Count(item => item.Available) != 1 || ProductCatalog.Modes.Count(item => item.Available) != 1)
-                throw new InvalidOperationException("The catalog must expose every planned provider and only the implemented options as available.");
-            // InPlace keeps the real dialog template in the window's visual
-            // tree. RenderTargetBitmap cannot capture popup-hosted content.
-            var dialogTask = CatalogDialog.ShowAsync(ContentDialogPlacement.InPlace);
-            await Task.Delay(300);
-            await CaptureCatalogAsync($"catalog-providers{suffix}");
-            CatalogSearch.Text = "Amazon";
-            await WaitForUiAsync(() => ((ProductOption[])CatalogList.ItemsSource) is [{ Id: "aws-s3", Available: false }], "Catalog search returned an incorrect provider or availability.");
-            await Task.Delay(180);
-            await CaptureCatalogAsync($"catalog-search{suffix}");
-            CatalogKind.SelectedIndex = 1;
-            CatalogSearch.Text = "";
-            await WaitForUiAsync(() => ((ProductOption[])CatalogList.ItemsSource).SequenceEqual(ProductCatalog.Modes), "The mode catalog must expose Native backup and both planned modes.");
-            await Task.Delay(180);
-            await CaptureCatalogAsync($"catalog-modes{suffix}");
-            CatalogDialog.Hide();
-            await dialogTask;
         }
         _viewModel.SetPreview(null);
         LoadSettings(reloadAccount: true, reloadPreferences: true);
@@ -2714,12 +2649,6 @@ public sealed partial class MainWindow : Window
                 (_viewModel.ProgressLabel.Contains('%') != (_viewModel.Preview!.Snapshot.TransferTotalKnown && _viewModel.Preview.Snapshot.TransferTotalBytes > 0) ||
                  Microsoft.UI.Xaml.Automation.AutomationProperties.GetName(TransferProgress) != _viewModel.ProgressLabel))
                 throw new InvalidOperationException("Overview progress must expose measured percentage and sizes, or a truthful unknown-size status.");
-        }
-
-        async Task CaptureCatalogAsync(string fileName)
-        {
-            await File.AppendAllTextAsync(Path.Combine(outputDirectory, "layout.txt"), $"{fileName}: in-place dialog rendering{Environment.NewLine}");
-            await UiSmokeCapture.SaveAsync(RootGrid, Path.Combine(outputDirectory, $"{fileName}.png"));
         }
 
         async Task CaptureImportDialogAsync(ContentDialog dialog, string name)

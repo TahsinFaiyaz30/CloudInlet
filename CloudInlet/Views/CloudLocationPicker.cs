@@ -1,3 +1,4 @@
+using CloudInlet.Connectors;
 using CloudInlet.Application;
 using CloudInlet.Core;
 using CloudInlet.Core.OneDrive;
@@ -21,6 +22,8 @@ internal sealed class CloudLocationPicker : IDisposable
     private readonly ClientController _controller;
     private readonly nint _owner;
     private readonly string _heading;
+    private readonly Func<ConnectorCapabilities> _required;
+    private readonly string? _onlyProvider;
     private readonly Action _changed;
     private readonly Action<Exception> _error;
     private readonly Action<string> _connect;
@@ -51,8 +54,9 @@ internal sealed class CloudLocationPicker : IDisposable
     internal CloudLocationSelection? Selection => _choice is null ? null : new(_choice.Provider, _choice.AccountId, Location);
 
     internal CloudLocationPicker(ClientController controller, nint owner, string heading, CancellationToken token,
-        Action changed, Action<Exception> error, Action<string> connect)
+        Action changed, Action<Exception> error, Action<string> connect, Func<ConnectorCapabilities> required, string? onlyProvider = null)
     {
+        _required = required; _onlyProvider = onlyProvider;
         _controller = controller; _owner = owner; _heading = heading; _changed = changed; _error = error; _connect = connect;
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
         _interaction.Content = _view;
@@ -88,32 +92,25 @@ internal sealed class CloudLocationPicker : IDisposable
         var choice = Choices().FirstOrDefault(item => item.Provider == selected.Provider &&
             (string.IsNullOrEmpty(selected.AccountId) || item.AccountId == selected.AccountId));
         if (choice is not null) await RunAsync(() => SelectAsync(choice, selected.Location));
+        else if (_controller.Connectors.Issue(selected.Provider) is not null && selected.Provider != "local")
+            await SelectAsync(new(selected.Provider, selected.AccountId, selected.Location?.DisplayName ?? selected.Provider, "", false));
         else ShowChoices();
     }
 
     private IEnumerable<Choice> Choices()
     {
-        yield return new("local", null, "This PC", "Choose a local folder", true);
-        yield return new("b2", _controller.Settings.IsConfigured ? _controller.Settings.AccountId : null, "Backblaze B2",
-            _controller.Settings.IsConfigured ? _controller.Settings.BucketName : "Not connected", _controller.Settings.IsConfigured);
-        foreach (var (id, installed) in _controller.Connectors.Snapshot.Installed)
+        if (_onlyProvider is null)
+            yield return new("local", null, "This PC", "Choose a local folder", true);
+        foreach (var provider in _controller.Connectors.AvailableProviders(_required()))
         {
-            var m = installed.Current.Manifest;
-            if (id is "b2" or "onedrive" || !installed.Enabled || m.Kind != "provider") continue;
-            if (!m.Capabilities.HasFlag(CloudInlet.Connectors.ConnectorCapabilities.AccountSetup))
-                yield return new(id, "default", m.Name, m.Publisher, true);
-            else
-            {
-                var accounts = _controller.CustomAccounts(id);
-                foreach (var account in accounts) yield return new(id, account.Id, m.Name + " · " + account.Name, m.Publisher, true);
-                if (accounts.Count == 0) yield return new(id, null, m.Name, "Connect an account", false);
-            }
+            if (_onlyProvider is not null && _onlyProvider != provider.Id) continue;
+            var accounts = _controller.ServiceAccounts(provider);
+            if (accounts.Count == 0)
+                yield return new(provider.Id, null, provider.Name, "Not connected", false);
+            foreach (var account in accounts)
+                yield return new(provider.Id, account.Id, account.Name == provider.Name ? provider.Name : provider.Name + " · " + account.Name,
+                    provider.Publisher, true);
         }
-        if (_controller.OneDriveAccounts.Count == 0)
-            yield return new("onedrive", null, "OneDrive", "Not connected", false);
-        else
-            foreach (var account in _controller.OneDriveAccounts)
-                yield return new("onedrive", account.Id, "OneDrive · " + account.Name, "Connected account", true);
     }
 
     private void ShowChoices()

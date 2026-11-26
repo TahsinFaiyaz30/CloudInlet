@@ -505,17 +505,17 @@ public partial class App : Microsoft.UI.Xaml.Application
     private bool ShouldShowLaunchWindow(IReadOnlyCollection<string> commandLine, bool notificationActivation = false, bool isSecondaryLaunch = false)
     {
         if (_controller is null) return false;
-        var hasOneDriveAccount = false;
+        var hasServiceAccount = false;
         if (!_controller.Settings.IsConfigured)
         {
-            try { hasOneDriveAccount = _controller.OneDriveAccounts.Count > 0; }
+            try { hasServiceAccount = _controller.Connectors.AvailableProviders().Any(p => _controller.ServiceAccounts(p).Count > 0); }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or System.Security.Cryptography.CryptographicException)
             {
                 // An unreadable account vault needs recovery, even if an account was previously connected.
                 return ClientLaunchPolicy.ShouldShowWindow(_controller.Settings, false, ClientState.Attention, commandLine, notificationActivation, isSecondaryLaunch);
             }
         }
-        return ClientLaunchPolicy.ShouldShowWindow(_controller.Settings, hasOneDriveAccount, _controller.Snapshot.State, commandLine, notificationActivation, isSecondaryLaunch);
+        return ClientLaunchPolicy.ShouldShowWindow(_controller.Settings, hasServiceAccount, _controller.Snapshot.State, commandLine, notificationActivation, isSecondaryLaunch);
     }
 
     private async Task ListenForActivationAsync()

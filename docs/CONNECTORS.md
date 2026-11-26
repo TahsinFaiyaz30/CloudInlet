@@ -4,7 +4,7 @@ The x64 EXE, MSI, portable and MSIX builds use the same in-app catalog and downl
 
 ## Try the published connectors
 
-Open Connectors in CloudInlet 1.2.5 or later to install the public packs. From the source checkout on Windows x64 with .NET 8, publish to a fresh directory and launch the isolated lab profile. This profile has its own accounts, checkpoints, instance and connector storage.
+In 1.2.6, open **Cloud services**. **Available now** shows enabled, usable providers and their accounts. **Connector catalog** offers downloads, local imports and recovery. Version 1.2.5 calls the catalog **Connectors**. Transfer source and destination pickers show installed providers that support the chosen operation. From the source checkout on Windows x64 with .NET 8, publish to a fresh directory and launch the isolated lab profile. This profile has its own accounts, checkpoints, instance and connector storage.
 
 ```powershell
 dotnet publish CloudInlet/CloudInlet.csproj -c Release -r win-x64 --self-contained true -p:PublishTrimmed=false "-p:CloudInletLiveDirectory=$PWD/artifacts/connector-try/marker" -o artifacts/connector-try/App
@@ -24,11 +24,11 @@ pwsh -File scripts/build-connectors.ps1 -OutputDirectory artifacts/connector-pre
 
 Choose a new output directory for each build. The command builds the app and separately signs the two provider test packs, a local catalog and a private sample. The preview trusts the local catalog key embedded in its distribution configuration. Local development keys are unique to the build unless you pass an existing `-KeyFile`. Keep the preview and its catalog together. The lab uses its own per-build profile, instance mutex and pipe. Windows startup management is disabled in this mode. In the lab, use **Settings → Updates and about → Check connectors** to refresh the test catalog. The normal installed desktop edition also checks for app updates.
 
-- **Connectors → Install** opens the full plan, including the publisher fingerprint, actual download location, version, dependencies and release notes. One approval installs the group. When a publisher supplies mirrors, select a location in this dialog. An alternative publisher or subscription requires separate review.
+- **Cloud services → Connector catalog → Install** opens the full plan, including the publisher fingerprint, actual download location, version, dependencies and release notes. One approval installs the group. When a publisher supplies mirrors, select a location in this dialog. An alternative publisher or subscription requires separate review.
 - To try a transfer without cloud credentials, use **Import packages** and select `example.cipack` from the build output. Review the displayed developer fingerprint against the build log. Open **Cloud transfer**, choose **Private sample files → Sample files** as source, **This PC** and a new empty folder as destination, then choose **Copy**. The engine verifies and writes `welcome.txt`.
 - A saved job or account with missing providers has an **Install required connectors** action. Recovery preserves the saved endpoint IDs and checkpoints. Reopen the connection flow after installing if authentication is still required.
 - Search by name, provider ID, feature or publisher. A connector can be disabled while its saved accounts remain on disk. Pause its active transfers before disabling or uninstalling. CloudInlet blocks removal while the connector owns a mounted backup root or another installed package requires it. Removing a subscription leaves installed code and accounts in place.
-- **Settings → Updates and about** checks the app and connector sources. It shows installed and catalog versions, release notes, individual and combined updates, and automatic preferences. Local imports receive updates by importing a newer package signed with the same key. The Connectors page offers rollback while the prior connector package is retained.
+- **Settings → Updates and about** checks the app and connector sources. It shows installed and catalog versions, release notes, individual and combined updates, and automatic preferences. Local imports receive updates by importing a newer package signed with the same key. Cloud services offers rollback while the prior connector package is retained.
 
 ## Engine and SDK
 
@@ -103,7 +103,7 @@ dotnet $tool pack "$project/connector.json" "$project/bin/Release/net8.0" "$proj
 dotnet $tool validate "$project/personal-1.0.0.cipack"
 ```
 
-Import the resulting file from **Connectors → Import packages**. The starter exposes a single read-only file. Replace its session, endpoints, ID, features, license, documentation and release notes as appropriate. Add provider-specific managed DLLs to the manifest inventory and build output. A standalone pack does not need to include a self-contained .NET publish. Preserve the key to update the connector. For a new local version, increase the connector's three-part version, rebuild and import the new signed package. The CLI refuses to overwrite an existing pack.
+Import the resulting file from **Cloud services → Connector catalog → Import packages**. The starter exposes a single read-only file. Replace its session, endpoints, ID, features, license, documentation and release notes as appropriate. Add provider-specific managed DLLs to the manifest inventory and build output. A standalone pack does not need to include a self-contained .NET publish. Preserve the key to update the connector. For a new local version, increase the connector's three-part version, rebuild and import the new signed package. The CLI refuses to overwrite an existing pack.
 
 The example key is protected for the current Windows user using DPAPI. Keep private keys outside source control, catalogs, releases and the app. The normal desktop app does not need the signing tool or a private key.
 

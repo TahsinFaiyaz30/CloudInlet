@@ -1,3 +1,4 @@
+using CloudInlet.Connectors;
 using CloudInlet.Application;
 using CloudInlet.Core.Transfers;
 using Microsoft.UI.Xaml;
@@ -27,7 +28,6 @@ internal sealed class CloudTransferDialog : ContentDialog
     private readonly Border _options;
     private readonly TransferLocation? _fixedSource, _fixedDestination;
     private readonly CloudTransferDraft? _draft;
-    private readonly bool _preferOneDrive;
     private CloudLocationSelection? _selectedSource, _selectedDestination;
     private CloudLocationPicker? _activePicker;
     private bool _review, _working, _closed, _initialized, _signInPresentation, _disposed;
@@ -40,10 +40,10 @@ internal sealed class CloudTransferDialog : ContentDialog
     internal string? RequestedConnectionProvider { get; private set; }
 
     internal CloudTransferDialog(ClientController controller, nint owner, TransferLocation? source = null,
-        TransferLocation? destination = null, bool preferOneDrive = false, CloudTransferDraft? draft = null)
+        TransferLocation? destination = null, CloudTransferDraft? draft = null, string? destinationProvider = null)
     {
         _controller = controller; _owner = owner; _fixedSource = source; _fixedDestination = destination;
-        _draft = draft; _preferOneDrive = preferOneDrive;
+        _draft = draft;
         _selectedSource = source is null ? draft?.Source : new(source.Provider, source.AccountId, source);
         _selectedDestination = destination is null ? draft?.Destination : new(destination.Provider, destination.AccountId, destination);
         Title = "Transfer files"; PrimaryButtonText = "Review transfer"; CloseButtonText = "Cancel";
@@ -59,8 +59,10 @@ internal sealed class CloudTransferDialog : ContentDialog
                     !controller.Settings.DisabledLegacyExclusions.Contains(pattern, StringComparer.OrdinalIgnoreCase))))
             : new TransferExclusionEditor(draft.Exclusions);
         _exclusions.StateChanged += (_, _) => SelectionChanged();
-        _source = new CloudLocationPicker(controller, owner, "Source", _lifetime.Token, SelectionChanged, ShowError, RequestConnection);
-        _destination = new CloudLocationPicker(controller, owner, "Destination", _lifetime.Token, SelectionChanged, ShowError, RequestConnection);
+        _source = new CloudLocationPicker(controller, owner, "Source", _lifetime.Token, SelectionChanged, ShowError, RequestConnection,
+            () => ConnectorCapabilities.Read | (Operation == TransferOperation.Move ? ConnectorCapabilities.DeleteExactVersion : ConnectorCapabilities.None));
+        _destination = new CloudLocationPicker(controller, owner, "Destination", _lifetime.Token, SelectionChanged, ShowError, RequestConnection,
+            () => ConnectorCapabilities.Write | ConnectorCapabilities.Verify, destinationProvider);
         _locations = SourceImportDialog.PairedContent(SourceImportDialog.Surface(_sourceSummary), SourceImportDialog.Surface(_destinationSummary));
         var options = new StackPanel { Spacing = 12 };
         options.Children.Add(SourceImportDialog.Heading("Transfer options"));
@@ -134,7 +136,7 @@ internal sealed class CloudTransferDialog : ContentDialog
         }
         else if ((destination ? _selectedDestination : _selectedSource) is { } selected)
             summary.Children.Add(SourceImportDialog.Text((_controller.Connectors.Snapshot.Installed.GetValueOrDefault(selected.Provider)?.Current.Manifest.Name ??
-                (selected.Provider == "b2" ? "Backblaze B2" : selected.Provider == "onedrive" ? "OneDrive" : selected.Provider)) + " · Choose a location"));
+                selected.Provider) + " · Choose a location"));
         else summary.Children.Add(SourceImportDialog.Text(destination ? "Where your files will go." : "Where your files come from.", true));
         if ((destination ? _fixedDestination : _fixedSource) is not null) return;
         var choose = SourceImportDialog.ActionButton((location is null ? "Choose " : "Change ") + name);
@@ -169,8 +171,6 @@ internal sealed class CloudTransferDialog : ContentDialog
         _initialized = true;
         if (_draft?.EditingSide is { } side)
             await OpenPickerAsync(side == "destination", _draft.PendingLocation);
-        else if (_preferOneDrive && _fixedSource is null && _selectedSource is null)
-            await OpenPickerAsync(false, new("onedrive", null, null));
         SelectionChanged();
     }
 

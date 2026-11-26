@@ -49,6 +49,6 @@ if ($IncludeExample -or $Preview) {
 if ($Preview) {
     $app = Join-Path $output 'App'
     Invoke-Dotnet publish (Join-Path $repo 'CloudInlet/CloudInlet.csproj') -c $Configuration -r win-x64 --self-contained true '-p:PublishSingleFile=false' '-p:PublishTrimmed=false' "-p:CloudInletConnectorBootstrap=$bootstrap" "-p:CloudInletLiveDirectory=$output/marker" -o $app '-v:minimal'
-    Write-Output "Preview: & '$app/CloudInlet.exe' --connector-lab --page=connectors"
+    Write-Output "Preview: & '$app/CloudInlet.exe' --connector-lab --page=services"
 }
 Write-Output "Signed catalog: $signed"

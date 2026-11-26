@@ -56,14 +56,14 @@ public sealed partial class ClientController : IAsyncDisposable
     private readonly ConcurrentDictionary<string, Task> _hydrationFinalizations = new(StringComparer.Ordinal);
     private readonly TransferSpeedMeter _nativeDownloadSpeed = new();
     private long _nativeDownloadPayload;
-    private SyncSnapshot _rootSnapshot = new(ClientState.NotConnected, "Connect a Backblaze B2 bucket to get started");
+    private SyncSnapshot _rootSnapshot = new(ClientState.NotConnected, "Open Cloud services to get started.");
     private readonly object _changedGate = new();
     private readonly object _aggregateGate = new();
     private string? _settingsRecoveryError;
     private long _lastChange;
     private long _manualPauseUntilTicks;
     public AppSettings Settings { get; private set; }
-    public SyncSnapshot Snapshot { get; private set; } = new(ClientState.NotConnected, "Connect a Backblaze B2 bucket to get started");
+    public SyncSnapshot Snapshot { get; private set; } = new(ClientState.NotConnected, "Open Cloud services to get started.");
     public bool IsTransferPauseActive => Interlocked.Read(ref _manualPauseUntilTicks) > DateTimeOffset.UtcNow.UtcTicks ||
         Snapshot.State == ClientState.Paused;
     public IReadOnlyList<ActivityEvent> Activity => _storage.Activity;

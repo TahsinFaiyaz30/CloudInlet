@@ -83,7 +83,7 @@ internal sealed record ConnectorReleaseRoute(string ProviderRepository, string R
                 "The signed catalog lists each official connector independently. Select a connector to see its complete release history. The original 1.0.0 downloads remain available here. [Historical releases](" + central + "/releases)", ""]);
         lines.AddRange(table);
         lines.AddRange(["", "## Install and update", "",
-            "In CloudInlet 1.2.5 or later, open **Connectors**, select the provider, review the publisher and download, and choose **Install**. Open **Settings → Updates and about** to update an installed connector. [Connector guide](" + docs + "/CONNECTORS.md)", "",
+            "Open **Cloud services → Connector catalog** (**Connectors** in 1.2.5), select the provider, review the publisher and download, and choose **Install**. Open **Settings → Updates and about** to update an installed connector. [Connector guide](" + docs + "/CONNECTORS.md)", "",
             $"CloudInlet verifies the signed catalog and package. The official publisher fingerprint is `{offers[0].Manifest.Fingerprint}`. [Central directory]({central}) · [Signed catalog]({OfficialRelease.Discovery}) · [Connector development guide]({docs}/CONNECTORS.md)"]);
         if (directory == "central")
             lines.AddRange(["", "## Maintainers", "",

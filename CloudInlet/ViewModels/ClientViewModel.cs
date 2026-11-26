@@ -20,12 +20,12 @@ public sealed class ClientViewModel : INotifyPropertyChanged
     public ObservableCollection<TransferItem> RecentTransfers { get; } = [];
     public ObservableCollection<object> ActivityRows { get; private set; } = [];
     public string StatusTitle { get; private set; } = "Ready to connect";
-    public string StatusDescription { get; private set; } = "Connect your Backblaze B2 bucket to start protecting your files.";
+    public string StatusDescription { get; private set; } = "Open Cloud services to connect your storage.";
     public string StatusGlyph { get; private set; } = "\uE753";
     public string PendingLabel { get; private set; } = "Connect your account to start syncing";
     public string LastSyncLabel { get; private set; } = "No sync completed yet";
     public string LastSyncFullLabel { get; private set; } = "";
-    public string BucketLabel { get; private set; } = "Backblaze B2";
+    public string BucketLabel { get; private set; } = "Cloud storage";
     public string PauseLabel { get; private set; } = "Pause syncing";
     public bool IsTransferPauseActive => Preview is { } preview
         ? preview.ManualPauseActive || preview.Snapshot.State == ClientState.Paused : _controller.IsTransferPauseActive;
@@ -100,7 +100,7 @@ public sealed class ClientViewModel : INotifyPropertyChanged
         LastSyncLabel = snapshot.LastSync is { } time ? FormatLastSync(time) : "";
         LastSyncFullLabel = snapshot.LastSync is { } fullTime ? fullTime.ToLocalTime().ToString("f") : "";
         StorageSummary = HasStorageSummary ? $"{snapshot.FileCount:N0} files · {FormatSize(snapshot.CloudBytes)} in cloud · {FormatSize(snapshot.LocalBytes)} on this PC" : "";
-        BucketLabel = IsConfigured ? settings.BucketName : "Backblaze B2";
+        BucketLabel = IsConfigured ? settings.BucketName : "Cloud storage";
         PauseLabel = IsTransferPauseActive ? "Resume syncing" : "Pause syncing";
         IsProgressVisible = snapshot.State is ClientState.Syncing or ClientState.Connecting;
         var progress = ProgressPresentation.ForSnapshot(snapshot);
@@ -400,7 +400,7 @@ public sealed record ClientPreview(AppSettings Settings, SyncSnapshot Snapshot, 
     public static ClientPreview ForState(ClientState state)
     {
         if (state == ClientState.NotConnected)
-            return new(new AppSettings(), new(ClientState.NotConnected, "Connect your Backblaze B2 bucket to start protecting your files."), []);
+            return new(new AppSettings(), new(ClientState.NotConnected, "Open Cloud services to connect your storage."), []);
         var connected = Connected(state == ClientState.Syncing);
         var message = state switch
         {

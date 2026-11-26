@@ -19,12 +19,12 @@ public sealed partial class MainWindow
     private sealed record CloudJobRow(SettingsCard Card, TextBlock Detail, ProgressBar Progress, TextBlock ProgressDetail, Button Pause, Button Resume, Button Cancel);
 
     private async void CloudTransfer_Click(object sender, RoutedEventArgs args) => await OpenCloudTransferAsync();
-    private async Task<string?> OpenCloudTransferAsync(TransferLocation? source = null, TransferLocation? destination = null, bool preferOneDrive = false)
+    private async Task<string?> OpenCloudTransferAsync(TransferLocation? source = null, TransferLocation? destination = null)
     {
         if (_closed || _busy || _viewModel.Preview is not null) return null;
         try
         {
-            var dialog = await PickCloudTransferAsync(source, destination, preferOneDrive);
+            var dialog = await PickCloudTransferAsync(source, destination);
             if (dialog?.Source is null || dialog.Destination is null) return null;
             var id = await _controller.StartCloudTransferAsync(dialog.Source, dialog.Destination, dialog.Operation,
                 dialog.Conflicts, dialog.Exclusions, _backupUiLifetime.Token);
@@ -36,7 +36,7 @@ public sealed partial class MainWindow
         catch (Exception error) { if (!_closed) ShowError(error); return null; }
     }
 
-    private async Task<CloudTransferDialog?> PickCloudTransferAsync(TransferLocation? source = null, TransferLocation? destination = null, bool preferOneDrive = false)
+    private async Task<CloudTransferDialog?> PickCloudTransferAsync(TransferLocation? source = null, TransferLocation? destination = null, string? destinationProvider = null)
     {
         await _transferChoiceQueue.WaitAsync(_backupUiLifetime.Token);
         try
@@ -45,7 +45,7 @@ public sealed partial class MainWindow
             var origin = CurrentRoute;
             while (!_closed)
             {
-                var dialog = new CloudTransferDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this), source, destination, preferOneDrive, draft)
+                var dialog = new CloudTransferDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this), source, destination, draft, destinationProvider)
                 { XamlRoot = RootGrid.XamlRoot, RequestedTheme = RootGrid.RequestedTheme };
                 var result = await ShowModalAsync(dialog);
                 if (dialog.RequestedConnectionProvider is not { } provider)

@@ -19,47 +19,22 @@ public sealed partial class MainWindow
         AppWindow.TitleBar.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
     }
 
-    private CloudServicesView? _cloudServicesView;
-    private CloudServicesView? _homeServicesView;
-    private int _connectedOneDriveAccounts;
-
-    private void InitializeCloudServices()
-    {
-        _cloudServicesView = new CloudServicesView();
-        _cloudServicesView.ConnectBackblazeRequested += ConnectB2FromServices;
-        _cloudServicesView.OpenOneDriveRequested += ConnectOneDriveFromServices;
-        ServicesPage.Content = _cloudServicesView;
-        _homeServicesView = new CloudServicesView(showComingSoon: false);
-        _homeServicesView.ConnectBackblazeRequested += ConnectB2FromServices;
-        _homeServicesView.OpenOneDriveRequested += ConnectOneDriveFromServices;
-        HomeServicesHost.Content = _homeServicesView;
-        RefreshCloudServices();
-    }
-
-    private async void ConnectB2FromServices(object? sender, EventArgs args)
-    {
-        if (_viewModel.Preview is not null || Manager.Issue("b2") is null || await InstallRequiredAsync("b2")) ShowAccount();
-    }
-    private async void ConnectOneDriveFromServices(object? sender, EventArgs args)
-    {
-        if (_viewModel.Preview is not null || Manager.Issue("onedrive") is null || await InstallRequiredAsync("onedrive")) RequestNavigationRoute("settings/onedrive");
-    }
+    private bool _hasServiceAccount;
+    private bool HasConnectedService => _viewModel.Preview is { } preview
+        ? DisplaySettings.IsConfigured || preview.ConnectedOneDriveAccounts > 0
+        : DisplaySettings.IsConfigured || _hasServiceAccount;
 
     private void RefreshCloudServices()
     {
         try
         {
-            var count = _viewModel.Preview?.ConnectedOneDriveAccounts ?? _controller.OneDriveAccounts.Count;
-            if (_viewModel.Preview is null) _connectedOneDriveAccounts = count;
-            _cloudServicesView?.RefreshProviders(DisplaySettings.IsConfigured, count);
-            _homeServicesView?.RefreshProviders(DisplaySettings.IsConfigured, count);
-            RefreshStartupAvailability(DisplaySettings.IsConfigured || count > 0);
+            var providers = Manager.AvailableProviders();
+            _hasServiceAccount = providers.Any(m => m.Id != "b2" && _controller.ServiceAccounts(m).Count > 0);
+            HomeServiceHint.Text = providers.Length == 0 ? "Install a connector to use your cloud storage."
+                : "Open Cloud services to connect an installed provider.";
+            RefreshStartupAvailability(HasConnectedService);
         }
-        catch (Exception error)
-        {
-            RefreshStartupAvailability(DisplaySettings.IsConfigured);
-            ShowError(error);
-        }
+        catch (Exception error) { ShowError(error); }
     }
 
     private void RefreshStartupAvailability(bool hasConnectedAccount)
@@ -78,13 +53,10 @@ public sealed partial class MainWindow
     private static readonly NavigationDestination[] NavigationDestinations =
     [
         new("Home", "overview", "overview status sync pause recent"),
-        new("Activity", "activity", "transfer queue progress history speed cloud OneDrive copy move resume cancel"),
+        new("Activity", "activity", "transfer queue progress history speed copy move resume cancel"),
         new("Folder backup", "backup", "desktop documents pictures downloads folders custom import"),
         new("Files", "files", "explorer storage versions restore download pin free space"),
-        new("Connectors", "connectors", "install extensions packages catalog provider updates source publisher private"),
-        new("Cloud services", "services", "providers connect accounts OneDrive Backblaze B2 Google Drive Dropbox S3 coming soon"),
-        new("Backblaze account", "settings/account", "connect B2 bucket application key root prefix credentials"),
-        new("OneDrive accounts", "settings/onedrive", "connect Microsoft personal work account sign in"),
+        new("Cloud services", "services", "providers connect accounts install connectors catalog packages source publisher private"),
         new("Files and storage", "settings/sync", "on demand exclusions exclude filters storage sense disk"),
         new("Transfers and power", "settings/network", "network bandwidth upload download limits speed concurrency metered battery"),
         new("Appearance", "settings/appearance", "theme light dark system"),
@@ -94,10 +66,14 @@ public sealed partial class MainWindow
         new("Settings", "settings", "preferences options backup capabilities compatibility connection modes")
     ];
 
-    private static IEnumerable<NavigationDestination> FindDestinations(string query)
+    private IEnumerable<NavigationDestination> FindDestinations(string query)
     {
         var words = query.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        return NavigationDestinations.Where(item => words.All(word =>
+        var services = Manager.AvailableProviders().Select(m => new NavigationDestination(m.Name, m.Id switch
+        {
+            "b2" => "settings/account", "onedrive" => "settings/onedrive", _ => "services"
+        }, m.Id + " cloud service account " + m.Publisher));
+        return NavigationDestinations.Concat(services).Where(item => words.All(word =>
             (item.Title + " " + item.Keywords).Contains(word, StringComparison.OrdinalIgnoreCase)))
             .OrderByDescending(item => item.Title.Contains(query.Trim(), StringComparison.OrdinalIgnoreCase));
     }
@@ -167,8 +143,7 @@ public sealed partial class MainWindow
         if (double.IsFinite(homeWidth) && homeWidth > 0)
             ArrangeTiles(HomeQuickActions, homeWidth >= 576 * scale ? 2 : 1);
         HomeCloudTransferCard.IsEnabled = !_busy && _viewModel.Preview is null;
-        if (_cloudServicesView is not null) _cloudServicesView.IsEnabled = !_busy && _viewModel.Preview is null;
-        if (_homeServicesView is not null) _homeServicesView.IsEnabled = !_busy && _viewModel.Preview is null;
+        ServicesPage.IsEnabled = !_busy && _viewModel.Preview is null;
 
         NavigationStatusCard.Visibility = Navigation.IsPaneOpen && Navigation.DisplayMode == NavigationViewDisplayMode.Expanded && _viewModel.IsConfigured
             ? Visibility.Visible : Visibility.Collapsed;

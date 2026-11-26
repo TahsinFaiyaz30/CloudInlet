@@ -9,7 +9,7 @@ CloudInlet is a native Windows backup, sync and file transfer client. Install th
 
 ## Provider connectors
 
-The connector-enabled EXE, MSI, portable and MSIX builds start with the shared engine. Open **Connectors → Install** to download Backblaze B2 or OneDrive. You can also import a signed private pack. **Settings → Updates and about** manages connector updates. [Try the public packs](docs/CONNECTORS.md#try-the-published-connectors) · [Measured package sizes](docs/CONNECTOR_VERIFICATION.md) · [Distribution workflow](docs/CONNECTOR_RELEASES.md) · [Store policy and certification](docs/STORE_CONNECTORS.md)
+The connector-enabled EXE, MSI, portable and MSIX builds start with the shared engine. Open **Cloud services → Connector catalog → Install** to download Backblaze B2 or OneDrive. You can also import a signed private pack. **Settings → Updates and about** manages connector updates. [Try the public packs](docs/CONNECTORS.md#try-the-published-connectors) · [Measured package sizes](docs/CONNECTOR_VERIFICATION.md) · [Distribution workflow](docs/CONNECTOR_RELEASES.md) · [Store policy and certification](docs/STORE_CONNECTORS.md)
 
 The central directory lists the current version and SDK compatibility of each provider. [Connector directory](https://github.com/TahsinFaiyaz30/CloudInlet-Connectors) · [Backblaze B2 release history](https://github.com/TahsinFaiyaz30/CloudInlet-Connector-B2) · [OneDrive release history](https://github.com/TahsinFaiyaz30/CloudInlet-Connector-OneDrive)
 
@@ -52,7 +52,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1
 
 ## Connect B2
 
-In a connector-enabled build, choose **Connectors → Backblaze B2 → Install** first.
+In a connector-enabled build, choose **Cloud services → Connector catalog → Backblaze B2 → Install**, then **Connect** under **Available now**.
 
 1. Create or select a private B2 bucket. Use a bucket-scoped application key with `listFiles`, `readFiles`, and `writeFiles` access and **Allow List All Bucket Names** enabled. Previous-version server-side restore also needs access to the version being restored.
 2. Open **Settings → Account**, enter the bucket name, key ID, and application key. Advanced connection options let you choose a dedicated local CloudInlet folder and a cloud prefix such as `CloudInlet/`.

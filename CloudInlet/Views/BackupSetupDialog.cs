@@ -72,13 +72,18 @@ internal sealed class BackupSetupDialog : ContentDialog
             Content = SourceImportDialog.Text(stopping ? "Turn off without restoring files" : "Turn on without importing files"),
             MinHeight = 36, HorizontalContentAlignment = HorizontalAlignment.Stretch };
         _cloud = new RadioButton { GroupName = _group + "action",
-            Content = SourceImportDialog.Text(stopping ? "Transfer B2 files directly to OneDrive" : "Bring files directly from OneDrive"),
+            Content = SourceImportDialog.Text(stopping ? "Transfer backup files to OneDrive" : "Bring files directly from a cloud service"),
             MinHeight = 36, HorizontalContentAlignment = HorizontalAlignment.Stretch };
         _bring.Checked += (_, _) => UpdateEffect(); _none.Checked += (_, _) => UpdateEffect();
         _cloud.Checked += (_, _) => UpdateEffect();
         var choices = new StackPanel { Spacing = 8 };
         choices.Children.Add(SourceImportDialog.Heading("Your files"));
-        choices.Children.Add(_bring); choices.Children.Add(_cloud); choices.Children.Add(_none);
+        choices.Children.Add(_bring);
+        var capabilities = stopping ? CloudInlet.Connectors.ConnectorCapabilities.Write | CloudInlet.Connectors.ConnectorCapabilities.Verify
+            : CloudInlet.Connectors.ConnectorCapabilities.Read;
+        if (_controller.Connectors.AvailableProviders(capabilities).Any(p => stopping ? p.Id == "onedrive" : p.Id != "b2"))
+            choices.Children.Add(_cloud);
+        choices.Children.Add(_none);
         _body.Children.Add(SourceImportDialog.Surface(choices));
         _locationHeading = SourceImportDialog.Heading(stopping ? "Windows will open " + name + " here" : "Choose a source");
         _body.Children.Add(_locationHeading);
@@ -215,7 +220,7 @@ internal sealed class BackupSetupDialog : ContentDialog
                     ? "Files are copied and verified before their originals are removed. If the source is in another cloud app, removing originals can delete them from that cloud too. Windows will use CloudInlet."
                     : "Files are copied and verified. Originals stay in the chosen source. Windows will use CloudInlet; other locations are not imported automatically.";
             if (DirectCloudTransferRequested)
-                _effect.Text = "Next, browse the actual OneDrive account and folder and choose Copy or Move. Files transfer directly into this folder's B2 backup before Windows starts using CloudInlet.";
+                _effect.Text = "Next, choose an installed source and folder and choose Copy or Move. Files transfer directly into this folder's B2 backup before Windows starts using CloudInlet.";
         }
         else
         {

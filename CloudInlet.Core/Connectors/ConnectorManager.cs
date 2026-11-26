@@ -19,6 +19,7 @@ public sealed class ConnectorManager
     public ConnectorOffer[] Offers { get { lock (_gate) return _catalogs.Values.SelectMany(x => x).ToArray(); } }
     public ConnectorSource[] Sources { get { lock (_gate) return _state.Sources.Concat(_official is null ? [] : new[] { _official }).DistinctBy(s => s.Location).ToArray(); } }
     public event Action<string>? Progress;
+    public event Action? RegistryChanged;
     public ConnectorManager(string directory, ConnectorSource? official = null)
     {
         _root = Path.GetFullPath(directory);
@@ -63,6 +64,7 @@ public sealed class ConnectorManager
             { JsonSerializer.Serialize(f, next, ConnectorFormat.Json); f.Flush(true); }
             File.Move(tmp, path, true);
             lock (_gate) _state = next;
+            RegistryChanged?.Invoke();
         }
         finally { File.Delete(tmp); }
     }
@@ -134,6 +136,16 @@ public sealed class ConnectorManager
     public bool NeedsRestart(string id)
     {
         lock (_gate) return _loaded.TryGetValue(id, out var loaded) && (!_state.Installed.TryGetValue(id, out var i) || i.Current.Hash != loaded.Hash);
+    }
+    public ConnectorManifest[] AvailableProviders(ConnectorCapabilities required = ConnectorCapabilities.None)
+    {
+        lock (_gate)
+        {
+            return _state.Installed.Values.Where(i => i.Enabled).Select(i => i.Current.Manifest)
+                .Where(m => m.Kind == "provider" && m.Capabilities.HasFlag(required) && Issue(m.Id) is null &&
+                    !ConnectorResolver.Order([m.Id], _state.Installed).Any(o => NeedsRestart(o.Manifest.Id)))
+                .OrderBy(m => m.Name, StringComparer.CurrentCultureIgnoreCase).ThenBy(m => m.Id, StringComparer.Ordinal).ToArray();
+        }
     }
     public string? Issue(string id)
     {

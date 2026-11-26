@@ -141,9 +141,6 @@
                 <NavigationViewItem x:Name="ServicesNavigationItem" Content="Cloud services" Tag="services" Style="{StaticResource CloudInletNavigationItemStyle}">
                     <NavigationViewItem.Icon><IconSourceElement IconSource="{views:FluentIcon Kind=cloud, Size=24}"  Width="24" Height="24" Tag="cloud" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="Connectors" Tag="connectors" Style="{StaticResource CloudInletNavigationItemStyle}">
-                    <NavigationViewItem.Icon><SymbolIcon Symbol="Library" /></NavigationViewItem.Icon>
-                </NavigationViewItem>
             </NavigationView.MenuItems>
             <NavigationView.PaneFooter>
                 <Border x:Name="NavigationStatusCard" Margin="20,12,20,20" Padding="16"
@@ -232,11 +229,10 @@
                             <Border x:Name="WelcomePanel">
                                 <StackPanel Spacing="20">
                                     <TextBlock Text="Start with your cloud" Style="{StaticResource SubtitleTextBlockStyle}" TextWrapping="Wrap" />
-                                    <TextBlock Text="Choose a service below. Your connection options depend on what each provider supports."
+                                    <TextBlock x:Name="HomeServiceHint" Text="Install a connector to use your cloud storage."
                                                Style="{StaticResource CloudInletBodySecondaryTextStyle}" Margin="0,-8,0,0" />
-                                    <ContentControl x:Name="HomeServicesHost" HorizontalContentAlignment="Stretch" />
-                                    <Button x:Name="ConnectAccountButton" Content="Explore all cloud services" Tag="services" Click="QuickNavigate_Click"
-                                            Style="{StaticResource SubtleButtonStyle}" MinHeight="36" />
+                                    <Button x:Name="ConnectAccountButton" Content="Open Cloud services" Tag="services" Click="QuickNavigate_Click"
+                                            Style="{StaticResource AccentButtonStyle}" MinHeight="36" />
                                 </StackPanel>
                             </Border>
                             <StackPanel x:Name="ConnectedOverview" Spacing="24" Visibility="Collapsed">
@@ -406,7 +402,7 @@
                                                            Style="{StaticResource CloudInletCategoryStyle}" Click="ManageBackup_Click">
                                         <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=folder, Size=24}"  Width="24" Height="24" Tag="folder" /></settings:SettingsCard.HeaderIcon>
                                     </settings:SettingsCard>
-                                    <settings:SettingsCard x:Name="HomeCloudTransferCard" Header="Transfer between clouds" Description="Copy or move files between OneDrive, B2, and this PC."
+                                    <settings:SettingsCard x:Name="HomeCloudTransferCard" Header="Transfer between clouds" Description="Copy or move files between installed cloud services and this PC."
                                                            Style="{StaticResource CloudInletCategoryStyle}" Click="CloudTransfer_Click">
                                         <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=sync, Size=24}"  Width="24" Height="24" Tag="sync" /></settings:SettingsCard.HeaderIcon>
                                     </settings:SettingsCard>
@@ -414,7 +410,7 @@
                                                            Style="{StaticResource CloudInletCategoryStyle}" Tag="files" Click="QuickNavigate_Click">
                                         <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=document, Size=24}"  Width="24" Height="24" Tag="document" /></settings:SettingsCard.HeaderIcon>
                                     </settings:SettingsCard>
-                                    <settings:SettingsCard Header="Cloud services" Description="Choose your provider and see what is coming next."
+                                    <settings:SettingsCard Header="Cloud services" Description="Connect an installed service or find a connector."
                                                            Style="{StaticResource CloudInletCategoryStyle}" Tag="services" Click="QuickNavigate_Click">
                                         <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=cloud, Size=24}"  Width="24" Height="24" Tag="cloud" /></settings:SettingsCard.HeaderIcon>
                                     </settings:SettingsCard>
@@ -490,7 +486,7 @@
                                 IsOpen="True"
                                 IsClosable="False"
                                 Severity="Informational"
-                                Message="Choose a cloud service to start. Folder backup is currently available with Backblaze B2.">
+                                Message="Choose a service with folder backup support to protect your Windows folders.">
                                 <InfoBar.ActionButton>
                                     <Button Content="Choose service" Tag="services" Click="QuickNavigate_Click" />
                                 </InfoBar.ActionButton>
@@ -560,11 +556,11 @@
                             <TextBlock Text="More you can do" Style="{StaticResource CloudInletSectionHeadingStyle}" />
                             <Grid x:Name="BackupRelatedActions" ColumnSpacing="12" RowSpacing="12">
                             <settings:SettingsCard x:Name="BackupCloudTransferCard" Header="Transfer between clouds"
-                                                   Description="Copy or move files between your OneDrive and Backblaze B2 accounts."
+                                                   Description="Copy or move files between your cloud services and this PC."
                                                    IsClickEnabled="True" Click="CloudTransfer_Click">
                                 <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=cloud, Size=24}"  Width="24" Height="24" Tag="cloud" /></settings:SettingsCard.HeaderIcon>
                             </settings:SettingsCard>
-                            <settings:SettingsCard x:Name="ImportFilesCard" Header="Import from another location" Description="Choose a local folder, mounted cloud drive, OneDrive account, or Backblaze B2 bucket."
+                            <settings:SettingsCard x:Name="ImportFilesCard" Header="Import from another location" Description="Choose a local folder, a mounted drive, or an installed cloud service."
                                                    IsClickEnabled="True" Click="ImportFiles_Click">
                                 <settings:SettingsCard.HeaderIcon>
                                     <IconSourceElement IconSource="{views:FluentIcon Kind=download, Size=24}"  Width="24" Height="24" Tag="download" />
@@ -625,7 +621,7 @@
                                     <TextBlock
                                         Text="Your files, close at hand"
                                         Style="{StaticResource SubtitleTextBlockStyle}" TextWrapping="Wrap" />
-                                    <TextBlock Text="Choose a cloud service to get started. Backblaze B2 supports files in Explorer; OneDrive files are available through cloud transfers."
+                                    <TextBlock Text="Connect a service with folder backup support to manage your backed-up files in Explorer."
                                                Style="{StaticResource CloudInletBodySecondaryTextStyle}" />
                                     <Button
                                         Content="Choose a cloud service"
@@ -788,7 +784,7 @@
                             <StackPanel x:Name="SettingsHub" Spacing="24">
                                 <settings:SettingsCard x:Name="SettingsAccountCard" MinHeight="96" Padding="0,8,0,20" Background="Transparent" BorderThickness="0"
                                                        Description="Connect a private bucket to start protecting your files.">
-                                    <settings:SettingsCard.Header><TextBlock x:Name="SettingsAccountHeading" Text="Backblaze B2" Style="{StaticResource SubtitleTextBlockStyle}" TextWrapping="Wrap" /></settings:SettingsCard.Header>
+                                    <settings:SettingsCard.Header><TextBlock x:Name="SettingsAccountHeading" Text="Cloud services" Style="{StaticResource SubtitleTextBlockStyle}" TextWrapping="Wrap" /></settings:SettingsCard.Header>
                                     <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=cloud, Size=36}"  Width="36" Height="36" Tag="cloud" /></settings:SettingsCard.HeaderIcon>
                                     <Button x:Name="SettingsAccountAction" Content="Connect account" Click="SettingsAccount_Click" MinHeight="36" />
                                 </settings:SettingsCard>
@@ -802,10 +798,6 @@
                                         <settings:SettingsCard x:Name="NetworkCategory" Header="Transfers and power" Description="Performance, bandwidth, and automatic pauses."
                                                                Tag="network" Click="SettingsCategory_Click" Style="{StaticResource CloudInletCategoryStyle}">
                                             <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=sync, Size=24}"  Width="24" Height="24" Tag="sync" /></settings:SettingsCard.HeaderIcon>
-                                        </settings:SettingsCard>
-                                        <settings:SettingsCard x:Name="CatalogCategory" Header="Backup capabilities" Description="Explore native backup providers and planned connection modes."
-                                                               Tag="catalog" Click="SettingsCategory_Click" Style="{StaticResource CloudInletCategoryStyle}">
-                                            <settings:SettingsCard.HeaderIcon><IconSourceElement IconSource="{views:FluentIcon Kind=globe, Size=24}"  Width="24" Height="24" Tag="globe" /></settings:SettingsCard.HeaderIcon>
                                         </settings:SettingsCard>
                                     </StackPanel>
                                     <StackPanel Spacing="12">
@@ -1292,15 +1284,17 @@
                             </StackPanel>
                         </StackPanel>
                     </ScrollViewer>
-                    <ScrollViewer x:Name="ConnectorsPage" Visibility="Collapsed" HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch">
+                    <ScrollViewer x:Name="ServicesPage" Visibility="Collapsed" HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch">
                         <StackPanel Style="{StaticResource CloudInletPageContentStyle}" Spacing="16">
                             <TextBox x:Name="ConnectorSearch" PlaceholderText="Search connectors and features" AutomationProperties.Name="Search connectors" TextChanged="ConnectorSearch_Changed" />
+                            <TextBlock Text="Available now" Style="{StaticResource CloudInletSectionHeadingStyle}" AutomationProperties.HeadingLevel="Level2" />
+                            <StackPanel x:Name="AvailableServiceRows" Spacing="12" />
+                            <TextBlock Text="Connector catalog" Style="{StaticResource CloudInletSectionHeadingStyle}" AutomationProperties.HeadingLevel="Level2" />
                             <views:ActionWrapPanel x:Name="ConnectorActions" />
                             <TextBlock x:Name="ConnectorStatus" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
                             <StackPanel x:Name="ConnectorRows" Spacing="12" />
                         </StackPanel>
                     </ScrollViewer>
-                    <ContentControl x:Name="ServicesPage" Visibility="Collapsed" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
                     <Grid x:Name="BusyFooter" Grid.Row="1" Padding="24,16" ColumnSpacing="12" Visibility="Collapsed">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
@@ -1316,68 +1310,5 @@
                 </Grid>
             </Grid>
         </NavigationView>
-        <ContentDialog
-            x:Name="CatalogDialog"
-            Grid.RowSpan="2"
-            Title="Backup providers and modes"
-            CloseButtonText="Done"
-            DefaultButton="Close">
-            <Grid RowSpacing="16" MinWidth="300">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="*" />
-                </Grid.RowDefinitions>
-                <TextBlock
-                    Text="Backblaze B2 supports native Windows backup today. This catalog describes native backup support; OneDrive cloud transfers are available from Cloud services."
-                    Style="{StaticResource CloudInletSecondaryTextStyle}" />
-                <Grid Grid.Row="1" ColumnSpacing="12">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <ComboBox
-                        x:Name="CatalogKind"
-                        Header="Browse"
-                        SelectedIndex="0"
-                        HorizontalAlignment="Stretch"
-                        SelectionChanged="CatalogFilter_Changed">
-                        <ComboBoxItem Content="Backup providers" />
-                        <ComboBoxItem Content="Modes" />
-                    </ComboBox>
-                    <ComboBox
-                        x:Name="CatalogGroup"
-                        Grid.Column="1"
-                        Header="Category"
-                        HorizontalAlignment="Stretch"
-                        SelectionChanged="CatalogFilter_Changed" />
-                </Grid>
-                <AutoSuggestBox
-                    x:Name="CatalogSearch"
-                    Grid.Row="2"
-                    PlaceholderText="Search providers"
-                    QueryIcon="Find"
-                    AutomationProperties.Name="Search providers and modes"
-                    TextChanged="CatalogSearch_Changed" />
-                <Grid Grid.Row="3">
-                    <ListView
-                        x:Name="CatalogList"
-                        SelectionMode="None"
-                        IsItemClickEnabled="False"
-                        HorizontalContentAlignment="Stretch"
-                        MaxHeight="340"
-                        MinHeight="100"
-                        ItemTemplate="{StaticResource ProductOptionTemplate}" />
-                    <TextBlock
-                        x:Name="CatalogEmpty"
-                        Text="No matching providers"
-                        Style="{StaticResource CloudInletSecondaryTextStyle}"
-                        HorizontalAlignment="Center"
-                        VerticalAlignment="Center"
-                        Visibility="Collapsed" />
-                </Grid>
-            </Grid>
-        </ContentDialog>
     </Grid>
 </Window>

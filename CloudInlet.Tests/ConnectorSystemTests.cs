@@ -213,6 +213,30 @@ public sealed class ConnectorSystemTests
         }
     }
     [TestMethod]
+    public async Task ServiceChoicesFollowInstalledProvidersAndTransferCapabilities()
+    {
+        var manager = Manager();
+        var readOnly = Pack<ExampleProvider>("example.readonly");
+        var shared = Pack<StorageComponent>("fixture.shared");
+        var b2 = Pack<B2Connector>("b2", deps: [Dep("fixture.shared")]);
+        var drive = Pack<OneDriveConnector>("onedrive");
+        Catalog(b2, drive, readOnly, shared);
+        await manager.RefreshAsync();
+        Assert.AreEqual(0, manager.AvailableProviders().Length);
+        await manager.InstallAsync(manager.Plan(["example.readonly", "b2"]));
+        CollectionAssert.AreEquivalent(new[] { "example.readonly", "b2" }, manager.AvailableProviders(ConnectorCapabilities.Read).Select(p => p.Id).ToArray());
+        CollectionAssert.AreEqual(new[] { "b2" }, manager.AvailableProviders(ConnectorCapabilities.Write | ConnectorCapabilities.Verify).Select(p => p.Id).ToArray());
+        manager.Change("b2", "disable");
+        Assert.AreEqual("example.readonly", manager.AvailableProviders().Single().Id);
+        manager.Change("b2", "enable");
+        var dependencyBytes = Path.Combine(_root, "state", "Connectors", "packages", shared.Hash + ".cipack");
+        File.Delete(dependencyBytes);
+        Assert.AreEqual("example.readonly", manager.AvailableProviders().Single().Id);
+        manager.Change("example.readonly", "uninstall");
+        Assert.AreEqual(0, manager.AvailableProviders().Length);
+    }
+
+    [TestMethod]
     public async Task ConfiguredSyncRootPreventsDisablingOrRemovingItsProvider()
     {
         var manager = Manager();

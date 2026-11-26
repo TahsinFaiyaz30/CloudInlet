@@ -173,6 +173,13 @@ public sealed partial class ClientController
     {
         lock (_connectorVaultGate) return ReadAccounts(id).Select(a => (a.Id, a.Name)).ToArray();
     }
+    internal IReadOnlyList<(string Id, string Name)> ServiceAccounts(ConnectorManifest manifest) => manifest.Id switch
+    {
+        "b2" => Settings.IsConfigured ? [(Settings.AccountId, Settings.BucketName)] : [],
+        "onedrive" => OneDriveAccounts.Select(a => (a.Id, a.Name)).ToArray(),
+        _ when manifest.Capabilities.HasFlag(ConnectorCapabilities.AccountSetup) => CustomAccounts(manifest.Id),
+        _ => [("default", manifest.Name)]
+    };
     public async Task ConnectCustomAccountAsync(string id, IReadOnlyDictionary<string, string> values, CancellationToken token)
     {
         var setup = (IConnectorAccountSetup)Connectors.Provider(id);

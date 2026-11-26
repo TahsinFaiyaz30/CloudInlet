@@ -108,10 +108,10 @@ internal sealed class SourceImportDialog : ContentDialog
             ? "Choose the folder whose files you want to bring into CloudInlet. You will review the source and transfer choice before anything changes."
             : "Bring existing files into CloudInlet. Your source files stay where they are.", secondary: true));
         AddAsyncChoice("Folder on this PC", "Choose a local folder, an external drive, or a mounted cloud drive.", "\uE8B7", BrowseAsync);
-        AddAsyncChoice("Files from another app", "Choose an existing Windows cloud folder, including OneDrive.", "\uE753", ShowExistingFoldersAsync);
+        AddAsyncChoice("Files from another app", "Choose an existing Windows cloud folder, on this PC.", "\uE753", ShowExistingFoldersAsync);
         if (!_chooseFolderOnly)
         {
-            AddChoice("Cloud storage", "Browse OneDrive accounts directly or import from a Backblaze B2 bucket.", "\uE753", ShowProviders);
+            AddChoice("Cloud storage", "Choose from your installed cloud services.", "\uE753", ShowProviders);
             if (_presentationCandidates is null)
             {
                 // History is secondary navigation. Loading it happens only when requested,
@@ -225,24 +225,18 @@ internal sealed class SourceImportDialog : ContentDialog
     internal void ShowProviders()
     {
         BeginStage("providers", "Cloud storage");
-        _body.Children.Add(Text("Your connected B2 account can import from the buckets its application key is allowed to access.", true));
-        AddAsyncChoice("Backblaze B2", "Connected account · Available now", "\uE753", ShowB2Async);
-        AddChoice("OneDrive ↔ Backblaze B2", "Connect an account and browse actual cloud folders. Choose Copy or Move, exclusions, and conflicts.", "\uE753", () =>
-        {
-            BeginStage("direct", "Direct cloud transfer", "Choose cloud locations");
-            DirectCloudTransferRequested = true;
-            _body.Children.Add(Text("Choose a source and destination in OneDrive and Backblaze B2. CloudInlet streams content through bounded memory and verifies each copy. Activity keeps recoverable job progress.", true));
-            UpdatePrimary();
-        });
-        var planned = new StackPanel { Spacing = 12 };
-        foreach (var provider in ProductCatalog.Providers.Where(item => !item.Available && item.Id != "onedrive"))
-        {
-            var row = new SettingsCard { Header = provider.Name, Description = provider.Group,
-                Content = Text("Coming soon", true), IsEnabled = false };
-            AutomationProperties.SetName(row, provider.Name + ", coming soon");
-            planned.Children.Add(row);
-        }
-        _body.Children.Add(new Expander { Header = "More providers · Coming soon", Content = planned, HorizontalAlignment = HorizontalAlignment.Stretch });
+        var providers = _controller.Connectors.AvailableProviders(CloudInlet.Connectors.ConnectorCapabilities.Read);
+        if (_controller.Settings.IsConfigured && providers.FirstOrDefault(p => p.Id == "b2") is { } backup)
+            AddAsyncChoice(backup.Name, "Import from a bucket in your connected account.", "\uE753", ShowB2Async);
+        if (providers.Length > 0)
+            AddChoice("Transfer between locations", "Choose a source and destination from your installed services and this PC.", "\uE753", () =>
+            {
+                BeginStage("direct", "Direct cloud transfer", "Choose locations");
+                DirectCloudTransferRequested = true;
+                _body.Children.Add(Text("Choose the files to copy or move. CloudInlet verifies each copy and keeps recoverable transfer progress in Activity.", true));
+                UpdatePrimary();
+            });
+        else _body.Children.Add(Text("Install a provider in Cloud services to import from a cloud account.", true));
         var browse = ActionButton("Use an existing Windows folder…");
         browse.Click += async (_, _) => await ShowExistingFoldersAsync();
         _body.Children.Add(browse);

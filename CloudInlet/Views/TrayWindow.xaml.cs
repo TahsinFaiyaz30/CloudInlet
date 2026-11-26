@@ -450,7 +450,7 @@ public sealed partial class TrayWindow : Window
         if (!DisplaySettings.IsConfigured)
         {
             AppWindow.Hide();
-            App.MainWindow?.ShowAccount();
+            App.MainWindow?.ShowCloudServices();
             return;
         }
         OpenFolder_Click(sender, args);

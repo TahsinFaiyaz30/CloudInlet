@@ -100,7 +100,7 @@ public sealed partial class MainWindow
             var draft = new CloudTransferDraft(null, new("local", null, destination), 1, 3,
                 [new("*.tmp", true), new("cache/**", false)]);
             var picker = new CloudTransferDialog(_controller, WinRT.Interop.WindowNative.GetWindowHandle(this),
-                preferOneDrive: true, draft: draft) { XamlRoot = RootGrid.XamlRoot, RequestedTheme = theme };
+                draft: draft with { EditingSide = "source", PendingLocation = new("onedrive", null, null) }) { XamlRoot = RootGrid.XamlRoot, RequestedTheme = theme };
             var showing = picker.ShowAsync();
             var needsConnector = _controller.Connectors.Issue("onedrive") is not null;
             var connectLabel = needsConnector ? "Install required connectors" : "Connect OneDrive";

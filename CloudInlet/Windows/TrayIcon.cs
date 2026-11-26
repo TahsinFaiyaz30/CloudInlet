@@ -57,7 +57,7 @@ public sealed class TrayIcon : IDisposable
         }
         _data = new NotifyIconData { Size = (uint)Marshal.SizeOf<NotifyIconData>(), Window = window,
             Id = IconId, Flags = 1 | 2 | 4 | 0x80, Callback = CallbackMessage, Icon = _icon,
-            Tip = BuildInfo.ProductName + " – Backblaze B2", Info = "", InfoTitle = "" };
+            Tip = BuildInfo.ProductName, Info = "", InfoTitle = "" };
         if (!SetWindowSubclass(window, _callback, 0xCB02, UIntPtr.Zero))
         {
             _images?.Dispose(); DestroyIcon(_icon);

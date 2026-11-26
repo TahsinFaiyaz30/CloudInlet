@@ -183,35 +183,6 @@
                     </StackPanel>
                 </Grid>
             </DataTemplate>
-            <DataTemplate
-                x:Key="ProductOptionTemplate">
-                <Grid
-                    Padding="4,12"
-                    ColumnSpacing="16">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition
-                            Width="*" />
-                        <ColumnDefinition
-                            Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <StackPanel
-                        Spacing="4">
-                        <TextBlock
-                            Text="{Binding Name}"
-                            Style="{StaticResource BodyStrongTextBlockStyle}"
-                            TextWrapping="Wrap" />
-                        <TextBlock
-                            Text="{Binding Description}"
-                            Style="{StaticResource CloudInletSecondaryTextStyle}" />
-                    </StackPanel>
-                    <TextBlock
-                        Grid.Column="1"
-                        Text="{Binding Status}"
-                        VerticalAlignment="Top"
-                        Margin="0,1,0,0"
-                        Style="{StaticResource CloudInletSecondaryTextStyle}" />
-                </Grid>
-            </DataTemplate>
             <Style
                 x:Key="CloudInletStatusSuccessIconStyle"
                 TargetType="IconSourceElement">
