@@ -81,6 +81,7 @@ try {
     $submission = Invoke-StoreApi 'POST' ($apiBase + '/submissions')
     $submissionId = [string]$submission.id
     if ($submissionId -notmatch '^\d+$') { throw 'Partner Center returned an invalid submission identifier.' }
+    Write-Host "Created Partner Center submission $submissionId."
     $uploadUrl = [Uri]$submission.fileUploadUrl
     if ($uploadUrl.Scheme -ne 'https' -or !$uploadUrl.Host.EndsWith('.blob.core.windows.net', [StringComparison]::OrdinalIgnoreCase) -or $uploadUrl.UserInfo) { throw 'Partner Center returned an unexpected package upload endpoint.' }
     $fileName = [IO.Path]::GetFileName($package)
@@ -104,8 +105,10 @@ try {
         try { if (!$uploadResponse.IsSuccessStatusCode) { throw "Store package upload failed (HTTP $([int]$uploadResponse.StatusCode)). The draft remains available in Partner Center." } }
         finally { $uploadResponse.Dispose() }
     } finally { $uploadRequest.Dispose(); $stream.Dispose() }
+    Write-Host "Uploaded $fileName to submission $submissionId."
     if (!$CommitSubmission) { Write-Output "Uploaded package to Partner Center draft $submissionId. Commit was not requested."; return }
     Invoke-StoreApi 'POST' ($apiBase + '/submissions/' + $submissionId + '/commit') @{} | Out-Null
+    Write-Host "Requested certification for submission $submissionId."
     for ($poll = 0; $poll -lt 40; $poll++) {
         $status = Invoke-StoreApi 'GET' ($apiBase + '/submissions/' + $submissionId + '/status')
         if ($status.status -in @('PreProcessing', 'Certification', 'PendingPublication', 'Publishing', 'Published')) { Write-Output "Store submission $submissionId accepted for processing. Status: $($status.status). Certification remains managed by Microsoft."; return }

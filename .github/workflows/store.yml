@@ -1,17 +1,6 @@
 name: Microsoft Store
 
 on:
-  workflow_call:
-    inputs:
-      tag:
-        type: string
-        required: true
-      submit:
-        type: boolean
-        default: false
-      publishMode:
-        type: string
-        default: Manual
   workflow_dispatch:
     inputs:
       tag:

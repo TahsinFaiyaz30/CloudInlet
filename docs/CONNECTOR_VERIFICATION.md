@@ -1,5 +1,20 @@
 # Connector verification
 
+## CloudInlet 1.2.6 · 26 November 2026
+
+Separate, empty WinUI profiles passed the Light and Dark connector checks. Each opened Cloud services from Home, saw only This PC in both transfer pickers, and installed B2 from a signed fixture catalog. The pickers then offered B2 with its disconnected status. The check disabled and removed B2, reopened a saved transfer, and restored its two required connectors in a single review. The signed public catalog also passed an isolated acquisition, loading, enable/disable and removal check for each official pack. Provider API and transfer tests used fixtures.
+
+The Release suite passed 1,148 hosted-compatible tests. Release automation passed 142 assertions. All nine public assets matched GitHub's sizes and SHA-256 digests. Both portable ZIPs and the Store MSIX passed provider-payload checks. The following figures are the actual x64 Release download sizes in bytes. [Windows CI](https://github.com/TahsinFaiyaz30/CloudInlet/actions/runs/45838222723) · [1.2.6 downloads and hashes](https://github.com/TahsinFaiyaz30/CloudInlet/releases/tag/v1.2.6)
+
+| Version | EXE | MSI | Portable ZIP | Store MSIX |
+|---|---:|---:|---:|---:|
+| 1.2.5 | 64,087,072 | 74,219,599 | 90,977,661 | 90,682,298 |
+| 1.2.6 | 64,085,203 | 74,178,639 | 90,966,267 | 90,668,523 |
+
+Backblaze B2 1.0.0 downloads separately at 132,453 bytes and OneDrive 1.0.0 at 50,548 bytes. [Backblaze B2 release](https://github.com/TahsinFaiyaz30/CloudInlet-Connector-B2/releases/tag/v1.0.0) · [OneDrive release](https://github.com/TahsinFaiyaz30/CloudInlet-Connector-OneDrive/releases/tag/v1.0.0)
+
+## Earlier connector-host verification
+
 The connector-enabled app was built and checked on Windows x64 on 25 November 2026. The app version is 1.2.1, the SDK is 1.0.0, and the first two connector releases are independently versioned 1.0.0. The tested host is on the source repository's `codex/separate-provider-packs` branch. The published app release and live Store submission were outside this change. [Tested host source](https://github.com/TahsinFaiyaz30/CloudInlet/commit/b55ef1d2bec684ecf521308f72d206acc8c7e940) · [Source signed into both first releases](https://github.com/TahsinFaiyaz30/CloudInlet/commit/8f0e1f465da739b3235fb8590849ee50beb52f77)
 
 ## Published downloads

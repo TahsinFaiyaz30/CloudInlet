@@ -12,6 +12,10 @@ on:
         type: choice
         options: [release, verify]
         default: release
+      expectedRevision:
+        description: Exact successful CI commit when dispatched by the version workflow
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -26,6 +30,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: windows-2025
     outputs:
@@ -45,9 +50,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ACTION: ${{ inputs.action || 'release' }}
           SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+          EXPECTED_REVISION: ${{ inputs.expectedRevision }}
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:SOURCE_BRANCH -ne 'main') { throw 'Releases are built only from main.' }
+          if ($env:EXPECTED_REVISION -and $env:EXPECTED_REVISION -cne $env:GITHUB_SHA) { throw 'Main changed after CI. Packaging requires the verified commit.' }
           git fetch origin main --tags
           if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the release source.' }
           $version = .\scripts\get-release-version.ps1 -CheckRelease -GitHubOutput
@@ -225,8 +232,19 @@ jobs:
   submit-store:
     needs: [prepare, publish, store-package]
     if: needs.prepare.outputs.publish == 'true' && needs.publish.result == 'success' && needs.store-package.result == 'success'
-    uses: ./.github/workflows/store.yml
-    with:
-      tag: v${{ needs.prepare.outputs.version }}
-      submit: true
-      publishMode: Immediate
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      checks: read
+    steps:
+      - name: Dispatch and follow the protected Microsoft Store workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: v${{ needs.prepare.outputs.version }}
+        run: |
+          run_id=$(gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/store.yml/dispatches" \
+            -f ref=main -F return_run_details=true -f "inputs[tag]=$RELEASE_TAG" \
+            -f 'inputs[submit]=true' -f 'inputs[publishMode]=Immediate' --jq '.workflow_run_id')
+          [[ "$run_id" =~ ^[0-9]+$ ]]
+          echo "[Microsoft Store submission for $RELEASE_TAG]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$run_id)" >> "$GITHUB_STEP_SUMMARY"
+          gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --interval 20 --exit-status

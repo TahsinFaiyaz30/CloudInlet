@@ -1,5 +1,11 @@
 # CloudInlet configuration and verification handoff
 
+## CloudInlet 1.2.6 · 26 November 2026
+
+GitHub published 1.2.6 from `94c1c7c3f52820637cc9ed745ff0baaa7424695d`. Cloud services now contains both setup and connector management. OneDrive and Backblaze B2 remain independently versioned at 1.0.0. Windows CI passed, including EXE/MSI upgrade tests. [Release](https://github.com/TahsinFaiyaz30/CloudInlet/releases/tag/v1.2.6) · [Windows CI](https://github.com/TahsinFaiyaz30/CloudInlet/actions/runs/45838222723)
+
+The original release run published all nine assets. Its nested Store job stopped before authentication because its environment credentials were empty. The standalone **Microsoft Store** workflow verified the published MSIX, uploaded it and committed submission `1152921505702517236`. Microsoft returned `PreProcessing` on 26 November. Future release jobs dispatch the standalone workflow and follow its result. Check the existing submission before retrying an upload. [Publication run](https://github.com/TahsinFaiyaz30/CloudInlet/actions/runs/45839992683) · [Accepted Store submission](https://github.com/TahsinFaiyaz30/CloudInlet/actions/runs/45855842687)
+
 ## CloudInlet 1.2.5 · 26 November 2026
 
 The modular host builds from `main`. Both providers have independent 1.0.0 releases. The central signed catalog supplies their download locations and can advertise a Microsoft Store package for an approved provider version. The GitHub downloads are available now. [Connector directory](https://github.com/TahsinFaiyaz30/CloudInlet-Connectors)

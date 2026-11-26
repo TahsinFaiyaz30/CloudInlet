@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      releaseRevision:
+        description: Exact version commit to send to packaging after successful CI
+        type: string
+        required: false
 
 concurrency:
   group: windows-ci-${{ github.ref }}
@@ -57,3 +62,15 @@ jobs:
           name: CloudInlet-Windows-test-results
           path: artifacts/ci-tests/*.trx
           if-no-files-found: ignore
+
+  dispatch-approved-release:
+    needs: validate
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && (!inputs.releaseRevision || inputs.releaseRevision == github.sha)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Start packaging for the verified commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref main -f action=release -f "expectedRevision=$GITHUB_SHA"

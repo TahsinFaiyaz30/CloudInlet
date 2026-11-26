@@ -40,5 +40,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh workflow run windows.yml --ref main --repo $env:GITHUB_REPOSITORY
+          $revision = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the version commit.' }
+          gh workflow run windows.yml --ref main --repo $env:GITHUB_REPOSITORY -f "releaseRevision=$revision"
           if ($LASTEXITCODE -ne 0) { throw 'The version commit was pushed, but CI dispatch failed. Run Windows CI on main manually.' }
