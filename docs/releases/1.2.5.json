@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "version": "1.2.5",
   "previousTag": "v1.2.2",
-  "summary": "Choose which cloud providers to install. Backblaze B2 and OneDrive now download separately and have their own release histories.",
+  "summary": "Install just the cloud providers you use. Backblaze B2 and OneDrive download separately. New installations can start directly on 1.2.5, and existing installations can update from 1.2.2.",
   "categories": [
     {
       "title": "Install the providers you use",
@@ -36,17 +36,31 @@
         {
           "text": "Each provider has its own GitHub release history. A shared signed catalog authenticates downloads, including the original 1.0.0 packages and their publisher. The EXE, MSI, ZIP and Store MSIX all start with the same provider-free host.",
           "commits": ["05add8a274de4ea490c4435218625e160d7d6b0c", "3664f01607a6c916c8bf1cc8f72206151901d9e2", "e3397c76232cf1cd25861f60baaba7e121aaa242"]
+        },
+        {
+          "text": "The signed GitHub directory supplies provider versions and download locations. The Store edition can offer an approved Store package when the catalog lists one for that version. Backblaze B2 and OneDrive 1.0.0 are currently delivered from their GitHub releases.",
+          "commits": ["6c5fab45f37f7157ac367c009653a3bab987e2ad"]
+        }
+      ]
+    },
+    {
+      "title": "Upgrading from 1.2.2",
+      "items": [
+        {
+          "text": "CloudInlet opens an established profile in the location selected in 1.2.2. Accounts, folder mappings, update preferences and recoverable transfers carry forward. If a CloudBay conversion is unfinished, 1.2.2 can finish it before upgrading.",
+          "commits": ["e16331ea3e1d565c5c4c6bbfda67bc61ab9e664a", "4d84e9a11aa5b9a0e7bda6d2998728b10f224616"]
         }
       ]
     }
   ],
   "installationNotes": [
+    "A fresh installation can go directly to 1.2.5, including on computers with OneDrive installed. Existing installations need CloudInlet 1.2.2 first. The Store edition checks Windows' 1.2.2 deployment record when opening an existing profile for the first time.",
     "After updating from 1.2.2, open Connectors and install the providers your saved accounts, transfers or backup folders use. An internet connection is required to download an official pack.",
     "Connectors run with your Windows user permissions. Review the publisher before installing an official or private pack. Microsoft Store installations receive app updates through the Store."
   ],
   "validation": {
     "items": [
-      "The merged app built with zero warnings or errors and passed all 1,662 non-live Release tests, including startup recovery and connector behavior. Release automation passed 141 assertions.",
+      "Release tests cover new and retained profiles, the 1.2.2 upgrade prerequisite, connector installation and transfer recovery. Release automation passed 141 assertions.",
       "An isolated profile downloaded both existing public 1.0.0 packs and verified installation, loading, disabling, re-enabling and removal for each. Cross-provider transfer checks use simulated provider endpoints."
     ],
     "links": [
